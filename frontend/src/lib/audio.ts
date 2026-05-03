@@ -8,7 +8,7 @@ const cache = new Map<string, string | null>();
 
 interface TtsProvider {
   name: string;
-  speak(text: string): Promise<boolean>;
+  speak(text: string, materialId?: number): Promise<boolean>;
 }
 
 function normalizeWord(word: string): string {
@@ -60,13 +60,15 @@ const dictionaryProvider: TtsProvider = {
 
 const remoteProvider: TtsProvider = {
   name: 'remote-tts',
-  async speak(text) {
+  async speak(text, materialId) {
     try {
+      const body =
+        materialId == null ? { text } : { text, material_id: materialId };
       const res = await fetch('/api/tts/speech', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) return false;
 
@@ -114,12 +116,12 @@ const providers: TtsProvider[] = [
   browserSpeechProvider,
 ];
 
-export async function speakWord(word: string): Promise<void> {
+export async function speakWord(word: string, materialId?: number): Promise<void> {
   const text = word.trim();
   if (!text) return;
 
   for (const provider of providers) {
-    if (await provider.speak(text)) return;
+    if (await provider.speak(text, materialId)) return;
   }
 
   throw new Error('当前浏览器不支持朗读');

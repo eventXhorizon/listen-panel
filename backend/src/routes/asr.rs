@@ -222,8 +222,9 @@ async fn run_job(
             tracing::info!(job_id, "ASR job completed");
         }
         Err(e) => {
-            mark_job_failed(&state.pool, job_id, &format!("{e:?}")).await?;
-            tracing::warn!(job_id, "ASR job failed: {e:?}");
+            let error = format!("{:#}", e.0);
+            mark_job_failed(&state.pool, job_id, &error).await?;
+            tracing::warn!(job_id, "ASR job failed: {error}");
         }
     }
     clear_media_token(&state.pool, job_id).await?;

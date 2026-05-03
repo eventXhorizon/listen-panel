@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::SqlitePool;
 use tokio::fs;
 
 use crate::auth::CurrentUser;
@@ -26,6 +27,8 @@ pub async fn ensure_cache_dir() -> std::io::Result<()> {
 #[derive(Debug, Deserialize)]
 struct SpeechRequest {
     text: String,
+    #[serde(default)]
+    material_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,7 +40,8 @@ struct ElevenLabsRequest<'a> {
 async fn speech(
     State(http): State<reqwest::Client>,
     State(tts): State<SharedTts>,
-    _user: CurrentUser,
+    State(pool): State<SqlitePool>,
+    user: CurrentUser,
     Json(req): Json<SpeechRequest>,
 ) -> Result<Response> {
     let text = req.text.trim();
@@ -47,6 +51,24 @@ async fn speech(
     if text.chars().count() > 500 {
         return Ok((StatusCode::BAD_REQUEST, "text is too long").into_response());
     }
+    let material_id = match req.material_id {
+        Some(id) if id > 0 => {
+            let exists: Option<i64> =
+                sqlx::query_scalar("SELECT id FROM materials WHERE id = ? AND user_id = ?")
+                    .bind(id)
+                    .bind(user.id)
+                    .fetch_optional(&pool)
+                    .await?;
+            if exists.is_none() {
+                return Ok((StatusCode::NOT_FOUND, "material not found").into_response());
+            }
+            Some(id)
+        }
+        Some(_) => {
+            return Ok((StatusCode::BAD_REQUEST, "material_id is invalid").into_response());
+        }
+        None => None,
+    };
 
     let cfg = tts.read().await.clone();
     if !cfg.configured() {
@@ -54,7 +76,7 @@ async fn speech(
     }
 
     match cfg.provider {
-        TtsProvider::ElevenLabs => cached_elevenlabs_speech(&http, &cfg, text).await,
+        TtsProvider::ElevenLabs => cached_elevenlabs_speech(&http, &cfg, text, material_id).await,
     }
 }
 
@@ -62,8 +84,9 @@ async fn cached_elevenlabs_speech(
     http: &reqwest::Client,
     cfg: &crate::config::TtsConfig,
     text: &str,
+    material_id: Option<i64>,
 ) -> Result<Response> {
-    let cache_path = cache_path(cfg, text);
+    let cache_path = cache_path(cfg, text, material_id);
     match fs::read(&cache_path).await {
         Ok(bytes) => {
             tracing::debug!(path = %cache_path.display(), "tts cache hit");
@@ -129,7 +152,7 @@ async fn elevenlabs_speech(
     Ok(Ok(res.bytes().await?))
 }
 
-fn cache_path(cfg: &crate::config::TtsConfig, text: &str) -> PathBuf {
+fn cache_path(cfg: &crate::config::TtsConfig, text: &str, material_id: Option<i64>) -> PathBuf {
     let provider = match cfg.provider {
         TtsProvider::ElevenLabs => "eleven_labs",
     };
@@ -146,11 +169,19 @@ fn cache_path(cfg: &crate::config::TtsConfig, text: &str) -> PathBuf {
         hasher.update([0]);
     }
     let hash = hasher.finalize();
-    PathBuf::from(CACHE_DIR).join(format!("{provider}_{hash:x}.mp3"))
+    let filename = format!("{provider}_{hash:x}.mp3");
+    match material_id {
+        Some(id) => PathBuf::from(CACHE_DIR)
+            .join(format!("material-{id}"))
+            .join(filename),
+        None => PathBuf::from(CACHE_DIR).join(filename),
+    }
 }
 
 async fn write_cache_entry(path: &PathBuf, bytes: &Bytes) -> std::io::Result<()> {
-    fs::create_dir_all(CACHE_DIR).await?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
     let tmp = path.with_extension("mp3.tmp");
     fs::write(&tmp, bytes).await?;
     fs::rename(&tmp, path).await?;

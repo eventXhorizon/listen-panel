@@ -63,7 +63,7 @@ export default function VocabPanel({ items, onClose, onChange }: Props) {
                     <span className="text-base font-medium text-stone-900">
                       {v.word}
                     </span>
-                    <SpeakButton word={v.word} />
+                    <SpeakButton word={v.word} materialId={v.material_id} />
                     {v.lemma &&
                       v.lemma.toLowerCase() !== v.word.toLowerCase() && (
                         <span className="text-xs text-stone-400">

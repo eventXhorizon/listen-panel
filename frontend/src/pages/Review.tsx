@@ -199,7 +199,11 @@ export default function Review() {
               <div className="text-3xl font-medium text-stone-900 break-words">
                 {cur.word}
               </div>
-              <SpeakButton word={cur.word} className="mt-1" />
+              <SpeakButton
+                word={cur.word}
+                materialId={cur.material_id}
+                className="mt-1"
+              />
             </div>
             {cur.phonetic && (
               <div className="text-sm text-stone-500 font-mono mt-1">

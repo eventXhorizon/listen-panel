@@ -1,4 +1,10 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import {
+  useEffect,
+  useState,
+  useRef,
+  useCallback,
+  type CSSProperties,
+} from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   createTranscriptionJob,
@@ -20,6 +26,135 @@ interface PendingAdd {
   context: string;
 }
 
+type ReaderFont =
+  | 'system'
+  | 'apple'
+  | 'pingfang'
+  | 'microsoftYahei'
+  | 'inter'
+  | 'arial'
+  | 'serif'
+  | 'georgia'
+  | 'times'
+  | 'mono';
+
+interface ReaderTypography {
+  font: ReaderFont;
+  fontSize: number;
+  lineHeight: number;
+  letterSpacing: number;
+}
+
+const TYPOGRAPHY_STORAGE_KEY = 'listen-panel.readerTypography';
+const DEFAULT_TYPOGRAPHY: ReaderTypography = {
+  font: 'system',
+  fontSize: 17,
+  lineHeight: 1.85,
+  letterSpacing: 0,
+};
+
+const FONT_OPTIONS: Array<{
+  value: ReaderFont;
+  label: string;
+  family: string;
+}> = [
+  {
+    value: 'system',
+    label: '系统',
+    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+  },
+  {
+    value: 'apple',
+    label: 'Apple / SF',
+    family:
+      'SF Pro Text, SF Pro Display, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif',
+  },
+  {
+    value: 'pingfang',
+    label: '苹方',
+    family:
+      '"PingFang SC", "Hiragino Sans GB", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  },
+  {
+    value: 'microsoftYahei',
+    label: '微软雅黑',
+    family: '"Microsoft YaHei", "微软雅黑", "Segoe UI", Arial, sans-serif',
+  },
+  {
+    value: 'inter',
+    label: 'Inter',
+    family: 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  },
+  {
+    value: 'arial',
+    label: 'Arial',
+    family: 'Arial, Helvetica, sans-serif',
+  },
+  {
+    value: 'serif',
+    label: '衬线',
+    family: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',
+  },
+  {
+    value: 'georgia',
+    label: 'Georgia',
+    family: 'Georgia, Cambria, "Times New Roman", Times, serif',
+  },
+  {
+    value: 'times',
+    label: 'Times',
+    family: '"Times New Roman", Times, ui-serif, serif',
+  },
+  {
+    value: 'mono',
+    label: '等宽',
+    family: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  },
+];
+
+function loadTypography(): ReaderTypography {
+  try {
+    const raw = window.localStorage.getItem(TYPOGRAPHY_STORAGE_KEY);
+    if (!raw) return DEFAULT_TYPOGRAPHY;
+    const parsed = JSON.parse(raw) as Partial<ReaderTypography>;
+    const font = isReaderFont(parsed.font)
+      ? parsed.font
+      : DEFAULT_TYPOGRAPHY.font;
+    return {
+      font,
+      fontSize: clampNumber(parsed.fontSize, 14, 24, DEFAULT_TYPOGRAPHY.fontSize),
+      lineHeight: clampNumber(
+        parsed.lineHeight,
+        1.35,
+        2.4,
+        DEFAULT_TYPOGRAPHY.lineHeight,
+      ),
+      letterSpacing: clampNumber(
+        parsed.letterSpacing,
+        0,
+        0.08,
+        DEFAULT_TYPOGRAPHY.letterSpacing,
+      ),
+    };
+  } catch {
+    return DEFAULT_TYPOGRAPHY;
+  }
+}
+
+function isReaderFont(value: unknown): value is ReaderFont {
+  return FONT_OPTIONS.some((x) => x.value === value);
+}
+
+function clampNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
 export default function Reader() {
   const { id } = useParams();
   const mid = Number(id);
@@ -33,8 +168,11 @@ export default function Reader() {
   const [job, setJob] = useState<TranscriptionJob | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptionErr, setTranscriptionErr] = useState<string | null>(null);
+  const [showTypography, setShowTypography] = useState(false);
+  const [typography, setTypography] = useState<ReaderTypography>(loadTypography);
   const containerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
+  const typographyRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
 
   useEffect(() => {
@@ -61,7 +199,11 @@ export default function Reader() {
       try {
         const next = await getTranscriptionJob(job.id);
         setJob(next);
+        if (next.status === 'failed') {
+          setTranscriptionErr(next.error || '转写失败,请检查 ASR worker 配置');
+        }
         if (next.status === 'succeeded') {
+          setTranscriptionErr(null);
           const refreshed = await getMaterial(mid);
           if (refreshed) setM(refreshed);
         }
@@ -114,6 +256,24 @@ export default function Reader() {
     };
   }, []);
 
+  useEffect(() => {
+    window.localStorage.setItem(
+      TYPOGRAPHY_STORAGE_KEY,
+      JSON.stringify(typography),
+    );
+  }, [typography]);
+
+  useEffect(() => {
+    if (!showTypography) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const target = e.target as Node;
+      if (typographyRef.current?.contains(target)) return;
+      setShowTypography(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [showTypography]);
+
   function handleAddFromSelection(text: string) {
     if (!m) return;
     const sel = window.getSelection();
@@ -156,47 +316,135 @@ export default function Reader() {
         .map((p) => p.trim())
         .filter(Boolean)
     : [];
+  const fontFamily =
+    FONT_OPTIONS.find((x) => x.value === typography.font)?.family ??
+    FONT_OPTIONS[0].family;
+  const paragraphStyle: CSSProperties = {
+    fontFamily,
+    fontSize: `${typography.fontSize}px`,
+    lineHeight: typography.lineHeight,
+    letterSpacing: `${typography.letterSpacing}em`,
+  };
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="border-b border-stone-200 bg-white">
-        <div className="px-6 py-3 flex items-center justify-between">
-          <div className="min-w-0">
+        <div className="w-full px-8 h-14 flex items-center justify-between gap-5">
+          <div className="min-w-0 flex items-center gap-2">
             <Link
               to="/"
-              className="text-xs text-stone-500 hover:text-stone-900"
+              aria-label="返回书架"
+              title="返回书架"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-stone-500 hover:bg-stone-100 hover:text-stone-900 shrink-0"
             >
-              ← 返回书架
+              <span aria-hidden="true" className="text-base leading-none">←</span>
             </Link>
-            <h1 className="text-lg font-medium text-stone-900 mt-0.5 truncate">
+            <h1 className="text-[17px] font-semibold text-stone-900 truncate tracking-tight">
               {m.title}
             </h1>
           </div>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <label className="flex items-center gap-1.5 text-xs text-stone-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={highlightOn}
-                onChange={(e) => setHighlightOn(e.target.checked)}
-              />
-              高亮生词
-            </label>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => setHighlightOn((v) => !v)}
+              title={highlightOn ? '关闭生词高亮' : '开启生词高亮'}
+              className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition ${
+                highlightOn
+                  ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
+              }`}
+            >
+              高亮
+            </button>
+            <button
+              onClick={() => setLeftPct(50)}
+              title="重置分栏比例 50:50"
+              className="inline-flex h-8 items-center rounded-md border border-stone-200 bg-stone-50 px-3 text-xs font-medium text-stone-700 hover:bg-stone-100"
+            >
+              50:50
+            </button>
+            <div ref={typographyRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setShowTypography((v) => !v)}
+                className="inline-flex h-8 items-center rounded-md border border-teal-200 bg-teal-50 px-3 text-xs font-medium text-teal-800 hover:bg-teal-100"
+              >
+                排版
+              </button>
+              {showTypography && (
+                <div className="absolute right-0 top-9 z-40 w-72 rounded-lg border border-stone-200 bg-white p-4 text-sm shadow-xl shadow-stone-900/10">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="font-medium text-stone-900">阅读排版</span>
+                    <button
+                      type="button"
+                      onClick={() => setTypography(DEFAULT_TYPOGRAPHY)}
+                      className="text-xs font-medium text-stone-500 hover:text-stone-900"
+                    >
+                      重置
+                    </button>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-stone-500">
+                      字体
+                    </span>
+                    <select
+                      value={typography.font}
+                      onChange={(e) =>
+                        setTypography((v) => ({
+                          ...v,
+                          font: e.target.value as ReaderFont,
+                        }))
+                      }
+                      className="h-8 w-full rounded-md border border-stone-200 bg-white px-2 text-sm text-stone-800 focus:outline-none focus:border-stone-400"
+                    >
+                      {FONT_OPTIONS.map((font) => (
+                        <option key={font.value} value={font.value}>
+                          {font.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <TypographySlider
+                    label="字号"
+                    value={typography.fontSize}
+                    min={14}
+                    max={24}
+                    step={1}
+                    suffix="px"
+                    onChange={(fontSize) =>
+                      setTypography((v) => ({ ...v, fontSize }))
+                    }
+                  />
+                  <TypographySlider
+                    label="行距"
+                    value={typography.lineHeight}
+                    min={1.35}
+                    max={2.4}
+                    step={0.05}
+                    onChange={(lineHeight) =>
+                      setTypography((v) => ({ ...v, lineHeight }))
+                    }
+                  />
+                  <TypographySlider
+                    label="字距"
+                    value={typography.letterSpacing}
+                    min={0}
+                    max={0.08}
+                    step={0.005}
+                    suffix="em"
+                    onChange={(letterSpacing) =>
+                      setTypography((v) => ({ ...v, letterSpacing }))
+                    }
+                  />
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setShowVocabPanel(true)}
-              className="text-xs px-2.5 py-1 rounded border border-stone-200 text-stone-700 hover:bg-stone-50"
+              className="inline-flex h-8 items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
             >
               生词 ({vocab.length})
             </button>
-            <span className="text-xs text-stone-500 hidden md:inline">
-              {Math.round(leftPct)} / {Math.round(100 - leftPct)}
-            </span>
-            <button
-              onClick={() => setLeftPct(50)}
-              className="text-xs px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-              title="重置分栏比例"
-            >
-              均分
-            </button>
+            <span aria-hidden="true" className="mx-1 h-4 w-px bg-stone-200" />
             <button
               onClick={startTranscription}
               disabled={
@@ -204,19 +452,25 @@ export default function Reader() {
                 job?.status === 'queued' ||
                 job?.status === 'running'
               }
-              className="text-xs px-2.5 py-1 rounded border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+              className="inline-flex h-8 items-center rounded-md border border-sky-200 bg-sky-50 px-3 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
               title="调用局域网 GPU ASR worker 生成原文"
             >
               {transcriptionButtonLabel(job, transcribing)}
             </button>
             <Link
               to={`/m/${m.id}/edit`}
-              className="text-sm px-3 py-1.5 rounded-md border border-stone-200 hover:bg-stone-50"
+              className="inline-flex h-8 items-center rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-800 hover:bg-violet-100"
             >
               编辑
             </Link>
           </div>
         </div>
+        {transcriptionErr && (
+          <div className="border-t border-rose-100 bg-rose-50 px-6 py-2 text-sm text-rose-700">
+            生成原文失败:{' '}
+            <span className="font-medium break-words">{transcriptionErr}</span>
+          </div>
+        )}
       </div>
 
       <div
@@ -242,11 +496,8 @@ export default function Reader() {
                         ? `运行中 ${job.progress}%`
                         : job.status === 'succeeded'
                           ? '已完成'
-                          : `失败 · ${job.error ?? ''}`}
+                          : '失败'}
                   </span>
-                )}
-                {transcriptionErr && (
-                  <span className="text-rose-600 ml-2">{transcriptionErr}</span>
                 )}
               </div>
             )}
@@ -255,9 +506,10 @@ export default function Reader() {
                 <p
                   key={i}
                   data-paragraph={i}
-                  className="mb-5 text-stone-800 leading-[1.85] text-[17px] tracking-[0.01em]"
+                  className="mb-5 text-stone-800"
+                  style={paragraphStyle}
                 >
-                  {highlightOn ? highlightText(p, vocab) : p}
+                  {highlightOn ? highlightText(p, vocab, m.id) : p}
                 </p>
               ))
             ) : (
@@ -295,6 +547,7 @@ export default function Reader() {
         >
           <div className="flex-1 min-h-0">
             <VideoPlayer
+              materialId={m.id}
               sourceType={m.source_type}
               sourceRef={m.source_ref}
             />
@@ -304,6 +557,7 @@ export default function Reader() {
 
       <SelectionPopup
         containerRef={articleRef}
+        materialId={m.id}
         onAdd={handleAddFromSelection}
       />
 
@@ -338,6 +592,51 @@ function transcriptionButtonLabel(
   if (transcribing) return '提交中...';
   if (job?.status === 'queued') return '转写排队中';
   if (job?.status === 'running') return `转写中 ${job.progress}%`;
-  if (job?.status === 'succeeded') return '重新转写';
-  return '生成原文';
+  if (job?.status === 'succeeded') return '重转写';
+  return '转写';
+}
+
+function TypographySlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix = '',
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  suffix?: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="mt-3 block">
+      <span className="mb-1 flex items-center justify-between text-xs font-medium text-stone-500">
+        <span>{label}</span>
+        <span className="font-mono text-stone-700">
+          {formatSliderValue(value, step)}
+          {suffix}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full accent-teal-700"
+      />
+    </label>
+  );
+}
+
+function formatSliderValue(value: number, step: number): string {
+  if (step >= 1) return String(Math.round(value));
+  if (step >= 0.01) return value.toFixed(2);
+  return value.toFixed(3);
 }

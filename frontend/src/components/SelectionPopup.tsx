@@ -1,4 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
+import SpeakButton from './SpeakButton';
 
 interface Sel {
   text: string;
@@ -7,10 +8,15 @@ interface Sel {
 
 interface Props {
   containerRef: RefObject<HTMLElement | null>;
+  materialId?: number;
   onAdd: (text: string) => void;
 }
 
-export default function SelectionPopup({ containerRef, onAdd }: Props) {
+export default function SelectionPopup({
+  containerRef,
+  materialId,
+  onAdd,
+}: Props) {
   const [sel, setSel] = useState<Sel | null>(null);
 
   useEffect(() => {
@@ -44,10 +50,15 @@ export default function SelectionPopup({ containerRef, onAdd }: Props) {
 
   return (
     <div
-      className="selection-popup fixed z-50 -translate-x-1/2"
+      className="selection-popup fixed z-50 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white p-1.5 shadow-lg shadow-stone-900/10"
       style={{ top, left }}
       onMouseDown={(e) => e.preventDefault()}
     >
+      <SpeakButton
+        word={sel.text}
+        materialId={materialId}
+        className="h-7 w-7"
+      />
       <button
         type="button"
         onClick={() => {
@@ -55,7 +66,7 @@ export default function SelectionPopup({ containerRef, onAdd }: Props) {
           setSel(null);
           window.getSelection()?.removeAllRanges();
         }}
-        className="px-3 py-1.5 rounded-md bg-stone-900 text-white text-xs shadow-lg hover:bg-stone-700 whitespace-nowrap"
+        className="h-7 px-2.5 rounded-md border border-emerald-200 bg-emerald-50 text-xs font-medium text-emerald-800 hover:bg-emerald-100 whitespace-nowrap"
       >
         + 加为生词
       </button>

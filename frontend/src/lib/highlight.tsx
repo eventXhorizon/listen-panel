@@ -17,10 +17,16 @@ interface Pos {
 interface HighlightedWordProps {
   matched: string;
   entry?: VocabEntry;
+  materialId?: number;
   onPick?: (entry: VocabEntry) => void;
 }
 
-function HighlightedWord({ matched, entry, onPick }: HighlightedWordProps) {
+function HighlightedWord({
+  matched,
+  entry,
+  materialId,
+  onPick,
+}: HighlightedWordProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<Pos | null>(null);
   const markRef = useRef<HTMLElement>(null);
@@ -101,7 +107,7 @@ function HighlightedWord({ matched, entry, onPick }: HighlightedWordProps) {
           >
             <div className="flex items-center gap-2">
               <div className="text-lg font-medium text-stone-900">{entry.word}</div>
-              <SpeakButton word={entry.word} />
+              <SpeakButton word={entry.word} materialId={materialId} />
             </div>
             <div className="mt-1 text-sm text-stone-500">
               {entry.lemma &&
@@ -136,6 +142,7 @@ function HighlightedWord({ matched, entry, onPick }: HighlightedWordProps) {
 export function highlightText(
   text: string,
   vocab: VocabEntry[],
+  materialId?: number,
   onClick?: (entry: VocabEntry) => void,
 ): ReactNode[] {
   if (vocab.length === 0) return [text];
@@ -165,6 +172,7 @@ export function highlightText(
         key={`${m.index}-${matched}`}
         matched={matched}
         entry={entry}
+        materialId={materialId}
         onPick={onClick}
       />,
     );

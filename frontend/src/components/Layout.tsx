@@ -12,8 +12,8 @@ export default function Layout() {
 
   return (
     <div className="h-screen flex flex-col bg-stone-50 overflow-hidden">
-      <header className="border-b border-stone-200 bg-white shrink-0">
-        <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+      <header className="border-b border-stone-100 bg-white shrink-0">
+        <div className="w-full px-8 h-14 flex items-center justify-between">
           <Link
             to="/"
             className="text-stone-900 font-medium tracking-tight text-[15px]"
@@ -57,7 +57,7 @@ export default function Layout() {
             </button>
             <Link
               to="/new"
-              className="ml-2 px-3 py-1.5 rounded-md bg-stone-900 text-white hover:bg-stone-700 transition"
+              className="ml-2 px-3 py-1.5 rounded-md border border-sky-200 bg-sky-50 text-sky-800 font-medium hover:bg-sky-100 transition"
             >
               + 新建
             </Link>

@@ -35,7 +35,7 @@ listen-panel/
 │       ├── config.json          DeepSeek 凭据(api_key/base_url/model)
 │       ├── tts.json             TTS 凭据(provider/api_key/base_url/voice_id/model/output_format)
 │       ├── asr.json             远程 ASR worker 配置(base_url/token/model 等)
-│       ├── tts-cache/           TTS 生成音频缓存(按 provider/model/voice/text hash)
+│       ├── tts-cache/           TTS 生成音频缓存(有文章上下文时按 material 分目录)
 │       └── uploads/             本地视频 (uuid 命名)
 ├── frontend/                    React 19 + Vite + TS + Tailwind v4
 │   ├── package.json
@@ -212,7 +212,7 @@ listen-panel/
 | POST | `/lookup` | `{word, context}` → 走 DeepSeek 兼容协议 → `{lemma, phonetic, pos, definition_zh, ...}`;未配置 key 直接返 500 + `not configured` 文案 |
 | GET | `/settings/tts` | 返 `{configured, provider, base_url, voice_id, model, output_format}`,**永不返 api_key** |
 | PUT | `/settings/tts` | 局部更新 `{api_key?, base_url?, voice_id?, model?, output_format?}`,空字符串字段视为不变;写盘 `data/tts.json` 同时刷新内存 |
-| POST | `/tts/speech` | `{text}` → 先查 `data/tts-cache/`;未命中时走 ElevenLabs `text-to-speech/:voice_id`,成功后缓存并返回 `audio/mpeg`;未配置 key 返回 503 |
+| POST | `/tts/speech` | `{text, material_id?}` → 先查 `data/tts-cache/`;传 `material_id` 时按文章目录缓存,未命中时走 ElevenLabs `text-to-speech/:voice_id`,成功后缓存并返回 `audio/mpeg`;未配置 key 返回 503 |
 | GET | `/auth/status` | `{needs_setup, user}`;未登录 user 为 null |
 | POST | `/auth/setup` | 首次初始化管理员账户,并把旧材料归属给该用户 |
 | POST | `/auth/register` | 创建普通账户并登录 |
@@ -394,7 +394,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 ElevenLabs,返回 `audio/mpeg`
   2. `dictionary-mp3`:请求 Free Dictionary API (`https://api.dictionaryapi.dev/api/v2/entries/en/<word>`) 找 `phonetics[].audio` 的 mp3
   3. `browser-speech`:前两档不可用时,自动 fallback 到浏览器 `speechSynthesis`
-- ElevenLabs 音频按 `provider/base_url/voice_id/model/output_format/text` 做 SHA-256 hash,缓存到 `backend/data/tts-cache/<provider>_<hash>.mp3`;命中缓存不再请求 ElevenLabs,不消耗 credits。失败结果不缓存。清缓存直接删 `backend/data/tts-cache/`。
+- ElevenLabs 音频按 `provider/base_url/voice_id/model/output_format/text` 做 SHA-256 hash;有文章上下文时缓存到 `backend/data/tts-cache/material-<material_id>/<provider>_<hash>.mp3`,没有文章上下文时缓存到 `backend/data/tts-cache/<provider>_<hash>.mp3`;命中缓存不再请求 ElevenLabs,不消耗 credits。失败结果不缓存。清缓存直接删 `backend/data/tts-cache/`。
 - Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。
 - 浏览器朗读固定 `en-US`,语速 `0.9`;不同系统/浏览器的声音会不同。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
 
