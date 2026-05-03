@@ -39,3 +39,12 @@ export interface LlmStatus {
   base_url: string;
   model: string;
 }
+
+export interface TtsStatus {
+  configured: boolean;
+  provider: 'eleven_labs';
+  base_url: string;
+  voice_id: string;
+  model: string;
+  output_format: string;
+}

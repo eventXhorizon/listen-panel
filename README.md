@@ -26,10 +26,12 @@ listen-panel/
 │   │       ├── vocab.rs         vocab CRUD
 │   │       ├── media.rs         上传 + Range 流 + 孤儿清理
 │   │       ├── llm.rs           /api/lookup,代理到 DeepSeek
-│   │       └── settings.rs      GET/PUT /api/settings/llm
+│   │       ├── tts.rs           /api/tts/speech,代理到 TTS provider
+│   │       └── settings.rs      GET/PUT /api/settings/llm 与 /api/settings/tts
 │   └── data/                    gitignored
 │       ├── app.db
 │       ├── config.json          DeepSeek 凭据(api_key/base_url/model)
+│       ├── tts.json             TTS 凭据(provider/api_key/base_url/voice_id/model/output_format)
 │       └── uploads/             本地视频 (uuid 命名)
 ├── frontend/                    React 19 + Vite + TS + Tailwind v4
 │   ├── package.json
@@ -83,6 +85,7 @@ listen-panel/
 
 **外部依赖**
 - DeepSeek `chat/completions`(JSON mode):用于生词释义。**Key 存在 `backend/data/config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。
+- ElevenLabs Text to Speech:用于生词朗读。**Key 存在 `backend/data/tts.json`**(gitignored),前端通过 `POST /api/tts/speech` 走后端适配层,key 不出服务端。
 
 ## 3. 数据模型
 
@@ -123,7 +126,7 @@ listen-panel/
 2. `routes::media::ensure_dirs()` 建 `data/uploads/`
 3. `db::pool()`:确保 `data/` 存在 → `SqliteConnectOptions::create_if_missing(true).foreign_keys(true)` → `sqlx::migrate!("./migrations").run(&pool)`
 4. `config::load()` 读 `data/config.json` → `Arc<RwLock<LlmConfig>>`,文件缺失就用默认值并 warn 一行
-5. 组装 `AppState { pool, http: reqwest::Client, llm: SharedLlm }`(用 axum `FromRef` 派生,旧 handler 还能直接 `State<SqlitePool>`)
+5. 组装 `AppState { pool, http: reqwest::Client, llm: SharedLlm, tts: SharedTts }`(用 axum `FromRef` 派生,handler 可直接取需要的字段);reqwest client 设置 20s timeout
 6. `Router::new().nest("/api", routes::api_router(state))` + `CorsLayer::permissive()` + `TraceLayer::new_for_http()`
 7. 监听 `0.0.0.0:9527`(Vite 19527 走 proxy 转发到这里)
 
@@ -145,6 +148,9 @@ listen-panel/
 | GET | `/settings/llm` | 返 `{configured, base_url, model}`,**永不返 api_key** |
 | PUT | `/settings/llm` | 局部更新 `{api_key?, base_url?, model?}`,空字符串字段视为不变;写盘 `data/config.json` 同时刷新内存 |
 | POST | `/lookup` | `{word, context}` → 走 DeepSeek 兼容协议 → `{lemma, phonetic, pos, definition_zh, ...}`;未配置 key 直接返 500 + `not configured` 文案 |
+| GET | `/settings/tts` | 返 `{configured, provider, base_url, voice_id, model, output_format}`,**永不返 api_key** |
+| PUT | `/settings/tts` | 局部更新 `{api_key?, base_url?, voice_id?, model?, output_format?}`,空字符串字段视为不变;写盘 `data/tts.json` 同时刷新内存 |
+| POST | `/tts/speech` | `{text}` → 当前走 ElevenLabs `text-to-speech/:voice_id`,返回 `audio/mpeg`;未配置 key 返回 503 |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -167,11 +173,12 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 ### 4.5 时间戳
 `chrono::DateTime<Utc>` 端到端。schema 默认 `strftime('%Y-%m-%dT%H:%M:%fZ','now')`(带毫秒、Z),与 sqlx-chrono 解析格式兼容。
 
-### 4.6 LlmConfig 持久化(`config.rs`)
+### 4.6 配置持久化(`config.rs`)
 - 类型 `Arc<RwLock<LlmConfig>>`,放进 `AppState.llm`
 - 启动时 `tokio::fs::read_to_string("data/config.json")` → `serde_json::from_str` → fallback 到 `Default`(`base_url=https://api.deepseek.com`、`model=deepseek-chat`、`api_key=""`)
 - `PUT /api/settings/llm` 写内存 → `serde_json::to_string_pretty` → 写 `data/config.json.tmp` → `tokio::fs::rename` 原子替换
 - API key 字段:空字符串 / 未传都视为"保留现有",只有非空字符串才覆盖。这样前端"留空提交"按钮才不会误清
+- `TtsConfig` 单独持久化到 `data/tts.json`,默认 `provider=eleven_labs`、`base_url=https://api.elevenlabs.io`、`voice_id=JBFqnCBsd6RMkjVDRZzb`、`model=eleven_multilingual_v2`、`output_format=mp3_44100_128`。保存规则同 LLM,key 不回传前端。
 
 ## 5. 前端实现细节
 
@@ -240,6 +247,13 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   - Base URL(改用兼容 OpenAI 协议的代理时填这里)
   - 模型(默认 `deepseek-chat`)
   - 保存只 PUT 实际改了的字段;成功后清空 key 输入框,状态徽标刷新
+- **ElevenLabs TTS**(走后端 `/api/settings/tts`)
+  - API Key 输入框(隐藏/显示切换);右上角状态徽标 `● 已配置 / ○ 未配置`,从 `GET /api/settings/tts` 读
+  - 已配置时 placeholder 显示 `已配置 ●●●●●● (留空保留现有 key)`,留空提交不覆盖
+  - Base URL(默认 `https://api.elevenlabs.io`)
+  - Voice ID(默认 `JBFqnCBsd6RMkjVDRZzb`,可改成用户 ElevenLabs Voices 里的 voice id)
+  - 模型(默认 `eleven_multilingual_v2`)
+  - 输出格式(默认 `mp3_44100_128`)
 - **播放**(本地 localStorage)
   - 本地视频默认音量(0-100% slider,默认 30%);Reader 起播时用,播放中调整也写回
 
@@ -247,6 +261,15 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `request<T>(path, init?)`:统一设 `Content-Type: application/json`(除非传了 FormData,但目前 api.ts 不处理上传)、`!ok` 抛带后端 `{error}` 文案的 Error、204 返回 undefined
 - `getOrNull<T>`:404 → null,其它失败抛
 - 所有 Material/Vocab CRUD 直对后端,**导出签名跟早期 localStorage 版本完全一致**,Library/Editor/Reader/Vocab/Review 调用方零改动
+
+### 5.11 生词朗读
+- 生词卡统一使用 `components/SpeakButton.tsx`,已接入 Reader 高亮弹卡、本篇生词抽屉、全局生词本、复习卡。
+- 朗读策略在 `lib/audio.ts`,按 provider 链依次尝试:
+  1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 ElevenLabs,返回 `audio/mpeg`
+  2. `dictionary-mp3`:请求 Free Dictionary API (`https://api.dictionaryapi.dev/api/v2/entries/en/<word>`) 找 `phonetics[].audio` 的 mp3
+  3. `browser-speech`:前两档不可用时,自动 fallback 到浏览器 `speechSynthesis`
+- Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。ElevenLabs 音频 V1 不缓存,每次点击都会消耗对应 credits。
+- 浏览器朗读固定 `en-US`,语速 `0.9`;不同系统/浏览器的声音会不同。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
 
 ## 6. 启动方式
 
@@ -269,7 +292,7 @@ http://localhost:19527/
 
 ### 第一次跑要做的事
 1. 打开 http://localhost:19527/settings
-2. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)→ 保存。**Key 落到 `backend/data/config.json`,不入数据库,不回传前端**
+2. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)与 ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)→ 保存。**Key 落到 `backend/data/*.json`,不入数据库,不回传前端**
 3. 回到书架,新建第一条材料
 
 ## 7. 已知限制 / 待办
@@ -277,11 +300,12 @@ http://localhost:19527/
 ### 已知小毛刺(行为正确,品味略差,不阻塞)
 - 上传时给坏扩展 / `/api/media/..` 路径穿越,后端返 **500** 而非 400(请求被正确拒绝,只是状态码不规范)
 - 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran"),没做词形还原
+- 生词朗读 V1 优先走 ElevenLabs,会消耗 ElevenLabs credits;未配置、额度不足、网络失败时退回 Free Dictionary mp3 与浏览器 `speechSynthesis`
 - 复习无 SRS 算法,只是随机抽 + 三档手判 mastery
 - "上传成功但 createMaterial/updateMaterial 失败"的瞬时窗口会留下纯孤儿(目前 cleanup 只在 update/delete 触发,不在 upload 失败回滚)
 
 ### 计划中
-- 发音 / TTS:Web Speech API + Free Dictionary mp3 + 可选 Kokoro 三档(后两档要后端代理)
+- 发音 / TTS V2:后端 `tts.rs` 扩展 OpenAI TTS 或本地 Kokoro/Piper provider,支持统一音色、整句朗读和可选缓存
 - 字幕联动 / SRT 解析 + AB 循环(V2)
 - Axum 兼托管 `frontend/dist/`,做单二进制部署
 - "导出 / 备份"按钮(导出 SQLite 到 .json)
@@ -294,4 +318,4 @@ http://localhost:19527/
 - **端口分两处**:后端 `9527` 写在 `backend/src/main.rs` 的 `ADDR`;前端 `19527` 写在 `frontend/vite.config.ts` 的 `server.port`(同文件 `server.proxy['/api']` 指向后端 9527)。改后端口要相应改 `dev.sh` 与 `README.md` 的展示文案。
 - **CORS 当前 permissive**:仅限开发期。后续若改成 Axum 兼托管 dist,可整层去掉
 - **常见错误来源**:DeepSeek 返非 JSON / 网络断 / Cargo 依赖大版本变更
-- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite + uploads/ + config.json(含 DeepSeek key)都在那。**注意 config.json 含密钥,跨机器拷贝要谨慎**
+- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite + uploads/ + config.json(含 DeepSeek key)+tts.json(含 TTS key)都在那。**注意这些 json 含密钥,跨机器拷贝要谨慎**

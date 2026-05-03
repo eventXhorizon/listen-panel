@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import type { VocabEntry } from '../types';
 import { deleteVocab } from '../api';
+import SpeakButton from './SpeakButton';
 
 interface Props {
   items: VocabEntry[];
@@ -62,6 +63,7 @@ export default function VocabPanel({ items, onClose, onChange }: Props) {
                     <span className="text-base font-medium text-stone-900">
                       {v.word}
                     </span>
+                    <SpeakButton word={v.word} />
                     {v.lemma &&
                       v.lemma.toLowerCase() !== v.word.toLowerCase() && (
                         <span className="text-xs text-stone-400">

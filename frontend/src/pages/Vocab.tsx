@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { deleteVocab, listMaterials, listVocab } from '../api';
 import type { Material, VocabEntry } from '../types';
+import SpeakButton from '../components/SpeakButton';
 
 export default function Vocab() {
   const [items, setItems] = useState<VocabEntry[]>([]);
@@ -114,6 +115,7 @@ export default function Vocab() {
                     <span className="text-lg font-medium text-stone-900">
                       {v.word}
                     </span>
+                    <SpeakButton word={v.word} />
                     {v.lemma &&
                       v.lemma.toLowerCase() !== v.word.toLowerCase() && (
                         <span className="text-xs text-stone-400">

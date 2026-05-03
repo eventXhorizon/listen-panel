@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { VocabEntry } from '../types';
+import SpeakButton from '../components/SpeakButton';
 
 const ESCAPE_RE = /[.*+?^${}()|[\]\\]/g;
 
@@ -98,7 +99,10 @@ function HighlightedWord({ matched, entry, onPick }: HighlightedWordProps) {
             }}
             className="z-50 max-h-[70vh] overflow-y-auto bg-white border border-stone-200 shadow-xl rounded-lg p-4 text-left cursor-default normal-case"
           >
-            <div className="text-lg font-medium text-stone-900">{entry.word}</div>
+            <div className="flex items-center gap-2">
+              <div className="text-lg font-medium text-stone-900">{entry.word}</div>
+              <SpeakButton word={entry.word} />
+            </div>
             <div className="mt-1 text-sm text-stone-500">
               {entry.lemma &&
                 entry.lemma.toLowerCase() !== entry.word.toLowerCase() && (

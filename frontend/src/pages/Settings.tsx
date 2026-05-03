@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { loadSettings, saveSettings } from '../lib/settings';
-import type { LlmStatus } from '../types';
+import type { LlmStatus, TtsStatus } from '../types';
 
 export default function Settings() {
   const initial = loadSettings();
@@ -11,10 +11,18 @@ export default function Settings() {
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [show, setShow] = useState(false);
+  const [ttsStatus, setTtsStatus] = useState<TtsStatus | null>(null);
+  const [ttsApiKey, setTtsApiKey] = useState('');
+  const [ttsBaseUrl, setTtsBaseUrl] = useState('');
+  const [ttsVoiceId, setTtsVoiceId] = useState('');
+  const [ttsModel, setTtsModel] = useState('');
+  const [ttsOutputFormat, setTtsOutputFormat] = useState('');
+  const [showTtsKey, setShowTtsKey] = useState(false);
 
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [ttsLoadErr, setTtsLoadErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -27,6 +35,23 @@ export default function Settings() {
         setModel(s.model);
       } catch (e) {
         setLoadErr((e as Error).message);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/settings/tts');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const s = (await res.json()) as TtsStatus;
+        setTtsStatus(s);
+        setTtsBaseUrl(s.base_url);
+        setTtsVoiceId(s.voice_id);
+        setTtsModel(s.model);
+        setTtsOutputFormat(s.output_format);
+      } catch (e) {
+        setTtsLoadErr((e as Error).message);
       }
     })();
   }, []);
@@ -62,6 +87,48 @@ export default function Settings() {
         setApiKey('');
       }
 
+      const ttsPatch: Record<string, string> = {};
+      if (ttsApiKey.trim()) ttsPatch.api_key = ttsApiKey.trim();
+      if (
+        ttsStatus &&
+        ttsBaseUrl.trim() &&
+        ttsBaseUrl.trim() !== ttsStatus.base_url
+      ) {
+        ttsPatch.base_url = ttsBaseUrl.trim();
+      }
+      if (
+        ttsStatus &&
+        ttsVoiceId.trim() &&
+        ttsVoiceId.trim() !== ttsStatus.voice_id
+      ) {
+        ttsPatch.voice_id = ttsVoiceId.trim();
+      }
+      if (ttsStatus && ttsModel.trim() && ttsModel.trim() !== ttsStatus.model) {
+        ttsPatch.model = ttsModel.trim();
+      }
+      if (
+        ttsStatus &&
+        ttsOutputFormat.trim() &&
+        ttsOutputFormat.trim() !== ttsStatus.output_format
+      ) {
+        ttsPatch.output_format = ttsOutputFormat.trim();
+      }
+
+      if (Object.keys(ttsPatch).length > 0) {
+        const res = await fetch('/api/settings/tts', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(ttsPatch),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const s = (await res.json()) as TtsStatus;
+        setTtsStatus(s);
+        setTtsApiKey('');
+      }
+
       setSavedAt(new Date().toLocaleTimeString());
     } catch (e) {
       alert(`保存失败:${(e as Error).message}`);
@@ -73,6 +140,9 @@ export default function Settings() {
   const keyPlaceholder = status?.configured
     ? '已配置 ●●●●●● (留空保留现有 key)'
     : 'sk-...';
+  const ttsKeyPlaceholder = ttsStatus?.configured
+    ? '已配置 ●●●●●● (留空保留现有 key)'
+    : 'sk_...';
 
   return (
     <main className="flex-1 overflow-y-auto">
@@ -81,7 +151,7 @@ export default function Settings() {
           设置
         </h1>
         <p className="text-sm text-stone-500 mb-8">
-          DeepSeek 凭据保存在 <code className="text-xs bg-stone-100 px-1 py-0.5 rounded">backend/data/config.json</code>
+          DeepSeek 与 TTS 凭据保存在 <code className="text-xs bg-stone-100 px-1 py-0.5 rounded">backend/data/</code>
           (已 gitignore),不会进数据库,API key 也不会回传到前端。本地音量存浏览器 localStorage。
         </p>
 
@@ -140,6 +210,81 @@ export default function Settings() {
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                   placeholder="deepseek-chat"
+                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                />
+              </Field>
+            </div>
+          </section>
+
+          <section className="bg-white border border-stone-200 rounded-lg p-5">
+            <div className="flex items-baseline justify-between mb-4">
+              <h2 className="text-sm font-medium text-stone-800">ElevenLabs TTS</h2>
+              <StatusBadge status={ttsStatus} loadErr={ttsLoadErr} />
+            </div>
+
+            <div className="space-y-5">
+              <Field label="API Key">
+                <div className="flex gap-2">
+                  <input
+                    type={showTtsKey ? 'text' : 'password'}
+                    value={ttsApiKey}
+                    onChange={(e) => setTtsApiKey(e.target.value)}
+                    placeholder={ttsKeyPlaceholder}
+                    className="flex-1 bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowTtsKey((s) => !s)}
+                    className="px-3 py-2 rounded-md border border-stone-200 text-xs hover:bg-stone-50"
+                  >
+                    {showTtsKey ? '隐藏' : '显示'}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-stone-500">
+                  申请地址:
+                  <a
+                    href="https://elevenlabs.io/app/settings/api-keys"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline ml-1"
+                  >
+                    elevenlabs.io/app/settings/api-keys
+                  </a>
+                </p>
+              </Field>
+
+              <Field label="Base URL">
+                <input
+                  value={ttsBaseUrl}
+                  onChange={(e) => setTtsBaseUrl(e.target.value)}
+                  placeholder="https://api.elevenlabs.io"
+                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                />
+              </Field>
+
+              <Field label="Voice ID">
+                <input
+                  value={ttsVoiceId}
+                  onChange={(e) => setTtsVoiceId(e.target.value)}
+                  placeholder="JBFqnCBsd6RMkjVDRZzb"
+                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                />
+              </Field>
+
+              <Field label="模型">
+                <input
+                  value={ttsModel}
+                  onChange={(e) => setTtsModel(e.target.value)}
+                  placeholder="eleven_multilingual_v2"
+                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                />
+              </Field>
+
+              <Field label="输出格式">
+                <input
+                  value={ttsOutputFormat}
+                  onChange={(e) => setTtsOutputFormat(e.target.value)}
+                  placeholder="mp3_44100_128"
                   className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
                 />
               </Field>
