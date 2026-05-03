@@ -81,7 +81,7 @@ listen-panel/
 - `tokio` 1
 - `sqlx` 0.8(`runtime-tokio-rustls`, `sqlite`, `chrono`, `migrate`, `macros`)
 - `tower-http` 0.5(`cors`, `trace`)
-- `reqwest` 0.12(`rustls-tls`, `json`,跟 sqlx 共用 rustls)用于代理 DeepSeek
+- `reqwest` 0.12(`rustls-tls`, `json`,跟 sqlx 共用 rustls)用于代理 DeepSeek/TTS/ASR,以及读取外链视频标题
 - `tracing` + `tracing-subscriber` (`env-filter`, `fmt`)
 - `anyhow` / `thiserror`
 - `uuid` v4 / `tokio-util` (`io`) / `serde` / `chrono`(`serde`)
@@ -96,6 +96,7 @@ listen-panel/
 - DeepSeek `chat/completions`(JSON mode):用于生词释义。**Key 存在 `backend/data/config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。
 - ElevenLabs Text to Speech:用于生词朗读。**Key 存在 `backend/data/tts.json`**(gitignored),前端通过 `POST /api/tts/speech` 走后端适配层,key 不出服务端。
 - 远程 ASR worker:用于视频转写。V1 协议是局域网 HTTP worker,`asr-worker/` 提供 FastAPI + `faster-whisper large-v3 CUDA float16` 脚手架;listen-panel 后端只保存 `backend/data/asr.json` 配置并发起任务。
+- YouTube oEmbed / Bilibili `x/web-interface/view` API:用于新建材料时根据链接自动识别视频源并读取标题;Bilibili API 失败时再回退解析视频页 HTML;最终失败时只回退为手动标题或链接本身,不阻塞保存。
 
 ## 3. 数据模型
 
@@ -197,6 +198,7 @@ listen-panel/
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/materials` | 列表,按 `updated_at` DESC |
+| POST | `/materials/metadata` | `{source_ref}` → 自动识别 YouTube/Bilibili,返回 `{source_type, source_ref, title}`;只请求白名单视频站点标题 |
 | GET | `/materials/:id` | 详情;404 找不到(经 `AppError` 映射) |
 | POST | `/materials` | 新建,服务端写 created_at/updated_at |
 | PUT | `/materials/:id` | **局部更新**,SQL 用 `COALESCE(?, col)` |
@@ -319,7 +321,8 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `bilibili`:正则提 BV,`<iframe src="https://player.bilibili.com/player.html?bvid=<bv>...">`(音量走 Bilibili 自己的播放器,cookie 持久化)
 
 ### 5.5 Editor(`pages/Editor.tsx`)
-- 视频源类型按钮:youtube / bilibili / local
+- 视频源类型按钮:youtube / bilibili / local;粘贴 YouTube/Bilibili 链接或 ID 后会防抖调用 `POST /api/materials/metadata`,自动切到正确来源并规范化保存用的 `source_ref`
+- 标题不再强制手填。用户未手动改过标题时,外链标题会自动回填;抓取失败或无标题时,保存用视频链接/ID 兜底。
 - **拖放区(local 时显示)**:虚线框,`onDragEnter/onDragOver/onDragLeave/onDrop`,用 `dragDepthRef` 计数避免子节点闪烁
 - 点击拖放区 → `fileInputRef.current?.click()` 触发隐藏 `<input type=file>`,选完 `e.target.value=''` 重置以便选回同一文件
 - **挑/拖时只暂存**(`pendingFile: File | null`),**不发请求**;预览块显示文件名 + 大小 + "保存时才上传"(已有 source_ref 多一行"将替换原文件")

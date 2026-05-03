@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { lookupWord } from '../lib/llm';
 import { createVocab } from '../api';
+import SpeakButton from './SpeakButton';
 
 interface Props {
   word: string;
@@ -101,7 +102,12 @@ export default function AddVocabDialog({
         <div className="px-6 py-5 space-y-4 overflow-y-auto">
           <div>
             <div className="text-xs text-stone-500 mb-1">选中</div>
-            <div className="text-xl font-medium text-stone-900 break-words">{word}</div>
+            <div className="flex items-center gap-2">
+              <div className="text-xl font-medium text-stone-900 break-words">
+                {word}
+              </div>
+              <SpeakButton word={word} materialId={materialId} />
+            </div>
           </div>
 
           {loading && (

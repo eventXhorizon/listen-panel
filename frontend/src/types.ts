@@ -14,6 +14,12 @@ export interface Material {
 
 export type CreateMaterial = Omit<Material, 'id' | 'user_id' | 'created_at' | 'updated_at'>;
 
+export interface MaterialMetadata {
+  source_type: Exclude<SourceType, 'local'> | null;
+  source_ref: string;
+  title?: string | null;
+}
+
 export interface VocabEntry {
   id: number;
   word: string;

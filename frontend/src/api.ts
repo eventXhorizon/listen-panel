@@ -4,6 +4,7 @@ import type {
   AuthStatus,
   JobWithSegments,
   Material,
+  MaterialMetadata,
   TranscriptionJob,
   User,
   VocabEntry,
@@ -62,6 +63,13 @@ export function createMaterial(data: CreateMaterial): Promise<Material> {
   return request<Material>('/api/materials', {
     method: 'POST',
     body: JSON.stringify(data),
+  });
+}
+
+export function getMaterialMetadata(sourceRef: string): Promise<MaterialMetadata> {
+  return request<MaterialMetadata>('/api/materials/metadata', {
+    method: 'POST',
+    body: JSON.stringify({ source_ref: sourceRef }),
   });
 }
 

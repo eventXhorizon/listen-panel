@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { createMaterial, getMaterial, updateMaterial } from '../api';
-import type { SourceType } from '../types';
+import { createMaterial, getMaterial, getMaterialMetadata, updateMaterial } from '../api';
+import type { MaterialMetadata, SourceType } from '../types';
 
 const TYPES: { value: SourceType; label: string; hint: string }[] = [
   { value: 'youtube', label: 'YouTube', hint: '粘贴 YouTube 链接或 11 位视频 ID' },
@@ -36,9 +36,14 @@ export default function Editor() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [stage, setStage] = useState<'idle' | 'uploading' | 'saving'>('idle');
+  const [metadata, setMetadata] = useState<MaterialMetadata | null>(null);
+  const [metadataStatus, setMetadataStatus] = useState<'idle' | 'loading' | 'detected' | 'unknown' | 'error'>('idle');
+  const [metadataError, setMetadataError] = useState('');
   const [loaded, setLoaded] = useState(editingId == null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
+  const titleTouchedRef = useRef(editingId != null);
+  const metadataInputRef = useRef('');
 
   useEffect(() => {
     if (editingId == null) return;
@@ -57,12 +62,76 @@ export default function Editor() {
     })();
   }, [editingId, navigate]);
 
+  useEffect(() => {
+    if (sourceType === 'local') {
+      setMetadata(null);
+      setMetadataStatus('idle');
+      setMetadataError('');
+      metadataInputRef.current = '';
+      return;
+    }
+
+    const raw = sourceRef.trim();
+    if (!raw) {
+      setMetadata(null);
+      setMetadataStatus('idle');
+      setMetadataError('');
+      metadataInputRef.current = '';
+      return;
+    }
+    if (metadataInputRef.current === raw && metadata) return;
+
+    let cancelled = false;
+    const handle = window.setTimeout(async () => {
+      setMetadataStatus('loading');
+      setMetadataError('');
+      try {
+        const next = await getMaterialMetadata(raw);
+        if (cancelled) return;
+        setMetadata(next);
+        metadataInputRef.current = raw;
+        if (next.source_type) {
+          if (next.source_type !== sourceType) setSourceType(next.source_type);
+          setMetadataStatus('detected');
+          if (!titleTouchedRef.current && next.title?.trim()) {
+            setTitle(next.title.trim());
+          }
+        } else {
+          setMetadataStatus('unknown');
+        }
+      } catch (e) {
+        if (cancelled) return;
+        const fallback = detectExternalSource(raw);
+        if (fallback) {
+          setMetadata(fallback);
+          metadataInputRef.current = raw;
+          if (fallback.source_type && fallback.source_type !== sourceType) {
+            setSourceType(fallback.source_type);
+          }
+          setMetadataStatus('detected');
+        } else {
+          setMetadataStatus('error');
+        }
+        setMetadataError((e as Error).message);
+      }
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [sourceRef, sourceType]);
+
   function pickLocalFile(file: File) {
     if (!isValidVideo(file)) {
       alert(`不支持的扩展名,请选 ${ALLOWED_EXTS.join(' / ')}`);
       return;
     }
     setSourceType('local');
+    setMetadata(null);
+    setMetadataStatus('idle');
+    setMetadataError('');
+    metadataInputRef.current = '';
     setPendingFile(file);
     if (!title) setTitle(file.name.replace(/\.[^.]+$/, ''));
   }
@@ -105,26 +174,41 @@ export default function Editor() {
   }
 
   async function save() {
-    if (!title.trim()) {
-      alert('请填写标题');
-      return;
-    }
     if (sourceType === 'local' && !pendingFile && !sourceRef) {
       alert('请选择本地视频文件');
       return;
     }
+    if (sourceType !== 'local' && !sourceRef.trim()) {
+      alert('请填写视频链接或视频 ID');
+      return;
+    }
 
+    let finalSourceType = sourceType;
     let finalSourceRef = sourceRef.trim();
+    let finalTitle = title.trim();
     try {
       if (sourceType === 'local' && pendingFile) {
         setStage('uploading');
         finalSourceRef = await uploadPending();
+        finalTitle ||= pendingFile.name.replace(/\.[^.]+$/, '');
+      } else if (sourceType !== 'local') {
+        const cachedMetadata =
+          metadataInputRef.current === finalSourceRef ? metadata : null;
+        const detected = cachedMetadata?.source_type
+          ? cachedMetadata
+          : await getMaterialMetadata(finalSourceRef);
+        if (detected.source_type) {
+          finalSourceType = detected.source_type;
+          finalSourceRef = detected.source_ref;
+          finalTitle ||= detected.title?.trim() ?? '';
+        }
       }
+      finalTitle ||= finalSourceRef;
       setStage('saving');
       if (editingId) {
         await updateMaterial(editingId, {
-          title: title.trim(),
-          source_type: sourceType,
+          title: finalTitle,
+          source_type: finalSourceType,
           source_ref: finalSourceRef,
           text,
           notes,
@@ -132,8 +216,8 @@ export default function Editor() {
         navigate(`/m/${editingId}`);
       } else {
         const m = await createMaterial({
-          title: title.trim(),
-          source_type: sourceType,
+          title: finalTitle,
+          source_type: finalSourceType,
           source_ref: finalSourceRef,
           text,
           notes,
@@ -176,7 +260,10 @@ export default function Editor() {
         <Field label="标题">
           <input
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              titleTouchedRef.current = true;
+              setTitle(e.target.value);
+            }}
             placeholder="例:TED - The Power of Vulnerability"
             className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-stone-400 focus:ring-2 focus:ring-stone-100"
           />
@@ -188,10 +275,18 @@ export default function Editor() {
               <button
                 key={t.value}
                 type="button"
-                onClick={() => setSourceType(t.value)}
+                onClick={() => {
+                  setSourceType(t.value);
+                  if (t.value === 'local') {
+                    setMetadata(null);
+                    setMetadataStatus('idle');
+                    setMetadataError('');
+                    metadataInputRef.current = '';
+                  }
+                }}
                 className={`px-3 py-1.5 rounded-md border text-sm transition ${
                   sourceType === t.value
-                    ? 'bg-stone-900 text-white border-stone-900'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
                     : 'bg-white text-stone-700 border-stone-200 hover:border-stone-400'
                 }`}
               >
@@ -267,13 +362,26 @@ export default function Editor() {
             ) : (
               <input
                 value={sourceRef}
-                onChange={(e) => setSourceRef(e.target.value)}
+                onChange={(e) => {
+                  metadataInputRef.current = '';
+                  setMetadata(null);
+                  setMetadataStatus('idle');
+                  setMetadataError('');
+                  setSourceRef(e.target.value);
+                }}
                 placeholder={
                   sourceType === 'youtube'
                     ? 'https://www.youtube.com/watch?v=...'
                     : 'https://www.bilibili.com/video/BV...'
                 }
                 className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-[15px] font-mono focus:outline-none focus:border-stone-400 focus:ring-2 focus:ring-stone-100"
+              />
+            )}
+            {sourceType !== 'local' && (
+              <MetadataHint
+                status={metadataStatus}
+                metadata={metadata}
+                error={metadataError}
               />
             )}
           </div>
@@ -330,4 +438,94 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+function MetadataHint({
+  status,
+  metadata,
+  error,
+}: {
+  status: 'idle' | 'loading' | 'detected' | 'unknown' | 'error';
+  metadata: MaterialMetadata | null;
+  error: string;
+}) {
+  if (status === 'idle') return null;
+  if (status === 'loading') {
+    return <p className="mt-2 text-xs text-stone-500">正在读取视频信息...</p>;
+  }
+  if (status === 'detected' && metadata?.source_type) {
+    const label = metadata.source_type === 'youtube' ? 'YouTube' : 'Bilibili';
+    return (
+      <p className="mt-2 text-xs text-emerald-700">
+        已识别为 {label}
+        {metadata.title ? ` · 已读取标题: ${metadata.title}` : ' · 暂未读取到标题'}
+        {error ? ` · 后端标题读取未完成: ${error}` : ''}
+      </p>
+    );
+  }
+  if (status === 'unknown') {
+    return (
+      <p className="mt-2 text-xs text-amber-700">
+        暂未识别来源,保存时会按当前选择的视频源处理。
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 text-xs text-rose-600">
+      视频信息读取失败,仍可保存,但可能需要手动确认视频源。
+    </p>
+  );
+}
+
+function detectExternalSource(input: string): MaterialMetadata | null {
+  const sourceRef = input.trim();
+  const youtube = youtubeId(sourceRef);
+  if (youtube) {
+    return { source_type: 'youtube', source_ref: youtube, title: null };
+  }
+  const bvid = bilibiliBvid(sourceRef);
+  if (bvid) {
+    return { source_type: 'bilibili', source_ref: bvid, title: null };
+  }
+  return null;
+}
+
+function youtubeId(input: string): string | null {
+  if (/^[\w-]{11}$/.test(input)) return input;
+  try {
+    const url = new URL(input);
+    const host = url.hostname.replace(/^www\./, '').toLowerCase();
+    if (host === 'youtu.be') {
+      const id = url.pathname.slice(1).split('/')[0];
+      return /^[\w-]{11}$/.test(id) ? id : null;
+    }
+    if (!isHostOrSubdomain(host, 'youtube.com') && !isHostOrSubdomain(host, 'youtube-nocookie.com')) {
+      return null;
+    }
+    const queryId = url.searchParams.get('v');
+    if (queryId && /^[\w-]{11}$/.test(queryId)) return queryId;
+    const match = url.pathname.match(/\/(?:embed|shorts|live)\/([\w-]{11})/);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function bilibiliBvid(input: string): string | null {
+  try {
+    const url = new URL(input);
+    const host = url.hostname.replace(/^www\./, '').toLowerCase();
+    if (!isHostOrSubdomain(host, 'bilibili.com')) return null;
+    return findBvid(url.pathname) ?? url.searchParams.get('bvid');
+  } catch {
+    return findBvid(input);
+  }
+}
+
+function findBvid(input: string): string | null {
+  return input.match(/BV[a-zA-Z0-9]{8,}/)?.[0] ?? null;
+}
+
+function isHostOrSubdomain(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
 }
