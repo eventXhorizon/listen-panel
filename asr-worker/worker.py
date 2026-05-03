@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -28,9 +30,18 @@ DEVICE = os.getenv("ASR_DEVICE", "cuda")
 COMPUTE_TYPE = os.getenv("ASR_COMPUTE_TYPE", "float16")
 DOWNLOAD_DIR = Path(os.getenv("ASR_DOWNLOAD_DIR", "./data"))
 KEEP_MEDIA = os.getenv("ASR_KEEP_MEDIA", "0") == "1"
+LOG_LEVEL = os.getenv("ASR_LOG_LEVEL", "INFO").upper()
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s [asr-worker] %(message)s",
+)
+logger = logging.getLogger("asr-worker")
 
 app = FastAPI(title="Listen Panel ASR Worker")
 _model_cache: dict[str, WhisperModel] = {}
+_YOUTUBE_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_BILIBILI_BVID = re.compile(r"^BV[A-Za-z0-9]+$")
 _VTT_TIMESTAMP_TAG = re.compile(r"<\d{2}:\d{2}:\d{2}\.\d{3}>")
 _HTML_TAG = re.compile(r"</?[^>]+>")
 
@@ -46,6 +57,8 @@ class TranscribeRequest(BaseModel):
     beam_size: int = Field(default=5, ge=1, le=10)
     vad_filter: bool = True
     condition_on_previous_text: bool = False
+    progress_url: str | None = None
+    progress_token: str | None = None
 
 
 class Segment(BaseModel):
@@ -72,19 +85,73 @@ def transcribe(
     verify_worker_token(authorization)
     work_dir = DOWNLOAD_DIR / f"job-{req.job_id}-{uuid.uuid4().hex[:8]}"
     work_dir.mkdir(parents=True, exist_ok=False)
+    started_at = time.monotonic()
+    log_job(
+        req,
+        "received",
+        source_type=req.source_type,
+        source_ref=req.source_ref,
+        model=req.model,
+        language=req.language,
+        work_dir=str(work_dir),
+    )
+    report_progress(req, 5, "received")
     try:
         subtitle = try_fetch_subtitle(req, work_dir)
         if subtitle:
+            log_job(req, "subtitle-found", path=str(subtitle))
             segments = parse_subtitle(subtitle)
+            log_job(req, "subtitle-parsed", segments=len(segments))
             if segments:
-                return response_from_segments(segments)
+                report_progress(req, 95, "subtitle-parsed")
+                response = response_from_segments(segments)
+                log_job(
+                    req,
+                    "completed-from-subtitle",
+                    segments=len(response.segments),
+                    elapsed=f"{time.monotonic() - started_at:.1f}s",
+                )
+                return response
 
         media = fetch_media(req, work_dir)
         audio = extract_audio(media, work_dir)
-        return transcribe_audio(req, audio)
+        response = transcribe_audio(req, audio)
+        log_job(
+            req,
+            "completed-from-asr",
+            segments=len(response.segments),
+            elapsed=f"{time.monotonic() - started_at:.1f}s",
+        )
+        return response
     finally:
         if not KEEP_MEDIA:
+            log_job(req, "cleanup", work_dir=str(work_dir))
             shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def log_job(req: TranscribeRequest, event: str, **fields: Any) -> None:
+    extras = " ".join(f"{key}={value}" for key, value in fields.items())
+    if extras:
+        logger.info("job_id=%s event=%s %s", req.job_id, event, extras)
+    else:
+        logger.info("job_id=%s event=%s", req.job_id, event)
+
+
+def report_progress(req: TranscribeRequest, progress: int, stage: str) -> None:
+    if not req.progress_url:
+        return
+    headers = {}
+    if req.progress_token:
+        headers["Authorization"] = f"Bearer {req.progress_token}"
+    try:
+        requests.post(
+            req.progress_url,
+            json={"progress": max(5, min(99, progress)), "stage": stage},
+            headers=headers,
+            timeout=5,
+        )
+    except requests.RequestException as exc:
+        log_job(req, "progress-report-failed", stage=stage, error=exc)
 
 
 def verify_worker_token(authorization: str | None) -> None:
@@ -97,9 +164,14 @@ def verify_worker_token(authorization: str | None) -> None:
 
 def try_fetch_subtitle(req: TranscribeRequest, work_dir: Path) -> Path | None:
     if req.source_type not in {"youtube", "bilibili"}:
+        log_job(req, "subtitle-skip", reason="source_type")
         return None
     if not command_exists("yt-dlp"):
+        log_job(req, "subtitle-skip", reason="yt-dlp-not-found")
         return None
+    source = media_locator(req)
+    log_job(req, "subtitle-fetch-start", source=source, language=req.language)
+    report_progress(req, 8, "subtitle-fetch")
     output = str(work_dir / "subtitle.%(ext)s")
     cmd = [
         "yt-dlp",
@@ -112,15 +184,19 @@ def try_fetch_subtitle(req: TranscribeRequest, work_dir: Path) -> Path | None:
         "vtt/srt/best",
         "-o",
         output,
-        req.source_ref,
+        source,
     ]
     run(cmd, check=False)
     candidates = sorted(work_dir.glob("subtitle.*"))
+    log_job(req, "subtitle-fetch-done", candidates=len(candidates))
+    report_progress(req, 12, "subtitle-done")
     return candidates[0] if candidates else None
 
 
 def fetch_media(req: TranscribeRequest, work_dir: Path) -> Path:
     if req.media_url:
+        log_job(req, "media-download-start", url=req.media_url)
+        report_progress(req, 15, "media-download")
         target = work_dir / "source"
         headers = {}
         if req.media_token:
@@ -133,15 +209,41 @@ def fetch_media(req: TranscribeRequest, work_dir: Path) -> Path:
                 )
             suffix = suffix_from_content_type(res.headers.get("content-type"))
             target = target.with_suffix(suffix)
+            total = parse_content_length(res.headers.get("content-length"))
+            downloaded = 0
+            last_logged_mb = -1
             with target.open("wb") as f:
                 for chunk in res.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         f.write(chunk)
+                        downloaded += len(chunk)
+                        current_mb = downloaded // (10 * 1024 * 1024)
+                        if current_mb != last_logged_mb:
+                            last_logged_mb = current_mb
+                            log_job(
+                                req,
+                                "media-download-progress",
+                                downloaded_mb=f"{downloaded / 1024 / 1024:.1f}",
+                                total_mb=(
+                                    f"{total / 1024 / 1024:.1f}" if total else "unknown"
+                                ),
+                            )
+                            report_progress(req, 15, "media-download")
+        log_job(
+            req,
+            "media-download-done",
+            path=str(target),
+            size_mb=f"{target.stat().st_size / 1024 / 1024:.1f}",
+        )
+        report_progress(req, 25, "media-downloaded")
         return target
 
     if req.source_type in {"youtube", "bilibili"}:
         if not command_exists("yt-dlp"):
             raise HTTPException(status_code=500, detail="yt-dlp not found")
+        source = media_locator(req)
+        log_job(req, "yt-dlp-media-start", source=source)
+        report_progress(req, 15, "yt-dlp-media")
         output = str(work_dir / "source.%(ext)s")
         run(
             [
@@ -150,18 +252,37 @@ def fetch_media(req: TranscribeRequest, work_dir: Path) -> Path:
                 "bestaudio/best",
                 "-o",
                 output,
-                req.source_ref,
+                source,
             ],
             check=True,
         )
         candidates = [p for p in work_dir.glob("source.*") if p.is_file()]
         if candidates:
+            log_job(
+                req,
+                "yt-dlp-media-done",
+                path=str(candidates[0]),
+                size_mb=f"{candidates[0].stat().st_size / 1024 / 1024:.1f}",
+            )
+            report_progress(req, 25, "media-downloaded")
             return candidates[0]
     raise HTTPException(status_code=400, detail="unsupported source")
 
 
+def media_locator(req: TranscribeRequest) -> str:
+    source = req.source_ref.strip()
+    if source.startswith(("http://", "https://")):
+        return source
+    if req.source_type == "bilibili" and _BILIBILI_BVID.match(source):
+        return f"https://www.bilibili.com/video/{source}"
+    if req.source_type == "youtube" and _YOUTUBE_ID.match(source):
+        return f"https://www.youtube.com/watch?v={source}"
+    return source
+
+
 def extract_audio(media: Path, work_dir: Path) -> Path:
     audio = work_dir / "audio.wav"
+    logger.info("event=ffmpeg-start media=%s audio=%s", media, audio)
     run(
         [
             "ffmpeg",
@@ -177,11 +298,28 @@ def extract_audio(media: Path, work_dir: Path) -> Path:
         ],
         check=True,
     )
+    logger.info(
+        "event=ffmpeg-done audio=%s size_mb=%.1f duration=%.1fs",
+        audio,
+        audio.stat().st_size / 1024 / 1024,
+        probe_duration(audio) or 0,
+    )
     return audio
 
 
 def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
+    duration = probe_duration(audio)
+    log_job(
+        req,
+        "asr-start",
+        audio=str(audio),
+        duration=f"{duration:.1f}s" if duration else "unknown",
+        device=DEVICE,
+        compute_type=COMPUTE_TYPE,
+    )
+    report_progress(req, 35, "asr-start")
     model = load_model(req.model)
+    report_progress(req, 40, "model-ready")
     segments_iter, _info = model.transcribe(
         str(audio),
         language=req.language or None,
@@ -189,11 +327,32 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
         vad_filter=req.vad_filter,
         condition_on_previous_text=req.condition_on_previous_text,
     )
-    segments = [
-        Segment(start=s.start, end=s.end, text=s.text.strip())
-        for s in segments_iter
-        if s.text.strip()
-    ]
+    segments: list[Segment] = []
+    last_progress = -1
+    for s in segments_iter:
+        text = s.text.strip()
+        if not text:
+            continue
+        segment = Segment(start=s.start, end=s.end, text=text)
+        segments.append(segment)
+        if duration and duration > 0:
+            progress = min(99, 40 + int((segment.end / duration) * 55))
+            if progress >= last_progress + 5:
+                last_progress = progress
+                log_job(
+                    req,
+                    "asr-progress",
+                    progress=f"{progress}%",
+                    at=f"{segment.end:.1f}s",
+                    duration=f"{duration:.1f}s",
+                    segments=len(segments),
+                )
+                report_progress(req, progress, "asr-progress")
+        elif len(segments) % 20 == 0:
+            log_job(req, "asr-progress", segments=len(segments))
+            report_progress(req, min(95, 40 + len(segments)), "asr-progress")
+    log_job(req, "asr-done", segments=len(segments))
+    report_progress(req, 95, "asr-done")
     return response_from_segments(segments)
 
 
@@ -201,8 +360,17 @@ def load_model(model_name: str) -> WhisperModel:
     key = model_name or DEFAULT_MODEL
     model = _model_cache.get(key)
     if model is None:
+        logger.info(
+            "event=model-load-start model=%s device=%s compute_type=%s",
+            key,
+            DEVICE,
+            COMPUTE_TYPE,
+        )
         model = WhisperModel(key, device=DEVICE, compute_type=COMPUTE_TYPE)
         _model_cache[key] = model
+        logger.info("event=model-load-done model=%s", key)
+    else:
+        logger.info("event=model-cache-hit model=%s", key)
     return model
 
 
@@ -292,7 +460,44 @@ def suffix_from_content_type(content_type: str | None) -> str:
     }.get(content_type, ".bin")
 
 
+def parse_content_length(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def probe_duration(path: Path) -> float | None:
+    if not command_exists("ffprobe"):
+        return None
+    completed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        return float(completed.stdout.strip())
+    except ValueError:
+        return None
+
+
 def run(cmd: list[str], check: bool) -> subprocess.CompletedProcess[str]:
+    logger.info("event=command-start cmd=%s", " ".join(cmd))
     try:
         completed = subprocess.run(
             cmd,
@@ -303,6 +508,11 @@ def run(cmd: list[str], check: bool) -> subprocess.CompletedProcess[str]:
         )
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail=f"{cmd[0]} not found")
+    logger.info(
+        "event=command-done cmd=%s returncode=%s",
+        cmd[0],
+        completed.returncode,
+    )
     if check and completed.returncode != 0:
         error = completed.stderr.strip() or completed.stdout.strip()
         error = error[-1000:]

@@ -147,6 +147,7 @@ function LocalVideo({ src, progressKey }: { src: string; progressKey: string }) 
     } else {
       video.currentTime = Math.max(0, saved);
     }
+    keepLocalVideoPaused(video);
   }
 
   function onTimeUpdate(e: React.SyntheticEvent<HTMLVideoElement>) {
@@ -164,6 +165,7 @@ function LocalVideo({ src, progressKey }: { src: string; progressKey: string }) 
       ref={setRef}
       src={src}
       controls
+      autoPlay={false}
       onLoadedMetadata={onLoadedMetadata}
       onTimeUpdate={onTimeUpdate}
       onPause={(e) => saveVideoProgress(progressKey, e.currentTarget)}
@@ -205,6 +207,7 @@ function YouTubeVideo({
     if (!host) return;
 
     let cancelled = false;
+    const startAt = loadVideoProgress(progressKey);
     host.replaceChildren();
     playerRef.current = null;
     stopSaving();
@@ -217,13 +220,15 @@ function YouTubeVideo({
           width: '100%',
           height: '100%',
           playerVars: {
+            autoplay: 0,
             playsinline: 1,
             rel: 0,
             origin: window.location.origin,
+            ...(startAt != null ? { start: Math.floor(Math.max(0, startAt)) } : {}),
           },
           events: {
             onReady: (event) => {
-              restoreYouTubeProgress(progressKey, event.target);
+              clearEndedYouTubeProgress(progressKey, event.target);
             },
             onStateChange: (event) => {
               const state = window.YT?.PlayerState;
@@ -381,6 +386,16 @@ function clearVideoProgress(key: string) {
   localStorage.removeItem(key);
 }
 
+function keepLocalVideoPaused(video: HTMLVideoElement) {
+  window.requestAnimationFrame(() => {
+    try {
+      video.pause();
+    } catch {
+      // Some browsers can reject pause while metadata is still settling.
+    }
+  });
+}
+
 function loadYouTubeApi(): Promise<void> {
   if (window.YT?.Player) return Promise.resolve();
   if (window.__listenPanelYouTubeReady) return window.__listenPanelYouTubeReady;
@@ -406,21 +421,14 @@ function loadYouTubeApi(): Promise<void> {
   return window.__listenPanelYouTubeReady;
 }
 
-function restoreYouTubeProgress(key: string, player: YouTubePlayer) {
+function clearEndedYouTubeProgress(key: string, player: YouTubePlayer) {
   const saved = loadVideoProgress(key);
   if (saved == null) return;
 
   const duration = safePlayerNumber(() => player.getDuration());
-  if (duration != null && duration > 0) {
-    if (saved >= duration - 3) {
-      clearVideoProgress(key);
-      return;
-    }
-    player.seekTo(Math.max(0, Math.min(saved, duration - 1)), true);
-    return;
+  if (duration != null && duration > 0 && saved >= duration - 3) {
+    clearVideoProgress(key);
   }
-
-  player.seekTo(Math.max(0, saved), true);
 }
 
 function saveYouTubeProgress(key: string, player: YouTubePlayer) {

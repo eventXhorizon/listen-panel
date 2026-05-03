@@ -78,3 +78,4 @@ python worker.py
 - 如果主要学英语,listen-panel 设置里固定 `language=en`,减少模型语言误判。
 - `condition_on_previous_text=false` 适合长视频,更不容易重复和跑偏。
 - 如果转写速度不够,可以把 `ASR_COMPUTE_TYPE` 改成 `int8_float16`。
+- 控制台会打印 job 阶段日志:收到任务、字幕抓取、媒体下载、ffmpeg、模型加载、ASR 进度、完成和清理。`asr-progress` 基于已输出 segment 的结束时间除以音频总时长估算。worker 也会把阶段进度回调到 listen-panel 后端,所以前端轮询能看到进度变化。日志级别可用 `ASR_LOG_LEVEL=INFO` 调整。

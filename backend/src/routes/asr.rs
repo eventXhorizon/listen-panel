@@ -28,6 +28,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/transcriptions/:id", get(get_one))
         .route("/transcriptions/:id/segments", get(segments))
         .route("/asr/media/:job_id", get(stream_job_media))
+        .route("/asr/progress/:job_id", post(update_progress))
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +66,17 @@ struct WorkerRequest<'a> {
     beam_size: i64,
     vad_filter: bool,
     condition_on_previous_text: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_token: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProgressUpdate {
+    progress: i64,
+    #[serde(default)]
+    stage: Option<String>,
 }
 
 async fn create(
@@ -196,6 +208,47 @@ async fn stream_job_media(
     stream_file(&row.0).await
 }
 
+async fn update_progress(
+    State(pool): State<sqlx::SqlitePool>,
+    Path(job_id): Path<i64>,
+    headers: HeaderMap,
+    Json(input): Json<ProgressUpdate>,
+) -> Result<axum::http::StatusCode> {
+    let Some(token) = bearer_token(&headers) else {
+        return Ok(axum::http::StatusCode::UNAUTHORIZED);
+    };
+    let progress = input.progress.clamp(5, 99);
+    let result = sqlx::query(
+        "UPDATE transcription_jobs \
+         SET progress = MAX(progress, ?), updated_at = ? \
+         WHERE id = ? \
+           AND media_token_hash = ? \
+           AND status = 'running'",
+    )
+    .bind(progress)
+    .bind(Utc::now())
+    .bind(job_id)
+    .bind(auth::token_hash(token))
+    .execute(&pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        tracing::debug!(
+            job_id,
+            progress,
+            stage = input.stage.as_deref().unwrap_or(""),
+            "ignored ASR progress update"
+        );
+        return Ok(axum::http::StatusCode::NO_CONTENT);
+    }
+    tracing::debug!(
+        job_id,
+        progress,
+        stage = input.stage.as_deref().unwrap_or(""),
+        "updated ASR progress"
+    );
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 async fn run_job(
     state: crate::AppState,
     cfg: AsrConfig,
@@ -239,7 +292,7 @@ async fn call_worker(
 ) -> Result<WorkerResponse> {
     let base_url = cfg.base_url.trim_end_matches('/');
     let url = format!("{base_url}/v1/transcribe");
-    let (media_url, media_token) = if material.source_type == "local" {
+    let (media_url, worker_media_token) = if material.source_type == "local" {
         (
             Some(format!(
                 "{}/api/asr/media/{job_id}",
@@ -250,20 +303,27 @@ async fn call_worker(
     } else {
         (None, None)
     };
+    let progress_url = Some(format!(
+        "{}/api/asr/progress/{job_id}",
+        cfg.backend_base_url.trim_end_matches('/')
+    ));
     let req = WorkerRequest {
         job_id,
         source_type: &material.source_type,
         source_ref: &material.source_ref,
         media_url,
-        media_token,
+        media_token: worker_media_token,
         model: &cfg.model,
         language: &cfg.language,
         beam_size: cfg.beam_size,
         vad_filter: cfg.vad_filter,
         condition_on_previous_text: cfg.condition_on_previous_text,
+        progress_url,
+        progress_token: Some(media_token),
     };
 
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(cfg.timeout_seconds.max(60)))
         .build()?;
     let mut builder = client.post(url).json(&req);

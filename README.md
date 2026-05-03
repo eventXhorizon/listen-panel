@@ -167,7 +167,7 @@ listen-panel/
 | model | TEXT | 默认 `large-v3` |
 | language | TEXT | 默认 `en` |
 | status | TEXT | `queued/running/succeeded/failed` |
-| progress | INTEGER | 0..100,V1 后端只写 queued/running/succeeded/failed 粗粒度 |
+| progress | INTEGER | 0..100;worker 阶段回调更新,成功/失败时置 100 |
 | error | TEXT? | 失败原因 |
 | media_token_hash | TEXT? | local 视频给 worker 回连读取时的一次性 token hash |
 | created_at/updated_at/completed_at | TEXT | |
@@ -227,6 +227,7 @@ listen-panel/
 | GET | `/transcriptions/:id` | 单个任务状态 |
 | GET | `/transcriptions/:id/segments` | 任务与 segments |
 | GET | `/asr/media/:job_id` | 仅 worker 用;local 视频转写时凭 `Authorization: Bearer <一次性token>` 读取原始上传文件 |
+| POST | `/asr/progress/:job_id` | 仅 worker 用;凭同一个一次性 token 回调 `{progress, stage?}` 更新转写进度 |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -260,6 +261,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 ### 4.7 远程 ASR worker 协议
 - 后端创建 `transcription_jobs` 后启动后台 task。任务切到 `running`,调用 `POST <base_url>/v1/transcribe`。
 - 对 local 材料,请求体包含 `media_url=http://<listen-panel后端>/api/asr/media/<job_id>` 和 `media_token`;worker 从这个 URL 拉视频时带 `Authorization: Bearer <media_token>`。该 token 只在 job `queued/running` 时有效,完成/失败后清空 hash,且不会出现在 URL 日志里。
+- 请求体也包含 `progress_url` 和 `progress_token`;worker 在字幕、下载、ffmpeg、模型加载、ASR segment 进度等阶段 POST 回调后端,前端轮询 `GET /api/transcriptions/:id` 看到实时进度。
 - 对 YouTube/Bilibili,请求体不含 `media_url`,worker 直接使用 `source_type/source_ref`;GPU 机器侧可用 `yt-dlp` 先拉字幕/音频,再走 faster-whisper。
 
 请求 JSON:
@@ -274,7 +276,9 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   "language": "en",
   "beam_size": 5,
   "vad_filter": true,
-  "condition_on_previous_text": false
+  "condition_on_previous_text": false,
+  "progress_url": "http://192.168.0.113:9527/api/asr/progress/1",
+  "progress_token": "..."
 }
 ```
 
@@ -312,6 +316,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - 上方子标题栏:返回 / 标题 / `□ 高亮生词` 开关 / `生词 (N)` 按钮 / 分栏比例 / 均分 / 编辑
 - 主区两列,中间 1px 分隔条 `cursor-col-resize`,鼠标拖拽改 `leftPct`(28-78% 区间)
 - 左:`<article ref={articleRef}>`,段落以 `\n\n` 分隔。开高亮时,每段走 `highlightText()` 渲染
+- 左侧文章滚动容器按 `materialId` 把 `scrollTop` 存到 `localStorage`(`listen-panel:article-scroll:<id>`),切走页面或刷新后回到上次阅读位置
 - 右:`<VideoPlayer>`
 - 同时挂 `<SelectionPopup>`、`<AddVocabDialog>`(条件渲染)、`<VocabPanel>`(条件渲染)
 
@@ -319,6 +324,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `local`:若 `source_ref` 已是 URL/blob/`/api/` 起头,直用;否则拼 `/api/media/${encodeURIComponent(sourceRef)}`,经 Vite proxy 透传到后端 Range 端点。子组件 `LocalVideo` 用 callback ref 在挂载时把 `video.volume` 设为 `settings.default_volume`,监听 `onVolumeChange` 把用户的调整写回 `settings.default_volume`(下次任何本地视频起播都用这个值)
 - `youtube`:正则提 11 位 ID,`<iframe src="https://www.youtube.com/embed/<id>">`(音量走 YouTube 自己的控件,不受 default_volume 影响)
 - `bilibili`:正则提 BV,`<iframe src="https://player.bilibili.com/player.html?bvid=<bv>...">`(音量走 Bilibili 自己的播放器,cookie 持久化)
+- 三种视频源都会保存播放进度并在重新进入材料时恢复到该位置,但不会自动播放;恢复完成后保持暂停状态。
 
 ### 5.5 Editor(`pages/Editor.tsx`)
 - 视频源类型按钮:youtube / bilibili / local;粘贴 YouTube/Bilibili 链接或 ID 后会防抖调用 `POST /api/materials/metadata`,自动切到正确来源并规范化保存用的 `source_ref`

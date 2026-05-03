@@ -46,6 +46,7 @@ interface ReaderTypography {
 }
 
 const TYPOGRAPHY_STORAGE_KEY = 'listen-panel.readerTypography';
+const ARTICLE_SCROLL_PREFIX = 'listen-panel:article-scroll:';
 const DEFAULT_TYPOGRAPHY: ReaderTypography = {
   font: 'system',
   fontSize: 17,
@@ -155,6 +156,31 @@ function clampNumber(
   return Math.max(min, Math.min(max, value));
 }
 
+function articleScrollKey(materialId: number): string {
+  return `${ARTICLE_SCROLL_PREFIX}${materialId}`;
+}
+
+function loadArticleScroll(materialId: number): number | null {
+  try {
+    const raw = window.localStorage.getItem(articleScrollKey(materialId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { top?: unknown };
+    return typeof parsed.top === 'number' && Number.isFinite(parsed.top)
+      ? parsed.top
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveArticleScroll(materialId: number, top: number) {
+  if (!Number.isFinite(top)) return;
+  window.localStorage.setItem(
+    articleScrollKey(materialId),
+    JSON.stringify({ top: Math.max(0, top), updated_at: Date.now() }),
+  );
+}
+
 export default function Reader() {
   const { id } = useParams();
   const mid = Number(id);
@@ -173,7 +199,10 @@ export default function Reader() {
   const containerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const typographyRef = useRef<HTMLDivElement>(null);
+  const articleScrollRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
+  const restoredScrollForRef = useRef<number | null>(null);
+  const lastScrollSavedAtRef = useRef(0);
 
   useEffect(() => {
     if (Number.isNaN(mid)) {
@@ -273,6 +302,59 @@ export default function Reader() {
     document.addEventListener('mousedown', onDocMouseDown);
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [showTypography]);
+
+  useEffect(() => {
+    if (!m) return;
+    if (restoredScrollForRef.current === m.id) return;
+    restoredScrollForRef.current = m.id;
+
+    const savedTop = loadArticleScroll(m.id);
+    if (savedTop == null) return;
+
+    let nextFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      restoreArticleScroll(savedTop);
+      nextFrame = window.requestAnimationFrame(() => restoreArticleScroll(savedTop));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (nextFrame) window.cancelAnimationFrame(nextFrame);
+    };
+  }, [m]);
+
+  useEffect(() => {
+    if (!m) return;
+    const materialId = m.id;
+    const saveCurrent = () => {
+      const el = articleScrollRef.current;
+      if (el) saveArticleScroll(materialId, el.scrollTop);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') saveCurrent();
+    };
+    window.addEventListener('beforeunload', saveCurrent);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      saveCurrent();
+      window.removeEventListener('beforeunload', saveCurrent);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [m]);
+
+  function restoreArticleScroll(savedTop: number) {
+    const el = articleScrollRef.current;
+    if (!el) return;
+    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.max(0, Math.min(savedTop, maxTop));
+  }
+
+  function handleArticleScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (!m) return;
+    const now = Date.now();
+    if (now - lastScrollSavedAtRef.current < 500) return;
+    lastScrollSavedAtRef.current = now;
+    saveArticleScroll(m.id, e.currentTarget.scrollTop);
+  }
 
   function handleAddFromSelection(text: string) {
     if (!m) return;
@@ -478,6 +560,8 @@ export default function Reader() {
         className="flex-1 flex overflow-hidden min-h-0"
       >
         <div
+          ref={articleScrollRef}
+          onScroll={handleArticleScroll}
           className="overflow-y-auto bg-white"
           style={{ width: `${leftPct}%` }}
         >
