@@ -2,7 +2,9 @@ import type {
   CreateMaterial,
   CreateVocab,
   AuthStatus,
+  JobWithSegments,
   Material,
+  TranscriptionJob,
   User,
   VocabEntry,
 } from './types';
@@ -142,4 +144,24 @@ export function login(data: { username: string; password: string }): Promise<Use
 
 export async function logout(): Promise<void> {
   await request<void>('/api/auth/logout', { method: 'POST' });
+}
+
+// Transcriptions
+
+export function listTranscriptionJobs(materialId: number): Promise<TranscriptionJob[]> {
+  return request<TranscriptionJob[]>(`/api/materials/${materialId}/transcriptions`);
+}
+
+export function createTranscriptionJob(materialId: number): Promise<TranscriptionJob> {
+  return request<TranscriptionJob>(`/api/materials/${materialId}/transcriptions`, {
+    method: 'POST',
+  });
+}
+
+export function getTranscriptionJob(id: number): Promise<TranscriptionJob> {
+  return request<TranscriptionJob>(`/api/transcriptions/${id}`);
+}
+
+export function getTranscriptionSegments(id: number): Promise<JobWithSegments> {
+  return request<JobWithSegments>(`/api/transcriptions/${id}/segments`);
 }

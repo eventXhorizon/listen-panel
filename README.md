@@ -28,11 +28,13 @@ listen-panel/
 │   │       ├── llm.rs           /api/lookup,代理到 DeepSeek
 │   │       ├── tts.rs           /api/tts/speech,代理到 TTS provider
 │   │       ├── auth.rs          /api/auth/* 本地账户与 session
-│   │       └── settings.rs      GET/PUT /api/settings/llm 与 /api/settings/tts
+│   │       ├── asr.rs           /api/*/transcriptions,远程 ASR worker 适配
+│   │       └── settings.rs      GET/PUT /api/settings/llm/tts/asr
 │   └── data/                    gitignored
 │       ├── app.db
 │       ├── config.json          DeepSeek 凭据(api_key/base_url/model)
 │       ├── tts.json             TTS 凭据(provider/api_key/base_url/voice_id/model/output_format)
+│       ├── asr.json             远程 ASR worker 配置(base_url/token/model 等)
 │       ├── tts-cache/           TTS 生成音频缓存(按 provider/model/voice/text hash)
 │       └── uploads/             本地视频 (uuid 命名)
 ├── frontend/                    React 19 + Vite + TS + Tailwind v4
@@ -56,7 +58,7 @@ listen-panel/
 │       │   ├── Reader.tsx       左文右视频主页
 │       │   ├── Vocab.tsx        全局生词本
 │       │   ├── Review.tsx       翻卡复习
-│       │   └── Settings.tsx     DeepSeek key
+│       │   └── Settings.tsx     DeepSeek/TTS/ASR 设置
 │       └── lib/
 │           ├── settings.ts      localStorage 设置
 │           ├── llm.ts           DeepSeek lookupWord
@@ -88,6 +90,7 @@ listen-panel/
 **外部依赖**
 - DeepSeek `chat/completions`(JSON mode):用于生词释义。**Key 存在 `backend/data/config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。
 - ElevenLabs Text to Speech:用于生词朗读。**Key 存在 `backend/data/tts.json`**(gitignored),前端通过 `POST /api/tts/speech` 走后端适配层,key 不出服务端。
+- 远程 ASR worker:用于视频转写。V1 协议是局域网 HTTP worker,推荐 GPU 机器跑 `faster-whisper large-v3 CUDA float16`;listen-panel 后端只保存 `backend/data/asr.json` 配置并发起任务。
 
 ## 3. 数据模型
 
@@ -148,6 +151,30 @@ listen-panel/
 | user_id | INTEGER | FK 到 users,限制 local 材料只能绑定自己的上传文件 |
 | created_at | TEXT | |
 
+### `transcription_jobs`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | |
+| user_id | INTEGER | owner |
+| material_id | INTEGER | FK 到 materials,ON DELETE CASCADE |
+| provider | TEXT | V1 为 `remote_faster_whisper` |
+| model | TEXT | 默认 `large-v3` |
+| language | TEXT | 默认 `en` |
+| status | TEXT | `queued/running/succeeded/failed` |
+| progress | INTEGER | 0..100,V1 后端只写 queued/running/succeeded/failed 粗粒度 |
+| error | TEXT? | 失败原因 |
+| media_token_hash | TEXT? | local 视频给 worker 回连读取时的一次性 token hash |
+| created_at/updated_at/completed_at | TEXT | |
+
+### `transcript_segments`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | |
+| job_id | INTEGER | FK 到 transcription_jobs |
+| material_id | INTEGER | FK 到 materials |
+| start_ms/end_ms | INTEGER | segment 时间戳 |
+| text | TEXT | segment 文本 |
+
 ## 4. 后端实现细节
 
 ### 4.1 启动流程(`main.rs`)
@@ -156,7 +183,7 @@ listen-panel/
 3. `db::pool()`:确保 `data/` 存在 → `SqliteConnectOptions::create_if_missing(true).foreign_keys(true)` → `sqlx::migrate!("./migrations").run(&pool)`
 4. `config::load()` 读 `data/config.json` → `Arc<RwLock<LlmConfig>>`,文件缺失就用默认值并 warn 一行
 5. `routes::tts::ensure_cache_dir()` 建 `data/tts-cache/`
-6. 组装 `AppState { pool, http: reqwest::Client, llm: SharedLlm, tts: SharedTts }`(用 axum `FromRef` 派生,handler 可直接取需要的字段);reqwest client 设置 20s timeout
+6. 组装 `AppState { pool, http: reqwest::Client, llm: SharedLlm, tts: SharedTts, asr: SharedAsr }`(用 axum `FromRef` 派生,handler 可直接取需要的字段);reqwest client 设置 20s timeout
 7. `Router::new().nest("/api", routes::api_router(state))` + `CorsLayer::permissive()` + `TraceLayer::new_for_http()`
 8. 监听 `0.0.0.0:9527`(Vite 19527 走 proxy 转发到这里)
 
@@ -186,6 +213,13 @@ listen-panel/
 | POST | `/auth/register` | 创建普通账户并登录 |
 | POST | `/auth/login` | 校验用户名密码,设置 HttpOnly session cookie |
 | POST | `/auth/logout` | 删除当前 session,清 cookie |
+| GET | `/settings/asr` | 返 `{configured, provider, base_url, token_configured, backend_base_url, model, language, beam_size, vad_filter, condition_on_previous_text, timeout_seconds}`,**永不返 api_token** |
+| PUT | `/settings/asr` | 局部更新远程 ASR worker 配置;空 token 保留现有 |
+| POST | `/materials/:id/transcriptions` | 为当前用户材料创建转写任务,后台调用远程 worker |
+| GET | `/materials/:id/transcriptions` | 当前材料转写任务列表 |
+| GET | `/transcriptions/:id` | 单个任务状态 |
+| GET | `/transcriptions/:id/segments` | 任务与 segments |
+| GET | `/asr/media/:job_id` | 仅 worker 用;local 视频转写时凭 `Authorization: Bearer <一次性token>` 读取原始上传文件 |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -214,6 +248,40 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `PUT /api/settings/llm` 写内存 → `serde_json::to_string_pretty` → 写 `data/config.json.tmp` → `tokio::fs::rename` 原子替换
 - API key 字段:空字符串 / 未传都视为"保留现有",只有非空字符串才覆盖。这样前端"留空提交"按钮才不会误清
 - `TtsConfig` 单独持久化到 `data/tts.json`,默认 `provider=eleven_labs`、`base_url=https://api.elevenlabs.io`、`voice_id=JBFqnCBsd6RMkjVDRZzb`、`model=eleven_multilingual_v2`、`output_format=mp3_44100_128`。保存规则同 LLM,key 不回传前端。
+- `AsrConfig` 单独持久化到 `data/asr.json`,默认 `provider=remote_faster_whisper`、`base_url=http://127.0.0.1:8765`、`backend_base_url=http://127.0.0.1:9527`、`model=large-v3`、`language=en`、`beam_size=5`、`vad_filter=true`、`condition_on_previous_text=false`、`timeout_seconds=7200`。`api_token` 可选,空字符串 / 未传都视为保留现有。
+
+### 4.7 远程 ASR worker 协议
+- 后端创建 `transcription_jobs` 后启动后台 task。任务切到 `running`,调用 `POST <base_url>/v1/transcribe`。
+- 对 local 材料,请求体包含 `media_url=http://<listen-panel后端>/api/asr/media/<job_id>` 和 `media_token`;worker 从这个 URL 拉视频时带 `Authorization: Bearer <media_token>`。该 token 只在 job `queued/running` 时有效,完成/失败后清空 hash,且不会出现在 URL 日志里。
+- 对 YouTube/Bilibili,请求体不含 `media_url`,worker 直接使用 `source_type/source_ref`;GPU 机器侧可用 `yt-dlp` 先拉字幕/音频,再走 faster-whisper。
+
+请求 JSON:
+```json
+{
+  "job_id": 1,
+  "source_type": "local",
+  "source_ref": "xxxx.mp4",
+  "media_url": "http://192.168.0.113:9527/api/asr/media/1",
+  "media_token": "...",
+  "model": "large-v3",
+  "language": "en",
+  "beam_size": 5,
+  "vad_filter": true,
+  "condition_on_previous_text": false
+}
+```
+
+响应 JSON:
+```json
+{
+  "text": "optional full text",
+  "segments": [
+    { "start": 0.0, "end": 4.2, "text": "Hello world." }
+  ]
+}
+```
+
+后端以 `segments` 为准写入 `transcript_segments`,并把所有 segment 文本用空行合并后写回 `materials.text`。如果没有 segments,则用响应里的 `text` 生成单段。
 
 ## 5. 前端实现细节
 
@@ -289,6 +357,12 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   - Voice ID(默认 `JBFqnCBsd6RMkjVDRZzb`,可改成用户 ElevenLabs Voices 里的 voice id)
   - 模型(默认 `eleven_multilingual_v2`)
   - 输出格式(默认 `mp3_44100_128`)
+- **远程 ASR Worker**(走后端 `/api/settings/asr`)
+  - Worker Base URL:GPU 机器上的 worker 地址,如 `http://192.168.0.50:8765`
+  - Backend Base URL:GPU 机器回连本机后端读取 local 视频的地址,如 `http://192.168.0.113:9527`
+  - Shared Token:可选 worker 鉴权 token;仅保存,不回传前端
+  - 模型默认 `large-v3`,语言默认 `en`,Beam Size 默认 5,超时默认 7200 秒
+  - VAD 默认开,`condition_on_previous_text` 默认关,减少长视频重复/跑偏
 - **播放**(本地 localStorage)
   - 本地视频默认音量(0-100% slider,默认 30%);Reader 起播时用,播放中调整也写回
 
@@ -296,14 +370,20 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - 首次访问如果没有用户,前端进入 `/setup`,创建第一个管理员账户。该账户会接管迁移前已有的全部 materials/vocab。
 - 后续局域网用户可在 `/register` 创建普通账户。普通账户默认看到空书架,只能访问自己创建的 materials/vocab/local media;local 材料还会校验 `uploads.user_id`,不能手动绑定别人的上传文件名。
 - 后端用 HttpOnly `listen_panel_session` cookie 保存会话 token;数据库只存 token 的 SHA-256 hash。session 默认 30 天过期。
-- 受保护 API:materials/vocab/media/upload/lookup/tts 都要求登录。DeepSeek/ElevenLabs 设置只允许 admin 访问,避免局域网匿名用户消耗 key 或查看配置状态。
+- 受保护 API:materials/vocab/media/upload/lookup/tts/transcriptions 都要求登录。DeepSeek/ElevenLabs/ASR 设置只允许 admin 访问,避免局域网匿名用户消耗 key 或查看配置状态。
 
 ### 5.11 `api.ts`
 - `request<T>(path, init?)`:统一设 `Content-Type: application/json`(除非传了 FormData,但目前 api.ts 不处理上传)、`!ok` 抛带后端 `{error}` 文案的 Error、204 返回 undefined
 - `getOrNull<T>`:404 → null,其它失败抛
 - 所有 Material/Vocab CRUD 直对后端,**导出签名跟早期 localStorage 版本完全一致**,Library/Editor/Reader/Vocab/Review 调用方零改动
 
-### 5.12 生词朗读
+### 5.12 视频转写 / ASR
+- Reader 顶栏有 `生成原文` 按钮。点击后 `POST /api/materials/:id/transcriptions`,后端创建 job 并后台调用远程 ASR worker。
+- 前端每 2.5 秒轮询 `GET /api/transcriptions/:id`;成功后重新拉 `GET /api/materials/:id`,显示 worker 写回的 `materials.text`。
+- V1 只做任务状态和文本回填;segments 已入库,后续可做字幕时间轴、点击句子跳转、AB 循环。
+- 长视频不走收费 API。推荐 worker 先尝试已有字幕/自动字幕,没有再用 `faster-whisper large-v3` 本地 GPU 识别。
+
+### 5.13 生词朗读
 - 生词卡统一使用 `components/SpeakButton.tsx`,已接入 Reader 高亮弹卡、本篇生词抽屉、全局生词本、复习卡。
 - 朗读策略在 `lib/audio.ts`,按 provider 链依次尝试:
   1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 ElevenLabs,返回 `audio/mpeg`
@@ -338,7 +418,7 @@ http://192.168.0.113:19527/
 1. 打开 http://localhost:19527/ 或局域网地址
 2. 首次进入 `/setup`,创建管理员账户。迁移前已有材料会归到这个账户。
 3. 打开 http://localhost:19527/settings
-4. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)与 ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)→ 保存。**Key 落到 `backend/data/*.json`,不入数据库,不回传前端**
+4. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)、ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)和远程 ASR worker 地址→ 保存。**Key/token 落到 `backend/data/*.json`,不入数据库,不回传前端**
 5. 回到书架,新建第一条材料
 
 ## 7. 已知限制 / 待办
@@ -347,6 +427,7 @@ http://192.168.0.113:19527/
 - 上传时给坏扩展 / `/api/media/..` 路径穿越,后端返 **500** 而非 400(请求被正确拒绝,只是状态码不规范)
 - 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran"),没做词形还原
 - 生词朗读 V1 优先走本地 TTS 缓存,缓存未命中才请求 ElevenLabs 并消耗 credits;未配置、额度不足、网络失败时退回 Free Dictionary mp3 与浏览器 `speechSynthesis`
+- ASR V1 不内置 GPU worker,只定义远程 worker 协议;worker 崩溃、网络断开或超时会把 job 标记为 failed。V1 没有取消任务和进度回传。
 - 账户系统 V1 没有密码找回/管理员重置 UI。忘记密码只能本地操作 SQLite 或后续补 admin 用户管理页
 - 复习无 SRS 算法,只是随机抽 + 三档手判 mastery
 - "上传成功但 createMaterial/updateMaterial 失败"的瞬时窗口会留下纯孤儿(目前 cleanup 只在 update/delete 触发,不在 upload 失败回滚)
@@ -354,6 +435,7 @@ http://192.168.0.113:19527/
 ### 计划中
 - 发音 / TTS V2:后端 `tts.rs` 扩展 OpenAI TTS 或本地 Kokoro/Piper provider,支持统一音色、整句朗读和可选缓存
 - 字幕联动 / SRT 解析 + AB 循环(V2)
+- ASR V2:worker 进度回调、任务取消、字幕优先策略状态展示、segments 时间轴 UI
 - Axum 兼托管 `frontend/dist/`,做单二进制部署
 - "导出 / 备份"按钮(导出 SQLite 到 .json)
 
@@ -365,4 +447,4 @@ http://192.168.0.113:19527/
 - **端口分两处**:后端 `9527` 写在 `backend/src/main.rs` 的 `ADDR`;前端 `19527` 写在 `frontend/vite.config.ts` 的 `server.port`(同文件 `server.proxy['/api']` 指向后端 9527)。改后端口要相应改 `dev.sh` 与 `README.md` 的展示文案。
 - **CORS 当前 permissive**:仅限开发期。后续若改成 Axum 兼托管 dist,可整层去掉
 - **常见错误来源**:DeepSeek 返非 JSON / 网络断 / Cargo 依赖大版本变更
-- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite(含用户/session/password_hash)+uploads/+tts-cache/+config.json(含 DeepSeek key)+tts.json(含 TTS key)都在那。**注意这些 json 含密钥,跨机器拷贝要谨慎**
+- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite(含用户/session/password_hash/transcript segments)+uploads/+tts-cache/+config.json(含 DeepSeek key)+tts.json(含 TTS key)+asr.json(含 ASR token)都在那。**注意这些 json 含密钥,跨机器拷贝要谨慎**

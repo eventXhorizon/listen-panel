@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth-context';
 import { loadSettings, saveSettings } from '../lib/settings';
-import type { LlmStatus, TtsStatus } from '../types';
+import type { AsrStatus, LlmStatus, TtsStatus } from '../types';
 
 export default function Settings() {
   const auth = useAuth();
@@ -20,11 +20,23 @@ export default function Settings() {
   const [ttsModel, setTtsModel] = useState('');
   const [ttsOutputFormat, setTtsOutputFormat] = useState('');
   const [showTtsKey, setShowTtsKey] = useState(false);
+  const [asrStatus, setAsrStatus] = useState<AsrStatus | null>(null);
+  const [asrBaseUrl, setAsrBaseUrl] = useState('');
+  const [asrToken, setAsrToken] = useState('');
+  const [asrBackendBaseUrl, setAsrBackendBaseUrl] = useState('');
+  const [asrModel, setAsrModel] = useState('');
+  const [asrLanguage, setAsrLanguage] = useState('');
+  const [asrBeamSize, setAsrBeamSize] = useState(5);
+  const [asrVadFilter, setAsrVadFilter] = useState(true);
+  const [asrConditionPrevious, setAsrConditionPrevious] = useState(false);
+  const [asrTimeoutSeconds, setAsrTimeoutSeconds] = useState(7200);
+  const [showAsrToken, setShowAsrToken] = useState(false);
 
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [ttsLoadErr, setTtsLoadErr] = useState<string | null>(null);
+  const [asrLoadErr, setAsrLoadErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!auth.user?.is_admin) return;
@@ -38,6 +50,28 @@ export default function Settings() {
         setModel(s.model);
       } catch (e) {
         setLoadErr((e as Error).message);
+      }
+    })();
+  }, [auth.user?.is_admin]);
+
+  useEffect(() => {
+    if (!auth.user?.is_admin) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/settings/asr', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const s = (await res.json()) as AsrStatus;
+        setAsrStatus(s);
+        setAsrBaseUrl(s.base_url);
+        setAsrBackendBaseUrl(s.backend_base_url);
+        setAsrModel(s.model);
+        setAsrLanguage(s.language);
+        setAsrBeamSize(s.beam_size);
+        setAsrVadFilter(s.vad_filter);
+        setAsrConditionPrevious(s.condition_on_previous_text);
+        setAsrTimeoutSeconds(s.timeout_seconds);
+      } catch (e) {
+        setAsrLoadErr((e as Error).message);
       }
     })();
   }, [auth.user?.is_admin]);
@@ -135,6 +169,64 @@ export default function Settings() {
         setTtsApiKey('');
       }
 
+      const asrPatch: Record<string, string | number | boolean> = {};
+      if (asrToken.trim()) asrPatch.api_token = asrToken.trim();
+      if (
+        asrStatus &&
+        asrBaseUrl.trim() &&
+        asrBaseUrl.trim() !== asrStatus.base_url
+      ) {
+        asrPatch.base_url = asrBaseUrl.trim();
+      }
+      if (
+        asrStatus &&
+        asrBackendBaseUrl.trim() &&
+        asrBackendBaseUrl.trim() !== asrStatus.backend_base_url
+      ) {
+        asrPatch.backend_base_url = asrBackendBaseUrl.trim();
+      }
+      if (asrStatus && asrModel.trim() && asrModel.trim() !== asrStatus.model) {
+        asrPatch.model = asrModel.trim();
+      }
+      if (
+        asrStatus &&
+        asrLanguage.trim() &&
+        asrLanguage.trim() !== asrStatus.language
+      ) {
+        asrPatch.language = asrLanguage.trim();
+      }
+      if (asrStatus && asrBeamSize !== asrStatus.beam_size) {
+        asrPatch.beam_size = asrBeamSize;
+      }
+      if (asrStatus && asrVadFilter !== asrStatus.vad_filter) {
+        asrPatch.vad_filter = asrVadFilter;
+      }
+      if (
+        asrStatus &&
+        asrConditionPrevious !== asrStatus.condition_on_previous_text
+      ) {
+        asrPatch.condition_on_previous_text = asrConditionPrevious;
+      }
+      if (asrStatus && asrTimeoutSeconds !== asrStatus.timeout_seconds) {
+        asrPatch.timeout_seconds = asrTimeoutSeconds;
+      }
+
+      if (Object.keys(asrPatch).length > 0) {
+        const res = await fetch('/api/settings/asr', {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(asrPatch),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const s = (await res.json()) as AsrStatus;
+        setAsrStatus(s);
+        setAsrToken('');
+      }
+
       setSavedAt(new Date().toLocaleTimeString());
     } catch (e) {
       alert(`保存失败:${(e as Error).message}`);
@@ -149,6 +241,9 @@ export default function Settings() {
   const ttsKeyPlaceholder = ttsStatus?.configured
     ? '已配置 ●●●●●● (留空保留现有 key)'
     : 'sk_...';
+  const asrTokenPlaceholder = asrStatus?.token_configured
+    ? '已配置 ●●●●●● (留空保留现有 token)'
+    : '可选 shared token';
 
   if (!auth.user?.is_admin) {
     return (
@@ -309,6 +404,110 @@ export default function Settings() {
                   className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
                 />
               </Field>
+            </div>
+          </section>
+
+          <section className="bg-white border border-stone-200 rounded-lg p-5">
+            <div className="flex items-baseline justify-between mb-4">
+              <h2 className="text-sm font-medium text-stone-800">远程 ASR Worker</h2>
+              <StatusBadge status={asrStatus} loadErr={asrLoadErr} />
+            </div>
+
+            <div className="space-y-5">
+              <Field label="Worker Base URL">
+                <input
+                  value={asrBaseUrl}
+                  onChange={(e) => setAsrBaseUrl(e.target.value)}
+                  placeholder="http://192.168.0.50:8765"
+                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                />
+              </Field>
+
+              <Field label="Backend Base URL">
+                <input
+                  value={asrBackendBaseUrl}
+                  onChange={(e) => setAsrBackendBaseUrl(e.target.value)}
+                  placeholder="http://192.168.0.113:9527"
+                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                />
+                <p className="mt-2 text-xs text-stone-500">
+                  GPU 机器用这个地址回连本机后端读取本地视频。
+                </p>
+              </Field>
+
+              <Field label="Shared Token">
+                <div className="flex gap-2">
+                  <input
+                    type={showAsrToken ? 'text' : 'password'}
+                    value={asrToken}
+                    onChange={(e) => setAsrToken(e.target.value)}
+                    placeholder={asrTokenPlaceholder}
+                    className="flex-1 bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAsrToken((s) => !s)}
+                    className="px-3 py-2 rounded-md border border-stone-200 text-xs hover:bg-stone-50"
+                  >
+                    {showAsrToken ? '隐藏' : '显示'}
+                  </button>
+                </div>
+              </Field>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="模型">
+                  <input
+                    value={asrModel}
+                    onChange={(e) => setAsrModel(e.target.value)}
+                    placeholder="large-v3"
+                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  />
+                </Field>
+                <Field label="语言">
+                  <input
+                    value={asrLanguage}
+                    onChange={(e) => setAsrLanguage(e.target.value)}
+                    placeholder="en"
+                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  />
+                </Field>
+                <Field label="Beam Size">
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={asrBeamSize}
+                    onChange={(e) => setAsrBeamSize(Number(e.target.value))}
+                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  />
+                </Field>
+                <Field label="超时秒数">
+                  <input
+                    type="number"
+                    min={60}
+                    value={asrTimeoutSeconds}
+                    onChange={(e) => setAsrTimeoutSeconds(Number(e.target.value))}
+                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  />
+                </Field>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={asrVadFilter}
+                  onChange={(e) => setAsrVadFilter(e.target.checked)}
+                />
+                VAD 静音过滤
+              </label>
+              <label className="flex items-center gap-2 text-sm text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={asrConditionPrevious}
+                  onChange={(e) => setAsrConditionPrevious(e.target.checked)}
+                />
+                condition_on_previous_text
+              </label>
             </div>
           </section>
 

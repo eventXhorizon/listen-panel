@@ -22,6 +22,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub llm: config::SharedLlm,
     pub tts: config::SharedTts,
+    pub asr: config::SharedAsr,
 }
 
 #[tokio::main]
@@ -48,6 +49,12 @@ async fn main() -> Result<()> {
             "TTS API key not set — /api/tts/speech will fail until configured via /api/settings/tts or web UI"
         );
     }
+    let asr = config::load_asr().await;
+    if !asr.read().await.configured() {
+        tracing::warn!(
+            "ASR worker base URL not set — transcription jobs will fail until configured via /api/settings/asr or web UI"
+        );
+    }
 
     let state = AppState {
         pool,
@@ -56,6 +63,7 @@ async fn main() -> Result<()> {
             .build()?,
         llm,
         tts,
+        asr,
     };
 
     let app = axum::Router::new()

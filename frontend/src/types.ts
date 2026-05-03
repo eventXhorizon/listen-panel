@@ -50,6 +50,49 @@ export interface TtsStatus {
   output_format: string;
 }
 
+export interface AsrStatus {
+  configured: boolean;
+  provider: 'remote_faster_whisper';
+  base_url: string;
+  token_configured: boolean;
+  backend_base_url: string;
+  model: string;
+  language: string;
+  beam_size: number;
+  vad_filter: boolean;
+  condition_on_previous_text: boolean;
+  timeout_seconds: number;
+}
+
+export interface TranscriptionJob {
+  id: number;
+  user_id: number;
+  material_id: number;
+  provider: string;
+  model: string;
+  language: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  progress: number;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+export interface TranscriptSegment {
+  id: number;
+  job_id: number;
+  material_id: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+}
+
+export interface JobWithSegments {
+  job: TranscriptionJob;
+  segments: TranscriptSegment[];
+}
+
 export interface User {
   id: number;
   username: string;

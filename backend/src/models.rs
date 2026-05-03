@@ -83,3 +83,29 @@ pub struct UpdateVocab {
     pub context: Option<String>,
     pub mastery: Option<i64>,
 }
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct TranscriptionJob {
+    pub id: i64,
+    pub user_id: i64,
+    pub material_id: i64,
+    pub provider: String,
+    pub model: String,
+    pub language: String,
+    pub status: String,
+    pub progress: i64,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct TranscriptSegment {
+    pub id: i64,
+    pub job_id: i64,
+    pub material_id: i64,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}

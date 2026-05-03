@@ -1,3 +1,4 @@
+pub mod asr;
 pub mod auth;
 pub mod llm;
 pub mod materials;
@@ -12,6 +13,7 @@ pub fn api_router(state: crate::AppState) -> Router {
     Router::new()
         .merge(materials::router())
         .merge(auth::router())
+        .merge(asr::router())
         .merge(vocab::router())
         .merge(media::router())
         .merge(llm::router())

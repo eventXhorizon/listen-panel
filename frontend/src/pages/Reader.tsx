@@ -1,7 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { getMaterial, listVocab } from '../api';
-import type { Material, VocabEntry } from '../types';
+import {
+  createTranscriptionJob,
+  getMaterial,
+  getTranscriptionJob,
+  listTranscriptionJobs,
+  listVocab,
+} from '../api';
+import type { Material, TranscriptionJob, VocabEntry } from '../types';
 import VideoPlayer from '../components/VideoPlayer';
 import SelectionPopup from '../components/SelectionPopup';
 import AddVocabDialog from '../components/AddVocabDialog';
@@ -24,6 +30,9 @@ export default function Reader() {
   const [highlightOn, setHighlightOn] = useState(true);
   const [pending, setPending] = useState<PendingAdd | null>(null);
   const [showVocabPanel, setShowVocabPanel] = useState(false);
+  const [job, setJob] = useState<TranscriptionJob | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcriptionErr, setTranscriptionErr] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const draggingRef = useRef(false);
@@ -41,11 +50,45 @@ export default function Reader() {
       }
       setM(data);
       setVocab(await listVocab(mid));
+      const jobs = await listTranscriptionJobs(mid);
+      setJob(jobs[0] ?? null);
     })();
   }, [mid, navigate]);
 
+  useEffect(() => {
+    if (!job || (job.status !== 'queued' && job.status !== 'running')) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await getTranscriptionJob(job.id);
+        setJob(next);
+        if (next.status === 'succeeded') {
+          const refreshed = await getMaterial(mid);
+          if (refreshed) setM(refreshed);
+        }
+      } catch (e) {
+        setTranscriptionErr((e as Error).message);
+      }
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [job, mid]);
+
   async function refreshVocab() {
     setVocab(await listVocab(mid));
+  }
+
+  async function startTranscription() {
+    if (!m || transcribing) return;
+    if (job && (job.status === 'queued' || job.status === 'running')) return;
+    setTranscriptionErr(null);
+    setTranscribing(true);
+    try {
+      const created = await createTranscriptionJob(m.id);
+      setJob(created);
+    } catch (e) {
+      setTranscriptionErr((e as Error).message);
+    } finally {
+      setTranscribing(false);
+    }
   }
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
@@ -154,6 +197,18 @@ export default function Reader() {
             >
               均分
             </button>
+            <button
+              onClick={startTranscription}
+              disabled={
+                transcribing ||
+                job?.status === 'queued' ||
+                job?.status === 'running'
+              }
+              className="text-xs px-2.5 py-1 rounded border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+              title="调用局域网 GPU ASR worker 生成原文"
+            >
+              {transcriptionButtonLabel(job, transcribing)}
+            </button>
             <Link
               to={`/m/${m.id}/edit`}
               className="text-sm px-3 py-1.5 rounded-md border border-stone-200 hover:bg-stone-50"
@@ -176,6 +231,25 @@ export default function Reader() {
             ref={articleRef}
             className="px-10 py-10 max-w-2xl mx-auto"
           >
+            {(job || transcriptionErr) && (
+              <div className="mb-6 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
+                {job && (
+                  <span>
+                    转写:{' '}
+                    {job.status === 'queued'
+                      ? '排队中'
+                      : job.status === 'running'
+                        ? `运行中 ${job.progress}%`
+                        : job.status === 'succeeded'
+                          ? '已完成'
+                          : `失败 · ${job.error ?? ''}`}
+                  </span>
+                )}
+                {transcriptionErr && (
+                  <span className="text-rose-600 ml-2">{transcriptionErr}</span>
+                )}
+              </div>
+            )}
             {paragraphs.length > 0 ? (
               paragraphs.map((p, i) => (
                 <p
@@ -255,4 +329,15 @@ export default function Reader() {
       )}
     </div>
   );
+}
+
+function transcriptionButtonLabel(
+  job: TranscriptionJob | null,
+  transcribing: boolean,
+): string {
+  if (transcribing) return '提交中...';
+  if (job?.status === 'queued') return '转写排队中';
+  if (job?.status === 'running') return `转写中 ${job.progress}%`;
+  if (job?.status === 'succeeded') return '重新转写';
+  return '生成原文';
 }
