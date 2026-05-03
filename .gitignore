@@ -1,3 +1,10 @@
 # OS
 .DS_Store
 Thumbs.db
+
+# Python worker local state
+asr-worker/.env
+asr-worker/.venv/
+asr-worker/__pycache__/
+asr-worker/data/
+*.pyc

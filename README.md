@@ -64,6 +64,11 @@ listen-panel/
 │           ├── llm.ts           DeepSeek lookupWord
 │           ├── sentence.ts      句子定位
 │           └── highlight.tsx    原文高亮 + 点击 popover
+├── asr-worker/                  GPU 机器上运行的 FastAPI + faster-whisper worker
+│   ├── worker.py                `/v1/transcribe`,字幕优先,无字幕则 ASR
+│   ├── requirements.txt
+│   ├── .env.example
+│   └── README.md
 ├── dev.sh                       一键启动
 └── README.md                    本文档
 ```
@@ -90,7 +95,7 @@ listen-panel/
 **外部依赖**
 - DeepSeek `chat/completions`(JSON mode):用于生词释义。**Key 存在 `backend/data/config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。
 - ElevenLabs Text to Speech:用于生词朗读。**Key 存在 `backend/data/tts.json`**(gitignored),前端通过 `POST /api/tts/speech` 走后端适配层,key 不出服务端。
-- 远程 ASR worker:用于视频转写。V1 协议是局域网 HTTP worker,推荐 GPU 机器跑 `faster-whisper large-v3 CUDA float16`;listen-panel 后端只保存 `backend/data/asr.json` 配置并发起任务。
+- 远程 ASR worker:用于视频转写。V1 协议是局域网 HTTP worker,`asr-worker/` 提供 FastAPI + `faster-whisper large-v3 CUDA float16` 脚手架;listen-panel 后端只保存 `backend/data/asr.json` 配置并发起任务。
 
 ## 3. 数据模型
 
@@ -413,6 +418,19 @@ cd frontend && npm run dev -- --host 0.0.0.0
 http://localhost:19527/
 局域网访问示例:
 http://192.168.0.113:19527/
+
+### ASR worker
+GPU 机器上:
+```bash
+cd asr-worker
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m pip install -U yt-dlp
+python worker.py
+```
+
+还需要系统里有 `ffmpeg`。详细配置见 `asr-worker/README.md`。
 
 ### 第一次跑要做的事
 1. 打开 http://localhost:19527/ 或局域网地址
