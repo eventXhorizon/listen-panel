@@ -563,7 +563,11 @@ export default function Reader() {
           ref={articleScrollRef}
           onScroll={handleArticleScroll}
           className="overflow-y-auto bg-white"
-          style={{ width: `${leftPct}%` }}
+          style={{
+            width: `${leftPct}%`,
+            WebkitUserSelect: 'text',
+            userSelect: 'text',
+          }}
         >
           <article
             ref={articleRef}

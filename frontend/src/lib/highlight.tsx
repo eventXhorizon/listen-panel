@@ -33,7 +33,7 @@ function HighlightedWord({
   const popoverRef = useRef<HTMLDivElement>(null);
 
   function compute(): Pos | null {
-    const rect = markRef.current?.getBoundingClientRect();
+    const rect = elementRect(markRef.current);
     if (!rect) return null;
     const wantLeft = rect.left + rect.width / 2 - POP_W / 2;
     const left = Math.max(
@@ -45,6 +45,17 @@ function HighlightedWord({
       ? Math.max(VIEWPORT_M, rect.top - POP_H_EST - 6)
       : rect.bottom + 6;
     return { top, left };
+  }
+
+  function toggle(e: React.MouseEvent | React.PointerEvent | React.TouchEvent) {
+    if (!entry) return;
+    e.stopPropagation();
+    if (onPick) onPick(entry);
+    if (!open) {
+      const p = compute();
+      if (p) setPos(p);
+    }
+    setOpen((v) => !v);
   }
 
   useEffect(() => {
@@ -77,17 +88,11 @@ function HighlightedWord({
     <>
       <mark
         ref={markRef}
-        className="bg-amber-100 hover:bg-amber-200 rounded px-0.5 cursor-pointer transition-colors text-stone-900"
-        onClick={(e) => {
-          if (!entry) return;
-          e.stopPropagation();
-          if (onPick) onPick(entry);
-          if (!open) {
-            const p = compute();
-            if (p) setPos(p);
-          }
-          setOpen((v) => !v);
+        className="bg-amber-100 hover:bg-amber-200 rounded px-0.5 cursor-pointer transition-colors text-stone-900 select-none"
+        onPointerUp={(e) => {
+          if (e.pointerType === 'touch') toggle(e);
         }}
+        onClick={toggle}
       >
         {matched}
       </mark>
@@ -136,6 +141,25 @@ function HighlightedWord({
           document.body,
         )}
     </>
+  );
+}
+
+function elementRect(el: Element | null): DOMRect | DOMRectReadOnly | null {
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  if (isUsableRect(rect)) return rect;
+  for (const item of Array.from(el.getClientRects())) {
+    if (isUsableRect(item)) return item;
+  }
+  return null;
+}
+
+function isUsableRect(rect: DOMRect | DOMRectReadOnly): boolean {
+  return (
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.left) &&
+    rect.width > 0 &&
+    rect.height > 0
   );
 }
 
