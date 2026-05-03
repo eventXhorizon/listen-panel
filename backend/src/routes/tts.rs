@@ -1,15 +1,25 @@
+use std::path::PathBuf;
+
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::fs;
 
 use crate::config::{SharedTts, TtsProvider};
 use crate::error::Result;
 
+const CACHE_DIR: &str = "data/tts-cache";
+
 pub fn router() -> Router<crate::AppState> {
     Router::new().route("/tts/speech", axum::routing::post(speech))
+}
+
+pub async fn ensure_cache_dir() -> std::io::Result<()> {
+    fs::create_dir_all(CACHE_DIR).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,15 +52,48 @@ async fn speech(
     }
 
     match cfg.provider {
-        TtsProvider::ElevenLabs => elevenlabs_speech(&http, &cfg, text).await,
+        TtsProvider::ElevenLabs => cached_elevenlabs_speech(&http, &cfg, text).await,
     }
+}
+
+async fn cached_elevenlabs_speech(
+    http: &reqwest::Client,
+    cfg: &crate::config::TtsConfig,
+    text: &str,
+) -> Result<Response> {
+    let cache_path = cache_path(cfg, text);
+    match fs::read(&cache_path).await {
+        Ok(bytes) => {
+            tracing::debug!(path = %cache_path.display(), "tts cache hit");
+            return Ok(audio_response(Bytes::from(bytes)));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            tracing::warn!(
+                path = %cache_path.display(),
+                "failed to read tts cache entry: {e}"
+            );
+        }
+    }
+
+    let bytes = match elevenlabs_speech(http, cfg, text).await? {
+        Ok(bytes) => bytes,
+        Err(response) => return Ok(response),
+    };
+    if let Err(e) = write_cache_entry(&cache_path, &bytes).await {
+        tracing::warn!(
+            path = %cache_path.display(),
+            "failed to write tts cache entry: {e}"
+        );
+    }
+    Ok(audio_response(bytes))
 }
 
 async fn elevenlabs_speech(
     http: &reqwest::Client,
     cfg: &crate::config::TtsConfig,
     text: &str,
-) -> Result<Response> {
+) -> Result<std::result::Result<Bytes, Response>> {
     let base_url = cfg.base_url.trim_end_matches('/');
     let url = format!(
         "{base_url}/v1/text-to-speech/{}?output_format={}",
@@ -78,12 +121,46 @@ async fn elevenlabs_speech(
             )
         };
         tracing::warn!("{msg}");
-        return Ok((StatusCode::BAD_GATEWAY, msg).into_response());
+        return Ok(Err((StatusCode::BAD_GATEWAY, msg).into_response()));
     }
 
-    let bytes = res.bytes().await?;
+    Ok(Ok(res.bytes().await?))
+}
+
+fn cache_path(cfg: &crate::config::TtsConfig, text: &str) -> PathBuf {
+    let provider = match cfg.provider {
+        TtsProvider::ElevenLabs => "eleven_labs",
+    };
+    let mut hasher = Sha256::new();
+    for part in [
+        provider,
+        cfg.base_url.trim_end_matches('/'),
+        cfg.voice_id.as_str(),
+        cfg.model.as_str(),
+        cfg.output_format.as_str(),
+        text,
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update([0]);
+    }
+    let hash = hasher.finalize();
+    PathBuf::from(CACHE_DIR).join(format!("{provider}_{hash:x}.mp3"))
+}
+
+async fn write_cache_entry(path: &PathBuf, bytes: &Bytes) -> std::io::Result<()> {
+    fs::create_dir_all(CACHE_DIR).await?;
+    let tmp = path.with_extension("mp3.tmp");
+    fs::write(&tmp, bytes).await?;
+    fs::rename(&tmp, path).await?;
+    Ok(())
+}
+
+fn audio_response(bytes: Bytes) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok((headers, Bytes::from(bytes)).into_response())
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    (headers, bytes).into_response()
 }

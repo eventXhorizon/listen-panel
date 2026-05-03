@@ -24,11 +24,11 @@ fi
 
 echo
 echo "  backend  → http://localhost:9527"
-echo "  frontend → http://localhost:19527"
+echo "  frontend → http://localhost:19527  (LAN: http://<your-lan-ip>:19527)"
 echo "  Ctrl-C to stop both"
 echo
 
 # Tag each output line so interleaved logs stay readable.
 (cd backend  && cargo run   2>&1 | awk '{ print "\033[36m[BE]\033[0m " $0; fflush() }') &
-(cd frontend && npm run dev 2>&1 | awk '{ print "\033[35m[FE]\033[0m " $0; fflush() }') &
+(cd frontend && npm run dev -- --host 0.0.0.0 2>&1 | awk '{ print "\033[35m[FE]\033[0m " $0; fflush() }') &
 wait

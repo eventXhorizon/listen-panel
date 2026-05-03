@@ -32,6 +32,7 @@ listen-panel/
 │       ├── app.db
 │       ├── config.json          DeepSeek 凭据(api_key/base_url/model)
 │       ├── tts.json             TTS 凭据(provider/api_key/base_url/voice_id/model/output_format)
+│       ├── tts-cache/           TTS 生成音频缓存(按 provider/model/voice/text hash)
 │       └── uploads/             本地视频 (uuid 命名)
 ├── frontend/                    React 19 + Vite + TS + Tailwind v4
 │   ├── package.json
@@ -126,9 +127,10 @@ listen-panel/
 2. `routes::media::ensure_dirs()` 建 `data/uploads/`
 3. `db::pool()`:确保 `data/` 存在 → `SqliteConnectOptions::create_if_missing(true).foreign_keys(true)` → `sqlx::migrate!("./migrations").run(&pool)`
 4. `config::load()` 读 `data/config.json` → `Arc<RwLock<LlmConfig>>`,文件缺失就用默认值并 warn 一行
-5. 组装 `AppState { pool, http: reqwest::Client, llm: SharedLlm, tts: SharedTts }`(用 axum `FromRef` 派生,handler 可直接取需要的字段);reqwest client 设置 20s timeout
-6. `Router::new().nest("/api", routes::api_router(state))` + `CorsLayer::permissive()` + `TraceLayer::new_for_http()`
-7. 监听 `0.0.0.0:9527`(Vite 19527 走 proxy 转发到这里)
+5. `routes::tts::ensure_cache_dir()` 建 `data/tts-cache/`
+6. 组装 `AppState { pool, http: reqwest::Client, llm: SharedLlm, tts: SharedTts }`(用 axum `FromRef` 派生,handler 可直接取需要的字段);reqwest client 设置 20s timeout
+7. `Router::new().nest("/api", routes::api_router(state))` + `CorsLayer::permissive()` + `TraceLayer::new_for_http()`
+8. 监听 `0.0.0.0:9527`(Vite 19527 走 proxy 转发到这里)
 
 ### 4.2 路由表(均以 `/api` 为前缀)
 
@@ -150,7 +152,7 @@ listen-panel/
 | POST | `/lookup` | `{word, context}` → 走 DeepSeek 兼容协议 → `{lemma, phonetic, pos, definition_zh, ...}`;未配置 key 直接返 500 + `not configured` 文案 |
 | GET | `/settings/tts` | 返 `{configured, provider, base_url, voice_id, model, output_format}`,**永不返 api_key** |
 | PUT | `/settings/tts` | 局部更新 `{api_key?, base_url?, voice_id?, model?, output_format?}`,空字符串字段视为不变;写盘 `data/tts.json` 同时刷新内存 |
-| POST | `/tts/speech` | `{text}` → 当前走 ElevenLabs `text-to-speech/:voice_id`,返回 `audio/mpeg`;未配置 key 返回 503 |
+| POST | `/tts/speech` | `{text}` → 先查 `data/tts-cache/`;未命中时走 ElevenLabs `text-to-speech/:voice_id`,成功后缓存并返回 `audio/mpeg`;未配置 key 返回 503 |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -268,7 +270,8 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 ElevenLabs,返回 `audio/mpeg`
   2. `dictionary-mp3`:请求 Free Dictionary API (`https://api.dictionaryapi.dev/api/v2/entries/en/<word>`) 找 `phonetics[].audio` 的 mp3
   3. `browser-speech`:前两档不可用时,自动 fallback 到浏览器 `speechSynthesis`
-- Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。ElevenLabs 音频 V1 不缓存,每次点击都会消耗对应 credits。
+- ElevenLabs 音频按 `provider/base_url/voice_id/model/output_format/text` 做 SHA-256 hash,缓存到 `backend/data/tts-cache/<provider>_<hash>.mp3`;命中缓存不再请求 ElevenLabs,不消耗 credits。失败结果不缓存。清缓存直接删 `backend/data/tts-cache/`。
+- Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。
 - 浏览器朗读固定 `en-US`,语速 `0.9`;不同系统/浏览器的声音会不同。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
 
 ## 6. 启动方式
@@ -277,18 +280,20 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 ```bash
 ./dev.sh
 ```
-脚本同时拉起后端(:9527)和前端(:19527)。日志带 `[BE]` / `[FE]` 前缀。Ctrl-C 同时停。
+脚本同时拉起后端(:9527)和前端(:19527)。前端默认使用 `--host 0.0.0.0`,同一局域网内可访问 `http://<本机内网 IP>:19527/`。日志带 `[BE]` / `[FE]` 前缀。Ctrl-C 同时停。
 
 ### 分开两个终端
 ```bash
 # 终端 A
 cd backend  && cargo run
 # 终端 B
-cd frontend && npm run dev
+cd frontend && npm run dev -- --host 0.0.0.0
 ```
 
 ### 浏览器访问
 http://localhost:19527/
+局域网访问示例:
+http://192.168.0.113:19527/
 
 ### 第一次跑要做的事
 1. 打开 http://localhost:19527/settings
@@ -300,7 +305,7 @@ http://localhost:19527/
 ### 已知小毛刺(行为正确,品味略差,不阻塞)
 - 上传时给坏扩展 / `/api/media/..` 路径穿越,后端返 **500** 而非 400(请求被正确拒绝,只是状态码不规范)
 - 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran"),没做词形还原
-- 生词朗读 V1 优先走 ElevenLabs,会消耗 ElevenLabs credits;未配置、额度不足、网络失败时退回 Free Dictionary mp3 与浏览器 `speechSynthesis`
+- 生词朗读 V1 优先走本地 TTS 缓存,缓存未命中才请求 ElevenLabs 并消耗 credits;未配置、额度不足、网络失败时退回 Free Dictionary mp3 与浏览器 `speechSynthesis`
 - 复习无 SRS 算法,只是随机抽 + 三档手判 mastery
 - "上传成功但 createMaterial/updateMaterial 失败"的瞬时窗口会留下纯孤儿(目前 cleanup 只在 update/delete 触发,不在 upload 失败回滚)
 
@@ -318,4 +323,4 @@ http://localhost:19527/
 - **端口分两处**:后端 `9527` 写在 `backend/src/main.rs` 的 `ADDR`;前端 `19527` 写在 `frontend/vite.config.ts` 的 `server.port`(同文件 `server.proxy['/api']` 指向后端 9527)。改后端口要相应改 `dev.sh` 与 `README.md` 的展示文案。
 - **CORS 当前 permissive**:仅限开发期。后续若改成 Axum 兼托管 dist,可整层去掉
 - **常见错误来源**:DeepSeek 返非 JSON / 网络断 / Cargo 依赖大版本变更
-- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite + uploads/ + config.json(含 DeepSeek key)+tts.json(含 TTS key)都在那。**注意这些 json 含密钥,跨机器拷贝要谨慎**
+- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite + uploads/ + tts-cache/ + config.json(含 DeepSeek key)+tts.json(含 TTS key)都在那。**注意这些 json 含密钥,跨机器拷贝要谨慎**
