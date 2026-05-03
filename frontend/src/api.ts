@@ -1,13 +1,16 @@
 import type {
   CreateMaterial,
   CreateVocab,
+  AuthStatus,
   Material,
+  User,
   VocabEntry,
 } from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
@@ -19,7 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function getOrNull<T>(path: string): Promise<T | null> {
-  const res = await fetch(path);
+  const res = await fetch(path, { credentials: 'same-origin' });
   if (res.status === 404) return null;
   if (!res.ok) throw await asError(res);
   return (await res.json()) as T;
@@ -100,4 +103,43 @@ export function updateVocab(
 
 export async function deleteVocab(id: number): Promise<void> {
   await request<void>(`/api/vocab/${id}`, { method: 'DELETE' });
+}
+
+// Auth
+
+export function authStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>('/api/auth/status');
+}
+
+export function setupAccount(data: {
+  username: string;
+  display_name?: string;
+  password: string;
+}): Promise<User> {
+  return request<User>('/api/auth/setup', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function registerAccount(data: {
+  username: string;
+  display_name?: string;
+  password: string;
+}): Promise<User> {
+  return request<User>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function login(data: { username: string; password: string }): Promise<User> {
+  return request<User>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await request<void>('/api/auth/logout', { method: 'POST' });
 }

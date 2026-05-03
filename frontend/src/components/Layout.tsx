@@ -1,4 +1,5 @@
 import { Link, NavLink, Outlet } from 'react-router-dom';
+import { useAuth } from '../lib/auth-context';
 
 const NAV_ITEMS = [
   { to: '/', label: '书架', end: true },
@@ -7,6 +8,8 @@ const NAV_ITEMS = [
 ];
 
 export default function Layout() {
+  const auth = useAuth();
+
   return (
     <div className="h-screen flex flex-col bg-stone-50 overflow-hidden">
       <header className="border-b border-stone-200 bg-white shrink-0">
@@ -45,6 +48,13 @@ export default function Layout() {
             >
               设置
             </NavLink>
+            <button
+              onClick={() => auth.logout()}
+              className="ml-1 px-2.5 py-1.5 rounded-md transition text-stone-500 hover:bg-stone-100"
+              title={`当前用户:${auth.user?.display_name ?? ''}`}
+            >
+              {auth.user?.display_name ?? auth.user?.username} · 退出
+            </button>
             <Link
               to="/new"
               className="ml-2 px-3 py-1.5 rounded-md bg-stone-900 text-white hover:bg-stone-700 transition"

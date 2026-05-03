@@ -13,6 +13,7 @@ export async function lookupWord(
 ): Promise<LookupResult> {
   const res = await fetch('/api/lookup', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ word, context }),
   });

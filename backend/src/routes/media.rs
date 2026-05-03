@@ -3,7 +3,7 @@ use std::path::{Path as FsPath, PathBuf};
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Multipart, Path};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -13,6 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
+use crate::auth::CurrentUser;
 use crate::error::{AppError, Result};
 
 const UPLOAD_DIR: &str = "data/uploads";
@@ -73,12 +74,12 @@ struct UploadResp {
     file: String,
 }
 
-async fn upload(mut multipart: Multipart) -> Result<Json<UploadResp>> {
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(anyhow::Error::from)?
-    {
+async fn upload(
+    State(pool): State<sqlx::SqlitePool>,
+    user: CurrentUser,
+    mut multipart: Multipart,
+) -> Result<Json<UploadResp>> {
+    while let Some(mut field) = multipart.next_field().await.map_err(anyhow::Error::from)? {
         if field.name().unwrap_or("") != "file" {
             continue;
         }
@@ -100,15 +101,32 @@ async fn upload(mut multipart: Multipart) -> Result<Json<UploadResp>> {
             out.write_all(&chunk).await?;
         }
         out.flush().await?;
+        if let Err(e) = record_upload_owner(&pool, &stored, user.id).await {
+            if let Err(remove_err) = fs::remove_file(&path).await {
+                tracing::warn!(
+                    path = %path.display(),
+                    "failed to remove upload after owner record failure: {remove_err}"
+                );
+            }
+            return Err(e);
+        }
         return Ok(Json(UploadResp { file: stored }));
     }
-    Err(AppError(anyhow::anyhow!("no 'file' field in multipart body")))
+    Err(AppError(anyhow::anyhow!(
+        "no 'file' field in multipart body"
+    )))
 }
 
-async fn stream(Path(file): Path<String>, headers: HeaderMap) -> Result<Response> {
+async fn stream(
+    State(pool): State<sqlx::SqlitePool>,
+    user: CurrentUser,
+    Path(file): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response> {
     if file.is_empty() || file.contains("..") || file.contains('/') || file.contains('\\') {
         return Err(AppError(anyhow::anyhow!("invalid filename")));
     }
+    ensure_media_owner(&pool, &file, user.id).await?;
     let path: PathBuf = [UPLOAD_DIR, &file].iter().collect();
 
     let mut f = match fs::File::open(&path).await {
@@ -157,6 +175,46 @@ async fn stream(Path(file): Path<String>, headers: HeaderMap) -> Result<Response
         .body(body)
         .map_err(anyhow::Error::from)?;
     Ok(resp)
+}
+
+async fn ensure_media_owner(pool: &sqlx::SqlitePool, file: &str, user_id: i64) -> Result<()> {
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM materials \
+         WHERE source_type = 'local' AND source_ref = ? AND user_id = ?",
+    )
+    .bind(file)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    if exists.is_none() {
+        return Err(sqlx::Error::RowNotFound.into());
+    }
+    Ok(())
+}
+
+pub async fn ensure_upload_owner(pool: &sqlx::SqlitePool, file: &str, user_id: i64) -> Result<()> {
+    if file.is_empty() || file.contains("..") || file.contains('/') || file.contains('\\') {
+        return Err(AppError(anyhow::anyhow!("invalid filename")));
+    }
+    let exists: Option<String> =
+        sqlx::query_scalar("SELECT file FROM uploads WHERE file = ? AND user_id = ?")
+            .bind(file)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    if exists.is_none() {
+        return Err(sqlx::Error::RowNotFound.into());
+    }
+    Ok(())
+}
+
+async fn record_upload_owner(pool: &sqlx::SqlitePool, file: &str, user_id: i64) -> Result<()> {
+    sqlx::query("INSERT INTO uploads (file, user_id) VALUES (?, ?)")
+        .bind(file)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 fn guess_content_type(name: &str) -> &'static str {

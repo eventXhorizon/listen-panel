@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod llm;
 pub mod materials;
 pub mod media;
@@ -10,6 +11,7 @@ use axum::Router;
 pub fn api_router(state: crate::AppState) -> Router {
     Router::new()
         .merge(materials::router())
+        .merge(auth::router())
         .merge(vocab::router())
         .merge(media::router())
         .merge(llm::router())

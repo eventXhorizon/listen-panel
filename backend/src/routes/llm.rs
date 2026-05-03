@@ -5,6 +5,7 @@ use axum::routing::post;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::auth::CurrentUser;
 use crate::config::SharedLlm;
 use crate::error::{AppError, Result};
 
@@ -46,6 +47,7 @@ pub struct LookupResp {
 async fn lookup(
     State(http): State<reqwest::Client>,
     State(llm): State<SharedLlm>,
+    _user: CurrentUser,
     Json(req): Json<LookupReq>,
 ) -> Result<Json<LookupResp>> {
     let cfg = llm.read().await.clone();
@@ -55,10 +57,7 @@ async fn lookup(
         )));
     }
 
-    let url = format!(
-        "{}/chat/completions",
-        cfg.base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
 
     let body = json!({
         "model": cfg.model,

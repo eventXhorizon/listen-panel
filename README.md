@@ -27,6 +27,7 @@ listen-panel/
 │   │       ├── media.rs         上传 + Range 流 + 孤儿清理
 │   │       ├── llm.rs           /api/lookup,代理到 DeepSeek
 │   │       ├── tts.rs           /api/tts/speech,代理到 TTS provider
+│   │       ├── auth.rs          /api/auth/* 本地账户与 session
 │   │       └── settings.rs      GET/PUT /api/settings/llm 与 /api/settings/tts
 │   └── data/                    gitignored
 │       ├── app.db
@@ -94,6 +95,7 @@ listen-panel/
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | id | INTEGER PK | autoincrement |
+| user_id | INTEGER | FK 到 users,材料 owner |
 | title | TEXT | |
 | source_type | TEXT | CHECK ∈ `'local' / 'youtube' / 'bilibili'` |
 | source_ref | TEXT | local→`<uuid>.<ext>`,youtube→URL/ID,bilibili→URL/BV |
@@ -119,6 +121,32 @@ listen-panel/
 | created_at | TEXT | |
 
 启动时 `PRAGMA foreign_keys = ON`,删材料级联清生词。
+
+### `users`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | |
+| username | TEXT UNIQUE | 登录名,大小写不敏感 |
+| display_name | TEXT | 顶栏显示 |
+| password_hash | TEXT | Argon2id PHC string |
+| is_admin | INTEGER | 0/1;第一个初始化账户为 admin |
+| created_at | TEXT | |
+
+### `sessions`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | |
+| user_id | INTEGER | FK 到 users,ON DELETE CASCADE |
+| token_hash | TEXT UNIQUE | session token 的 SHA-256,不存明文 token |
+| created_at | TEXT | |
+| expires_at | TEXT | 默认 30 天 |
+
+### `uploads`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| file | TEXT PK | `data/uploads/` 下的存储文件名 |
+| user_id | INTEGER | FK 到 users,限制 local 材料只能绑定自己的上传文件 |
+| created_at | TEXT | |
 
 ## 4. 后端实现细节
 
@@ -153,6 +181,11 @@ listen-panel/
 | GET | `/settings/tts` | 返 `{configured, provider, base_url, voice_id, model, output_format}`,**永不返 api_key** |
 | PUT | `/settings/tts` | 局部更新 `{api_key?, base_url?, voice_id?, model?, output_format?}`,空字符串字段视为不变;写盘 `data/tts.json` 同时刷新内存 |
 | POST | `/tts/speech` | `{text}` → 先查 `data/tts-cache/`;未命中时走 ElevenLabs `text-to-speech/:voice_id`,成功后缓存并返回 `audio/mpeg`;未配置 key 返回 503 |
+| GET | `/auth/status` | `{needs_setup, user}`;未登录 user 为 null |
+| POST | `/auth/setup` | 首次初始化管理员账户,并把旧材料归属给该用户 |
+| POST | `/auth/register` | 创建普通账户并登录 |
+| POST | `/auth/login` | 校验用户名密码,设置 HttpOnly session cookie |
+| POST | `/auth/logout` | 删除当前 session,清 cookie |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -259,12 +292,18 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - **播放**(本地 localStorage)
   - 本地视频默认音量(0-100% slider,默认 30%);Reader 起播时用,播放中调整也写回
 
-### 5.10 `api.ts`
+### 5.10 账户与数据隔离
+- 首次访问如果没有用户,前端进入 `/setup`,创建第一个管理员账户。该账户会接管迁移前已有的全部 materials/vocab。
+- 后续局域网用户可在 `/register` 创建普通账户。普通账户默认看到空书架,只能访问自己创建的 materials/vocab/local media;local 材料还会校验 `uploads.user_id`,不能手动绑定别人的上传文件名。
+- 后端用 HttpOnly `listen_panel_session` cookie 保存会话 token;数据库只存 token 的 SHA-256 hash。session 默认 30 天过期。
+- 受保护 API:materials/vocab/media/upload/lookup/tts 都要求登录。DeepSeek/ElevenLabs 设置只允许 admin 访问,避免局域网匿名用户消耗 key 或查看配置状态。
+
+### 5.11 `api.ts`
 - `request<T>(path, init?)`:统一设 `Content-Type: application/json`(除非传了 FormData,但目前 api.ts 不处理上传)、`!ok` 抛带后端 `{error}` 文案的 Error、204 返回 undefined
 - `getOrNull<T>`:404 → null,其它失败抛
 - 所有 Material/Vocab CRUD 直对后端,**导出签名跟早期 localStorage 版本完全一致**,Library/Editor/Reader/Vocab/Review 调用方零改动
 
-### 5.11 生词朗读
+### 5.12 生词朗读
 - 生词卡统一使用 `components/SpeakButton.tsx`,已接入 Reader 高亮弹卡、本篇生词抽屉、全局生词本、复习卡。
 - 朗读策略在 `lib/audio.ts`,按 provider 链依次尝试:
   1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 ElevenLabs,返回 `audio/mpeg`
@@ -296,9 +335,11 @@ http://localhost:19527/
 http://192.168.0.113:19527/
 
 ### 第一次跑要做的事
-1. 打开 http://localhost:19527/settings
-2. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)与 ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)→ 保存。**Key 落到 `backend/data/*.json`,不入数据库,不回传前端**
-3. 回到书架,新建第一条材料
+1. 打开 http://localhost:19527/ 或局域网地址
+2. 首次进入 `/setup`,创建管理员账户。迁移前已有材料会归到这个账户。
+3. 打开 http://localhost:19527/settings
+4. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)与 ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)→ 保存。**Key 落到 `backend/data/*.json`,不入数据库,不回传前端**
+5. 回到书架,新建第一条材料
 
 ## 7. 已知限制 / 待办
 
@@ -306,6 +347,7 @@ http://192.168.0.113:19527/
 - 上传时给坏扩展 / `/api/media/..` 路径穿越,后端返 **500** 而非 400(请求被正确拒绝,只是状态码不规范)
 - 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran"),没做词形还原
 - 生词朗读 V1 优先走本地 TTS 缓存,缓存未命中才请求 ElevenLabs 并消耗 credits;未配置、额度不足、网络失败时退回 Free Dictionary mp3 与浏览器 `speechSynthesis`
+- 账户系统 V1 没有密码找回/管理员重置 UI。忘记密码只能本地操作 SQLite 或后续补 admin 用户管理页
 - 复习无 SRS 算法,只是随机抽 + 三档手判 mastery
 - "上传成功但 createMaterial/updateMaterial 失败"的瞬时窗口会留下纯孤儿(目前 cleanup 只在 update/delete 触发,不在 upload 失败回滚)
 
@@ -323,4 +365,4 @@ http://192.168.0.113:19527/
 - **端口分两处**:后端 `9527` 写在 `backend/src/main.rs` 的 `ADDR`;前端 `19527` 写在 `frontend/vite.config.ts` 的 `server.port`(同文件 `server.proxy['/api']` 指向后端 9527)。改后端口要相应改 `dev.sh` 与 `README.md` 的展示文案。
 - **CORS 当前 permissive**:仅限开发期。后续若改成 Axum 兼托管 dist,可整层去掉
 - **常见错误来源**:DeepSeek 返非 JSON / 网络断 / Cargo 依赖大版本变更
-- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite + uploads/ + tts-cache/ + config.json(含 DeepSeek key)+tts.json(含 TTS key)都在那。**注意这些 json 含密钥,跨机器拷贝要谨慎**
+- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite(含用户/session/password_hash)+uploads/+tts-cache/+config.json(含 DeepSeek key)+tts.json(含 TTS key)都在那。**注意这些 json 含密钥,跨机器拷贝要谨慎**

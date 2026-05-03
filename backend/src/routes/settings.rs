@@ -1,9 +1,11 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
 
+use crate::auth::{self, CurrentUser};
 use crate::config::{self, SharedLlm, SharedTts, TtsProvider};
 use crate::error::Result;
 
@@ -48,19 +50,27 @@ pub struct UpdateTts {
     pub output_format: Option<String>,
 }
 
-async fn get_llm(State(llm): State<SharedLlm>) -> Json<LlmStatus> {
+async fn get_llm(State(llm): State<SharedLlm>, user: CurrentUser) -> axum::response::Response {
+    if !user.is_admin {
+        return auth::forbidden();
+    }
     let g = llm.read().await;
     Json(LlmStatus {
         configured: g.configured(),
         base_url: g.base_url.clone(),
         model: g.model.clone(),
     })
+    .into_response()
 }
 
 async fn put_llm(
     State(llm): State<SharedLlm>,
+    user: CurrentUser,
     Json(patch): Json<UpdateLlm>,
-) -> Result<Json<LlmStatus>> {
+) -> Result<axum::response::Response> {
+    if !user.is_admin {
+        return Ok(auth::forbidden());
+    }
     let snapshot = {
         let mut g = llm.write().await;
         if let Some(k) = patch.api_key {
@@ -91,9 +101,13 @@ async fn put_llm(
         base_url: snapshot.base_url,
         model: snapshot.model,
     }))
+    .map(axum::response::IntoResponse::into_response)
 }
 
-async fn get_tts(State(tts): State<SharedTts>) -> Json<TtsStatus> {
+async fn get_tts(State(tts): State<SharedTts>, user: CurrentUser) -> axum::response::Response {
+    if !user.is_admin {
+        return auth::forbidden();
+    }
     let g = tts.read().await;
     Json(TtsStatus {
         configured: g.configured(),
@@ -103,12 +117,17 @@ async fn get_tts(State(tts): State<SharedTts>) -> Json<TtsStatus> {
         model: g.model.clone(),
         output_format: g.output_format.clone(),
     })
+    .into_response()
 }
 
 async fn put_tts(
     State(tts): State<SharedTts>,
+    user: CurrentUser,
     Json(patch): Json<UpdateTts>,
-) -> Result<Json<TtsStatus>> {
+) -> Result<axum::response::Response> {
+    if !user.is_admin {
+        return Ok(auth::forbidden());
+    }
     let snapshot = {
         let mut g = tts.write().await;
         if let Some(k) = patch.api_key {
@@ -154,4 +173,5 @@ async fn put_tts(
         model: snapshot.model,
         output_format: snapshot.output_format,
     }))
+    .map(axum::response::IntoResponse::into_response)
 }

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../lib/auth-context';
 import { loadSettings, saveSettings } from '../lib/settings';
 import type { LlmStatus, TtsStatus } from '../types';
 
 export default function Settings() {
+  const auth = useAuth();
   const initial = loadSettings();
   const [volume, setVolume] = useState(initial.default_volume);
 
@@ -25,9 +27,10 @@ export default function Settings() {
   const [ttsLoadErr, setTtsLoadErr] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!auth.user?.is_admin) return;
     (async () => {
       try {
-        const res = await fetch('/api/settings/llm');
+        const res = await fetch('/api/settings/llm', { credentials: 'same-origin' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const s = (await res.json()) as LlmStatus;
         setStatus(s);
@@ -37,12 +40,13 @@ export default function Settings() {
         setLoadErr((e as Error).message);
       }
     })();
-  }, []);
+  }, [auth.user?.is_admin]);
 
   useEffect(() => {
+    if (!auth.user?.is_admin) return;
     (async () => {
       try {
-        const res = await fetch('/api/settings/tts');
+        const res = await fetch('/api/settings/tts', { credentials: 'same-origin' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const s = (await res.json()) as TtsStatus;
         setTtsStatus(s);
@@ -54,7 +58,7 @@ export default function Settings() {
         setTtsLoadErr((e as Error).message);
       }
     })();
-  }, []);
+  }, [auth.user?.is_admin]);
 
   async function onSave() {
     setSaving(true);
@@ -75,6 +79,7 @@ export default function Settings() {
       if (Object.keys(patch).length > 0) {
         const res = await fetch('/api/settings/llm', {
           method: 'PUT',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(patch),
         });
@@ -117,6 +122,7 @@ export default function Settings() {
       if (Object.keys(ttsPatch).length > 0) {
         const res = await fetch('/api/settings/tts', {
           method: 'PUT',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(ttsPatch),
         });
@@ -143,6 +149,21 @@ export default function Settings() {
   const ttsKeyPlaceholder = ttsStatus?.configured
     ? '已配置 ●●●●●● (留空保留现有 key)'
     : 'sk_...';
+
+  if (!auth.user?.is_admin) {
+    return (
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-2xl mx-auto px-6 py-10 w-full">
+          <h1 className="text-2xl font-medium text-stone-900 tracking-tight mb-2">
+            设置
+          </h1>
+          <p className="text-sm text-stone-500">
+            只有管理员可以查看和修改 DeepSeek / ElevenLabs 凭据。
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="flex-1 overflow-y-auto">

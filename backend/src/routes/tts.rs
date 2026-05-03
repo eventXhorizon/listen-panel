@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::fs;
 
+use crate::auth::CurrentUser;
 use crate::config::{SharedTts, TtsProvider};
 use crate::error::Result;
 
@@ -36,6 +37,7 @@ struct ElevenLabsRequest<'a> {
 async fn speech(
     State(http): State<reqwest::Client>,
     State(tts): State<SharedTts>,
+    _user: CurrentUser,
     Json(req): Json<SpeechRequest>,
 ) -> Result<Response> {
     let text = req.text.trim();

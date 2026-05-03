@@ -5,6 +5,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct Material {
     pub id: i64,
+    pub user_id: i64,
     pub title: String,
     pub source_type: String,
     pub source_ref: String,

@@ -6,6 +6,7 @@ use axum::routing::get;
 use chrono::Utc;
 use sqlx::SqlitePool;
 
+use crate::auth::CurrentUser;
 use crate::error::Result;
 use crate::models::{CreateMaterial, Material, UpdateMaterial};
 
@@ -19,12 +20,15 @@ pub fn router() -> Router<crate::AppState> {
 }
 
 const SELECT_COLS: &str =
-    "id, title, source_type, source_ref, text, notes, created_at, updated_at";
+    "id, user_id, title, source_type, source_ref, text, notes, created_at, updated_at";
 
-async fn list(State(pool): State<SqlitePool>) -> Result<Json<Vec<Material>>> {
+async fn list(State(pool): State<SqlitePool>, user: CurrentUser) -> Result<Json<Vec<Material>>> {
     let rows = sqlx::query_as::<_, Material>(&format!(
-        "SELECT {SELECT_COLS} FROM materials ORDER BY updated_at DESC"
+        "SELECT {SELECT_COLS} FROM materials \
+         WHERE user_id = ? \
+         ORDER BY updated_at DESC"
     ))
+    .bind(user.id)
     .fetch_all(&pool)
     .await?;
     Ok(Json(rows))
@@ -32,12 +36,14 @@ async fn list(State(pool): State<SqlitePool>) -> Result<Json<Vec<Material>>> {
 
 async fn get_one(
     State(pool): State<SqlitePool>,
+    user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<Material>> {
     let row = sqlx::query_as::<_, Material>(&format!(
-        "SELECT {SELECT_COLS} FROM materials WHERE id = ?"
+        "SELECT {SELECT_COLS} FROM materials WHERE id = ? AND user_id = ?"
     ))
     .bind(id)
+    .bind(user.id)
     .fetch_one(&pool)
     .await?;
     Ok(Json(row))
@@ -45,15 +51,21 @@ async fn get_one(
 
 async fn create(
     State(pool): State<SqlitePool>,
+    user: CurrentUser,
     Json(input): Json<CreateMaterial>,
 ) -> Result<Json<Material>> {
+    if input.source_type == "local" {
+        crate::routes::media::ensure_upload_owner(&pool, &input.source_ref, user.id).await?;
+    }
+
     let now = Utc::now();
     let row = sqlx::query_as::<_, Material>(&format!(
         "INSERT INTO materials \
-         (title, source_type, source_ref, text, notes, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) \
+         (user_id, title, source_type, source_ref, text, notes, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING {SELECT_COLS}"
     ))
+    .bind(user.id)
     .bind(&input.title)
     .bind(&input.source_type)
     .bind(&input.source_ref)
@@ -68,15 +80,25 @@ async fn create(
 
 async fn update(
     State(pool): State<SqlitePool>,
+    user: CurrentUser,
     Path(id): Path<i64>,
     Json(input): Json<UpdateMaterial>,
 ) -> Result<Json<Material>> {
     let old = sqlx::query_as::<_, Material>(&format!(
-        "SELECT {SELECT_COLS} FROM materials WHERE id = ?"
+        "SELECT {SELECT_COLS} FROM materials WHERE id = ? AND user_id = ?"
     ))
     .bind(id)
+    .bind(user.id)
     .fetch_one(&pool)
     .await?;
+
+    let next_source_type = input.source_type.as_deref().unwrap_or(&old.source_type);
+    let next_source_ref = input.source_ref.as_deref().unwrap_or(&old.source_ref);
+    if next_source_type == "local"
+        && (old.source_type != "local" || next_source_ref != old.source_ref)
+    {
+        crate::routes::media::ensure_upload_owner(&pool, next_source_ref, user.id).await?;
+    }
 
     let now = Utc::now();
     let row = sqlx::query_as::<_, Material>(&format!(
@@ -88,6 +110,7 @@ async fn update(
            notes       = COALESCE(?, notes), \
            updated_at  = ? \
          WHERE id = ? \
+           AND user_id = ? \
          RETURNING {SELECT_COLS}"
     ))
     .bind(input.title)
@@ -97,6 +120,7 @@ async fn update(
     .bind(input.notes)
     .bind(now)
     .bind(id)
+    .bind(user.id)
     .fetch_one(&pool)
     .await?;
 
@@ -111,17 +135,20 @@ async fn update(
 
 async fn delete_one(
     State(pool): State<SqlitePool>,
+    user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<StatusCode> {
     let old = sqlx::query_as::<_, Material>(&format!(
-        "SELECT {SELECT_COLS} FROM materials WHERE id = ?"
+        "SELECT {SELECT_COLS} FROM materials WHERE id = ? AND user_id = ?"
     ))
     .bind(id)
+    .bind(user.id)
     .fetch_optional(&pool)
     .await?;
 
-    let result = sqlx::query("DELETE FROM materials WHERE id = ?")
+    let result = sqlx::query("DELETE FROM materials WHERE id = ? AND user_id = ?")
         .bind(id)
+        .bind(user.id)
         .execute(&pool)
         .await?;
     if result.rows_affected() == 0 {

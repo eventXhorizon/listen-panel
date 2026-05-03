@@ -91,7 +91,11 @@ export default function Editor() {
   async function uploadPending(): Promise<string> {
     const fd = new FormData();
     fd.append('file', pendingFile!);
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      body: fd,
+      credentials: 'same-origin',
+    });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({}))) as { error?: string };
       throw new Error(err.error ?? res.statusText);

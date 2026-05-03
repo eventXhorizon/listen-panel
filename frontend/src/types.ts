@@ -2,6 +2,7 @@ export type SourceType = 'local' | 'youtube' | 'bilibili';
 
 export interface Material {
   id: number;
+  user_id: number;
   title: string;
   source_type: SourceType;
   source_ref: string;
@@ -11,7 +12,7 @@ export interface Material {
   updated_at: string;
 }
 
-export type CreateMaterial = Omit<Material, 'id' | 'created_at' | 'updated_at'>;
+export type CreateMaterial = Omit<Material, 'id' | 'user_id' | 'created_at' | 'updated_at'>;
 
 export interface VocabEntry {
   id: number;
@@ -47,4 +48,16 @@ export interface TtsStatus {
   voice_id: string;
   model: string;
   output_format: string;
+}
+
+export interface User {
+  id: number;
+  username: string;
+  display_name: string;
+  is_admin: boolean;
+}
+
+export interface AuthStatus {
+  needs_setup: boolean;
+  user: User | null;
 }

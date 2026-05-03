@@ -64,6 +64,7 @@ const remoteProvider: TtsProvider = {
     try {
       const res = await fetch('/api/tts/speech', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       });
