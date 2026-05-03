@@ -1,0 +1,297 @@
+# Listen Panel
+
+一个本地用的英语听力 + 口语练习面板。Notion 风格 UI,**左原文 / 右视频**,支持 YouTube / Bilibili / 本地 mp4。可选词加生词,LLM 给上下文相关释义,生词在原文里高亮、点击弹释义卡,可翻卡片复习。所有数据落本机 SQLite。
+
+> 这是一份会随实现持续更新的活文档。改了代码就回头改这里。
+
+---
+
+## 1. 仓库结构
+
+```
+listen-panel/
+├── backend/                     Rust + Axum + SQLite
+│   ├── Cargo.toml
+│   ├── migrations/
+│   │   └── 20260503000001_init.sql      sqlx 自动跑
+│   ├── src/
+│   │   ├── main.rs              AppState + router + 监听 0.0.0.0:9527
+│   │   ├── db.rs                SqlitePool + 启动迁移
+│   │   ├── config.rs            LlmConfig + data/config.json 读写
+│   │   ├── error.rs             AppError → IntoResponse
+│   │   ├── models.rs            Material / Vocab DTO
+│   │   └── routes/
+│   │       ├── mod.rs
+│   │       ├── materials.rs     materials CRUD + 文件 cleanup 钩子
+│   │       ├── vocab.rs         vocab CRUD
+│   │       ├── media.rs         上传 + Range 流 + 孤儿清理
+│   │       ├── llm.rs           /api/lookup,代理到 DeepSeek
+│   │       └── settings.rs      GET/PUT /api/settings/llm
+│   └── data/                    gitignored
+│       ├── app.db
+│       ├── config.json          DeepSeek 凭据(api_key/base_url/model)
+│       └── uploads/             本地视频 (uuid 命名)
+├── frontend/                    React 19 + Vite + TS + Tailwind v4
+│   ├── package.json
+│   ├── vite.config.ts           /api 代理到 :9527
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx              路由
+│       ├── api.ts               fetch 封装
+│       ├── types.ts             DTO
+│       ├── index.css
+│       ├── components/
+│       │   ├── Layout.tsx       顶栏
+│       │   ├── VideoPlayer.tsx  三种源统一封装
+│       │   ├── SelectionPopup.tsx
+│       │   ├── AddVocabDialog.tsx
+│       │   └── VocabPanel.tsx
+│       ├── pages/
+│       │   ├── Library.tsx      书架
+│       │   ├── Editor.tsx       新建/编辑(含拖放上传)
+│       │   ├── Reader.tsx       左文右视频主页
+│       │   ├── Vocab.tsx        全局生词本
+│       │   ├── Review.tsx       翻卡复习
+│       │   └── Settings.tsx     DeepSeek key
+│       └── lib/
+│           ├── settings.ts      localStorage 设置
+│           ├── llm.ts           DeepSeek lookupWord
+│           ├── sentence.ts      句子定位
+│           └── highlight.tsx    原文高亮 + 点击 popover
+├── dev.sh                       一键启动
+└── README.md                    本文档
+```
+
+## 2. 技术栈
+
+**后端**
+- Rust 2024 edition
+- `axum` 0.7(`multipart`, `macros` features — `macros` 给 `FromRef` 派生)
+- `tokio` 1
+- `sqlx` 0.8(`runtime-tokio-rustls`, `sqlite`, `chrono`, `migrate`, `macros`)
+- `tower-http` 0.5(`cors`, `trace`)
+- `reqwest` 0.12(`rustls-tls`, `json`,跟 sqlx 共用 rustls)用于代理 DeepSeek
+- `tracing` + `tracing-subscriber` (`env-filter`, `fmt`)
+- `anyhow` / `thiserror`
+- `uuid` v4 / `tokio-util` (`io`) / `serde` / `chrono`(`serde`)
+
+**前端**
+- React 19 + TypeScript
+- Vite 8
+- Tailwind v4 via `@tailwindcss/vite`
+- `react-router-dom`
+
+**外部依赖**
+- DeepSeek `chat/completions`(JSON mode):用于生词释义。**Key 存在 `backend/data/config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。
+
+## 3. 数据模型
+
+### `materials`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | autoincrement |
+| title | TEXT | |
+| source_type | TEXT | CHECK ∈ `'local' / 'youtube' / 'bilibili'` |
+| source_ref | TEXT | local→`<uuid>.<ext>`,youtube→URL/ID,bilibili→URL/BV |
+| text | TEXT | 原文,空行分段 |
+| notes | TEXT | 备注 |
+| created_at | TEXT | ISO 8601 (`YYYY-MM-DDTHH:MM:SS.sssZ`) |
+| updated_at | TEXT | 同上,PUT 时刷新 |
+
+### `vocab`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | |
+| material_id | INTEGER | FK,**ON DELETE CASCADE** |
+| word | TEXT | 实际选中的词形,小写 |
+| lemma | TEXT | LLM 给的原形 |
+| phonetic | TEXT? | IPA |
+| pos | TEXT? | n. / v. / adj. ... |
+| definition_zh | TEXT | 主释义(必填) |
+| definition_en | TEXT? | |
+| example_zh | TEXT? | 原句中文翻译 |
+| context | TEXT | 加词时所在句 |
+| mastery | INTEGER | CHECK 0..3 |
+| created_at | TEXT | |
+
+启动时 `PRAGMA foreign_keys = ON`,删材料级联清生词。
+
+## 4. 后端实现细节
+
+### 4.1 启动流程(`main.rs`)
+1. 初始化 `tracing_subscriber`,默认 filter `info,tower_http=debug,sqlx=warn`
+2. `routes::media::ensure_dirs()` 建 `data/uploads/`
+3. `db::pool()`:确保 `data/` 存在 → `SqliteConnectOptions::create_if_missing(true).foreign_keys(true)` → `sqlx::migrate!("./migrations").run(&pool)`
+4. `config::load()` 读 `data/config.json` → `Arc<RwLock<LlmConfig>>`,文件缺失就用默认值并 warn 一行
+5. 组装 `AppState { pool, http: reqwest::Client, llm: SharedLlm }`(用 axum `FromRef` 派生,旧 handler 还能直接 `State<SqlitePool>`)
+6. `Router::new().nest("/api", routes::api_router(state))` + `CorsLayer::permissive()` + `TraceLayer::new_for_http()`
+7. 监听 `0.0.0.0:9527`(Vite 19527 走 proxy 转发到这里)
+
+### 4.2 路由表(均以 `/api` 为前缀)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/materials` | 列表,按 `updated_at` DESC |
+| GET | `/materials/:id` | 详情;404 找不到(经 `AppError` 映射) |
+| POST | `/materials` | 新建,服务端写 created_at/updated_at |
+| PUT | `/materials/:id` | **局部更新**,SQL 用 `COALESCE(?, col)` |
+| DELETE | `/materials/:id` | 204;级联清 vocab(FK)+ 清 local 文件 |
+| GET | `/vocab[?material_id=N]` | 列表,可按材料筛 |
+| POST | `/vocab` | 新建 |
+| PUT | `/vocab/:id` | 局部更新 |
+| DELETE | `/vocab/:id` | 204 |
+| POST | `/upload` | multipart `file`;白名单 `mp4 / mkv / webm / mov / m4v`;DefaultBodyLimit 2 GiB;返回 `{file: "<uuid>.<ext>"}` |
+| GET | `/media/:file` | Range 流式;200 / 206;Accept-Ranges + Content-Range;路径校验 |
+| GET | `/settings/llm` | 返 `{configured, base_url, model}`,**永不返 api_key** |
+| PUT | `/settings/llm` | 局部更新 `{api_key?, base_url?, model?}`,空字符串字段视为不变;写盘 `data/config.json` 同时刷新内存 |
+| POST | `/lookup` | `{word, context}` → 走 DeepSeek 兼容协议 → `{lemma, phonetic, pos, definition_zh, ...}`;未配置 key 直接返 500 + `not configured` 文案 |
+
+### 4.3 错误处理
+`AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
+- `sqlx::Error::RowNotFound` → 404
+- 其它 → 500
+- 体 `{"error": "<message>"}`,同时 `tracing::error!` 一行
+
+### 4.4 文件管理:`media::delete_upload_if_orphan(pool, source_ref)`
+两道闸 + 一次系统调用:
+1. **路径校验**:空 / `..` / `/` / `\` → 跳过
+2. **引用计数**:`SELECT COUNT(*) FROM materials WHERE source_type='local' AND source_ref=?`,>0 跳过(防别的 material 在用)
+3. `tokio::fs::remove_file`,`NotFound` 静默,其它 IO 错打 `warn` 日志
+
+调用点:
+- `materials::update`:对比读到的 old vs 写完的 new,若 old 是 local 且(切走 / source_ref 改变)→ 清旧文件
+- `materials::delete_one`:DELETE 之前先 fetch_optional row → DELETE → 若 row 是 local → 清文件
+
+PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.source_ref`,跳过清理。
+
+### 4.5 时间戳
+`chrono::DateTime<Utc>` 端到端。schema 默认 `strftime('%Y-%m-%dT%H:%M:%fZ','now')`(带毫秒、Z),与 sqlx-chrono 解析格式兼容。
+
+### 4.6 LlmConfig 持久化(`config.rs`)
+- 类型 `Arc<RwLock<LlmConfig>>`,放进 `AppState.llm`
+- 启动时 `tokio::fs::read_to_string("data/config.json")` → `serde_json::from_str` → fallback 到 `Default`(`base_url=https://api.deepseek.com`、`model=deepseek-chat`、`api_key=""`)
+- `PUT /api/settings/llm` 写内存 → `serde_json::to_string_pretty` → 写 `data/config.json.tmp` → `tokio::fs::rename` 原子替换
+- API key 字段:空字符串 / 未传都视为"保留现有",只有非空字符串才覆盖。这样前端"留空提交"按钮才不会误清
+
+## 5. 前端实现细节
+
+### 5.1 路由
+| 路径 | 页面 |
+|---|---|
+| `/` | Library 书架 |
+| `/new` | Editor 创建 |
+| `/m/:id` | Reader 阅读+视频 |
+| `/m/:id/edit` | Editor 编辑 |
+| `/vocab` | 生词本 |
+| `/review` | 复习 |
+| `/settings` | DeepSeek key |
+
+### 5.2 全局布局(`Layout.tsx`)
+- 容器 `h-screen flex flex-col overflow-hidden` —— **整页定长**,避免子页 overflow 触发不到
+- 顶栏 `h-14`,Logo + 三个 NavLink + 设置 + `+ 新建`
+- 子页通过 `<Outlet />` 渲染,内层用 `flex-1 overflow-y-auto` 自管滚动
+
+### 5.3 Reader(`pages/Reader.tsx`)
+- 上方子标题栏:返回 / 标题 / `□ 高亮生词` 开关 / `生词 (N)` 按钮 / 分栏比例 / 均分 / 编辑
+- 主区两列,中间 1px 分隔条 `cursor-col-resize`,鼠标拖拽改 `leftPct`(28-78% 区间)
+- 左:`<article ref={articleRef}>`,段落以 `\n\n` 分隔。开高亮时,每段走 `highlightText()` 渲染
+- 右:`<VideoPlayer>`
+- 同时挂 `<SelectionPopup>`、`<AddVocabDialog>`(条件渲染)、`<VocabPanel>`(条件渲染)
+
+### 5.4 视频播放(`components/VideoPlayer.tsx`)
+- `local`:若 `source_ref` 已是 URL/blob/`/api/` 起头,直用;否则拼 `/api/media/${encodeURIComponent(sourceRef)}`,经 Vite proxy 透传到后端 Range 端点。子组件 `LocalVideo` 用 callback ref 在挂载时把 `video.volume` 设为 `settings.default_volume`,监听 `onVolumeChange` 把用户的调整写回 `settings.default_volume`(下次任何本地视频起播都用这个值)
+- `youtube`:正则提 11 位 ID,`<iframe src="https://www.youtube.com/embed/<id>">`(音量走 YouTube 自己的控件,不受 default_volume 影响)
+- `bilibili`:正则提 BV,`<iframe src="https://player.bilibili.com/player.html?bvid=<bv>...">`(音量走 Bilibili 自己的播放器,cookie 持久化)
+
+### 5.5 Editor(`pages/Editor.tsx`)
+- 视频源类型按钮:youtube / bilibili / local
+- **拖放区(local 时显示)**:虚线框,`onDragEnter/onDragOver/onDragLeave/onDrop`,用 `dragDepthRef` 计数避免子节点闪烁
+- 点击拖放区 → `fileInputRef.current?.click()` 触发隐藏 `<input type=file>`,选完 `e.target.value=''` 重置以便选回同一文件
+- **挑/拖时只暂存**(`pendingFile: File | null`),**不发请求**;预览块显示文件名 + 大小 + "保存时才上传"(已有 source_ref 多一行"将替换原文件")
+- 前端先卡白名单 `mp4/mkv/webm/mov/m4v`
+- `save()` 三态:`idle / uploading / saving`;按钮文案随之变;若 `pendingFile` 存在,先 `POST /api/upload` 拿名字,再 PUT/POST materials
+
+### 5.6 选词加词
+1. 在 `<article>` 内选文(<= 80 字)→ `SelectionPopup` 用 `getBoundingClientRect()` 在选区下方浮出"+ 加为生词"按钮
+2. 点击 → 找 `data-paragraph` 段落 → `findSentence(para, offset)` 用 `[.!?](?=\s|$)` 切句,定位选区所在句作为 context
+3. 弹 `AddVocabDialog`:调 `lib/llm.ts::lookupWord(word, context)` → DeepSeek `response_format: json_object` 返结构化释义
+4. 用户可改任何字段(必改 `definition_zh`)→ 确认后 `createVocab(...)`,Reader 立即重新拉本材料 vocab 列表 → 高亮生效、计数 +1
+
+### 5.7 高亮 + 点击释义(`lib/highlight.tsx`)
+- 给定段落和 vocab 列表,把 word 字段按长度倒序、escape 后拼成 `\b(w1|w2|...)\b` 大小写不敏感正则,`exec` 走全段文本,命中处替换为 `<HighlightedWord>` 组件
+- `<HighlightedWord>` 自管 `open` 状态(各高亮独立),光标 `pointer`,**点击切换 popover**
+- popover 通过 **React Portal** 挂到 `document.body`,`position: fixed` + `getBoundingClientRect()` 算坐标,这样不被左栏 `overflow-y-auto` 裁;靠近左/右视口边缘自动 clamp 到 12px 边距内;在视口下半屏的词改成往上弹;父容器一滚就关掉(位置会错,close 比 follow 简单可靠);宽 22rem,内含词、lemma/音标/词性、中文释义、英文释义、原句中译;琥珀色 `bg-amber-100`
+- 关闭策略:再次点击同词 / 文档级 `mousedown` 命中 `<mark>` 之外 / 切到别的高亮词。点击 popover 内部不会关
+- V1 限制:只匹配实际词形,不做词形还原。"running" 不会匹配 "ran"
+
+### 5.8 复习(`pages/Review.tsx`)
+- 进入页选范围(全部 / 单一材料)+ 是否包含 mastery=3
+- `Fisher-Yates shuffle` 出队列,逐张展示
+- 卡片正面:词 + 音标 + 上下文(目标词遮成 `bg-stone-200 text-stone-200` 同色块当 cloze)
+- 翻面后显示词性 + 中文释义 + 英文释义 + 原句中译
+- 三档判定:`不记得`(mastery=0) / `模糊`(不变) / `记得`(+1,封顶 3),走 `updateVocab`
+- 队列耗尽显示"复习完成",可"再来一轮"
+
+### 5.9 Settings(`pages/Settings.tsx`)
+两块区块,一次保存:
+- **DeepSeek**(走后端 `/api/settings/llm`)
+  - API Key 输入框(隐藏/显示切换);右上角状态徽标 `● 已配置 / ○ 未配置`,从 `GET /api/settings/llm` 读
+  - 已配置时 placeholder 显示 `已配置 ●●●●●● (留空保留现有 key)`,留空提交不覆盖
+  - Base URL(改用兼容 OpenAI 协议的代理时填这里)
+  - 模型(默认 `deepseek-chat`)
+  - 保存只 PUT 实际改了的字段;成功后清空 key 输入框,状态徽标刷新
+- **播放**(本地 localStorage)
+  - 本地视频默认音量(0-100% slider,默认 30%);Reader 起播时用,播放中调整也写回
+
+### 5.10 `api.ts`
+- `request<T>(path, init?)`:统一设 `Content-Type: application/json`(除非传了 FormData,但目前 api.ts 不处理上传)、`!ok` 抛带后端 `{error}` 文案的 Error、204 返回 undefined
+- `getOrNull<T>`:404 → null,其它失败抛
+- 所有 Material/Vocab CRUD 直对后端,**导出签名跟早期 localStorage 版本完全一致**,Library/Editor/Reader/Vocab/Review 调用方零改动
+
+## 6. 启动方式
+
+### 一键
+```bash
+./dev.sh
+```
+脚本同时拉起后端(:9527)和前端(:19527)。日志带 `[BE]` / `[FE]` 前缀。Ctrl-C 同时停。
+
+### 分开两个终端
+```bash
+# 终端 A
+cd backend  && cargo run
+# 终端 B
+cd frontend && npm run dev
+```
+
+### 浏览器访问
+http://localhost:19527/
+
+### 第一次跑要做的事
+1. 打开 http://localhost:19527/settings
+2. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)→ 保存。**Key 落到 `backend/data/config.json`,不入数据库,不回传前端**
+3. 回到书架,新建第一条材料
+
+## 7. 已知限制 / 待办
+
+### 已知小毛刺(行为正确,品味略差,不阻塞)
+- 上传时给坏扩展 / `/api/media/..` 路径穿越,后端返 **500** 而非 400(请求被正确拒绝,只是状态码不规范)
+- 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran"),没做词形还原
+- 复习无 SRS 算法,只是随机抽 + 三档手判 mastery
+- "上传成功但 createMaterial/updateMaterial 失败"的瞬时窗口会留下纯孤儿(目前 cleanup 只在 update/delete 触发,不在 upload 失败回滚)
+
+### 计划中
+- 发音 / TTS:Web Speech API + Free Dictionary mp3 + 可选 Kokoro 三档(后两档要后端代理)
+- 字幕联动 / SRT 解析 + AB 循环(V2)
+- Axum 兼托管 `frontend/dist/`,做单二进制部署
+- "导出 / 备份"按钮(导出 SQLite 到 .json)
+
+## 8. 维护者备忘
+
+- **改数据模型**:加新迁移文件 `migrations/<timestamp>_<desc>.sql` → `models.rs` → `routes/*.rs` → `frontend/src/types.ts` → `api.ts`(签名通常稳定)
+- **新增视频源类型**(比如 vimeo):`types.ts` union 加项 → `VideoPlayer.tsx` 加 case → `Editor.tsx` TYPES 数组加项 → migration 改 CHECK 约束(单独迁移)
+- **localStorage key**:统一前缀 `listen-panel:*`(`materials/seq/vocab/vocab_seq` 已废弃但旧浏览器还可能有,可手清)
+- **端口分两处**:后端 `9527` 写在 `backend/src/main.rs` 的 `ADDR`;前端 `19527` 写在 `frontend/vite.config.ts` 的 `server.port`(同文件 `server.proxy['/api']` 指向后端 9527)。改后端口要相应改 `dev.sh` 与 `README.md` 的展示文案。
+- **CORS 当前 permissive**:仅限开发期。后续若改成 Axum 兼托管 dist,可整层去掉
+- **常见错误来源**:DeepSeek 返非 JSON / 网络断 / Cargo 依赖大版本变更
+- **数据迁移到全新机器**:把 `backend/data/` 整目录拷过去即可,SQLite + uploads/ + config.json(含 DeepSeek key)都在那。**注意 config.json 含密钥,跨机器拷贝要谨慎**
