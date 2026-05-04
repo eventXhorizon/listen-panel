@@ -157,7 +157,7 @@ def capabilities(authorization: str | None = Header(default=None)) -> dict[str, 
                 "type": "asr.transcribe",
                 "models": [DEFAULT_MODEL],
                 "default_model": DEFAULT_MODEL,
-                "languages": ["en"],
+                "languages": ["en", "ja"],
             }
         ],
     }

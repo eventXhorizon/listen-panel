@@ -2,12 +2,15 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { lookupWord } from '../lib/llm';
 import { createVocab } from '../api';
+import type { MaterialLanguage } from '../types';
+import { languageAdapter } from '../lib/languages';
 import SpeakButton from './SpeakButton';
 
 interface Props {
   word: string;
   context: string;
   materialId: number;
+  language?: MaterialLanguage;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -16,6 +19,7 @@ export default function AddVocabDialog({
   word,
   context,
   materialId,
+  language = 'en',
   onClose,
   onSaved,
 }: Props) {
@@ -34,7 +38,7 @@ export default function AddVocabDialog({
     let cancelled = false;
     (async () => {
       try {
-        const r = await lookupWord(word, context);
+        const r = await lookupWord(word, context, language);
         if (cancelled) return;
         setLemma(r.lemma || word);
         setPhonetic(r.phonetic ?? '');
@@ -51,7 +55,7 @@ export default function AddVocabDialog({
     return () => {
       cancelled = true;
     };
-  }, [word, context]);
+  }, [word, context, language]);
 
   async function save() {
     if (!definitionZh.trim()) {
@@ -60,8 +64,10 @@ export default function AddVocabDialog({
     }
     setSaving(true);
     try {
+      const adapter = languageAdapter(language);
       await createVocab({
-        word: word.toLowerCase(),
+        word: adapter.normalizeTerm(word),
+        language,
         lemma: lemma.trim() || word,
         phonetic: phonetic.trim() || undefined,
         pos: pos.trim() || undefined,
@@ -106,7 +112,7 @@ export default function AddVocabDialog({
               <div className="text-xl font-medium text-stone-900 break-words">
                 {word}
               </div>
-              <SpeakButton word={word} materialId={materialId} />
+              <SpeakButton word={word} materialId={materialId} language={language} />
             </div>
           </div>
 

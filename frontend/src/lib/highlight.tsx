@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { VocabEntry } from '../types';
+import type { MaterialLanguage, VocabEntry } from '../types';
 import SpeakButton from '../components/SpeakButton';
-
-const ESCAPE_RE = /[.*+?^${}()|[\]\\]/g;
+import { languageAdapter } from './languages';
 
 const POP_W = 352;       // w-[22rem]
 const POP_H_EST = 320;   // 估值,用于决定上下翻转
@@ -18,6 +17,7 @@ interface HighlightedWordProps {
   matched: string;
   entry?: VocabEntry;
   materialId?: number;
+  language: MaterialLanguage;
   onPick?: (entry: VocabEntry) => void;
 }
 
@@ -25,6 +25,7 @@ function HighlightedWord({
   matched,
   entry,
   materialId,
+  language,
   onPick,
 }: HighlightedWordProps) {
   const [open, setOpen] = useState(false);
@@ -113,7 +114,7 @@ function HighlightedWord({
           >
             <div className="flex items-center gap-2">
               <div className="text-lg font-medium text-stone-900">{entry.word}</div>
-              <SpeakButton word={entry.word} materialId={materialId} />
+              <SpeakButton word={entry.word} materialId={materialId} language={language} />
             </div>
             <div className="mt-1 text-sm text-stone-500">
               {entry.lemma &&
@@ -173,40 +174,34 @@ export function highlightText(
   text: string,
   vocab: VocabEntry[],
   materialId?: number,
+  language: MaterialLanguage = 'en',
   onClick?: (entry: VocabEntry) => void,
 ): ReactNode[] {
   if (vocab.length === 0) return [text];
-  const sorted = [...vocab].sort((a, b) => b.word.length - a.word.length);
-  const map = new Map<string, VocabEntry>();
-  for (const v of sorted) {
-    if (!map.has(v.word.toLowerCase())) {
-      map.set(v.word.toLowerCase(), v);
-    }
-  }
-  const escaped = sorted.map((v) => v.word.replace(ESCAPE_RE, '\\$&'));
-  let re: RegExp;
-  try {
-    re = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi');
-  } catch {
-    return [text];
-  }
+  const matches = languageAdapter(language).highlightText(
+    text,
+    vocab.filter((entry) => entry.language === language),
+  );
+  if (matches.length === 0) return [text];
+
   const parts: ReactNode[] = [];
   let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    const matched = m[0];
-    const entry = map.get(matched.toLowerCase());
+  for (const match of matches) {
+    if (match.start < last) continue;
+    if (match.start > last) parts.push(text.slice(last, match.start));
+    const matched = text.slice(match.start, match.end);
+    const entry = match.entry;
     parts.push(
       <HighlightedWord
-        key={`${m.index}-${matched}`}
+        key={`${match.start}-${matched}`}
         matched={matched}
         entry={entry}
         materialId={materialId}
+        language={language}
         onPick={onClick}
       />,
     );
-    last = m.index + matched.length;
+    last = match.end;
   }
   if (last < text.length) parts.push(text.slice(last));
   return parts;

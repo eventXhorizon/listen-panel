@@ -13,6 +13,7 @@ use tokio::fs;
 use crate::auth::CurrentUser;
 use crate::config::{SharedTts, TtsProvider};
 use crate::error::Result;
+use crate::language::Language;
 
 pub fn router() -> Router<crate::AppState> {
     Router::new().route("/tts/speech", axum::routing::post(speech))
@@ -27,6 +28,8 @@ struct SpeechRequest {
     text: String,
     #[serde(default)]
     material_id: Option<i64>,
+    #[serde(default)]
+    language: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,17 +52,19 @@ async fn speech(
     if text.chars().count() > 500 {
         return Ok((StatusCode::BAD_REQUEST, "text is too long").into_response());
     }
+    let mut material_language: Option<String> = None;
     let material_id = match req.material_id {
         Some(id) if id > 0 => {
-            let exists: Option<i64> =
-                sqlx::query_scalar("SELECT id FROM materials WHERE id = ? AND user_id = ?")
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT language FROM materials WHERE id = ? AND user_id = ?")
                     .bind(id)
                     .bind(user.id)
                     .fetch_optional(&pool)
                     .await?;
-            if exists.is_none() {
+            let Some((language,)) = row else {
                 return Ok((StatusCode::NOT_FOUND, "material not found").into_response());
-            }
+            };
+            material_language = Some(language);
             Some(id)
         }
         Some(_) => {
@@ -72,9 +77,17 @@ async fn speech(
     if !cfg.configured() {
         return Ok((StatusCode::SERVICE_UNAVAILABLE, "tts not configured").into_response());
     }
+    let language = req.language.as_deref();
+    let language = material_language
+        .as_deref()
+        .or(language)
+        .map(Language::normalize)
+        .unwrap_or(Language::English.code());
 
     match cfg.provider {
-        TtsProvider::ElevenLabs => cached_elevenlabs_speech(&http, &cfg, text, material_id).await,
+        TtsProvider::ElevenLabs => {
+            cached_elevenlabs_speech(&http, &cfg, text, material_id, language).await
+        }
     }
 }
 
@@ -83,9 +96,14 @@ async fn cached_elevenlabs_speech(
     cfg: &crate::config::TtsConfig,
     text: &str,
     material_id: Option<i64>,
+    language: &str,
 ) -> Result<Response> {
-    let cache_path = cache_path(cfg, text, material_id);
-    let legacy_cache_path = legacy_cache_path(cfg, text, material_id);
+    let cache_path = cache_path(cfg, text, material_id, language);
+    let legacy_cache_path = if language == Language::English.code() {
+        Some(legacy_cache_path(cfg, text, material_id))
+    } else {
+        None
+    };
     match fs::read(&cache_path).await {
         Ok(bytes) => {
             tracing::debug!(path = %cache_path.display(), "tts cache hit");
@@ -99,7 +117,7 @@ async fn cached_elevenlabs_speech(
             );
         }
     }
-    if legacy_cache_path != cache_path {
+    if let Some(legacy_cache_path) = legacy_cache_path.filter(|path| path != &cache_path) {
         match fs::read(&legacy_cache_path).await {
             Ok(bytes) => {
                 tracing::debug!(path = %legacy_cache_path.display(), "tts legacy cache hit");
@@ -166,11 +184,17 @@ async fn elevenlabs_speech(
     Ok(Ok(res.bytes().await?))
 }
 
-fn cache_path(cfg: &crate::config::TtsConfig, text: &str, material_id: Option<i64>) -> PathBuf {
+fn cache_path(
+    cfg: &crate::config::TtsConfig,
+    text: &str,
+    material_id: Option<i64>,
+    language: &str,
+) -> PathBuf {
     let provider = tts_provider_name(cfg);
-    let hash = cache_key_hash(cfg, text);
+    let language = Language::normalize(language);
+    let hash = cache_key_hash(cfg, text, language);
     let filename = format!(
-        "{provider}_{}_{}.mp3",
+        "{provider}_{language}_{}_{}.mp3",
         text_slug(text),
         hash.chars().take(16).collect::<String>()
     );
@@ -183,7 +207,7 @@ fn legacy_cache_path(
     material_id: Option<i64>,
 ) -> PathBuf {
     let provider = tts_provider_name(cfg);
-    let hash = cache_key_hash(cfg, text);
+    let hash = legacy_cache_key_hash(cfg, text);
     let filename = format!("{provider}_{hash}.mp3");
     cache_dir_for_material(material_id).join(filename)
 }
@@ -201,7 +225,15 @@ fn tts_provider_name(cfg: &crate::config::TtsConfig) -> &'static str {
     }
 }
 
-fn cache_key_hash(cfg: &crate::config::TtsConfig, text: &str) -> String {
+fn cache_key_hash(cfg: &crate::config::TtsConfig, text: &str, language: &str) -> String {
+    hash_cache_parts(cfg, text, Some(Language::normalize(language)))
+}
+
+fn legacy_cache_key_hash(cfg: &crate::config::TtsConfig, text: &str) -> String {
+    hash_cache_parts(cfg, text, None)
+}
+
+fn hash_cache_parts(cfg: &crate::config::TtsConfig, text: &str, language: Option<&str>) -> String {
     let provider = match cfg.provider {
         TtsProvider::ElevenLabs => "eleven_labs",
     };
@@ -212,11 +244,16 @@ fn cache_key_hash(cfg: &crate::config::TtsConfig, text: &str) -> String {
         cfg.voice_id.as_str(),
         cfg.model.as_str(),
         cfg.output_format.as_str(),
-        text,
     ] {
         hasher.update(part.as_bytes());
         hasher.update([0]);
     }
+    if let Some(language) = language {
+        hasher.update(language.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.update(text.as_bytes());
+    hasher.update([0]);
     let hash = hasher.finalize();
     format!("{hash:x}")
 }
@@ -225,7 +262,7 @@ fn text_slug(text: &str) -> String {
     let mut slug = String::new();
     let mut last_was_sep = false;
     for ch in text.trim().to_lowercase().chars() {
-        if ch.is_ascii_alphanumeric() {
+        if ch.is_ascii_alphanumeric() || is_cjk_slug_char(ch) {
             if slug.len() >= 48 {
                 break;
             }
@@ -248,6 +285,13 @@ fn text_slug(text: &str) -> String {
     } else {
         slug
     }
+}
+
+fn is_cjk_slug_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3040..=0x30ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff
+    )
 }
 
 async fn write_cache_entry(path: &PathBuf, bytes: &Bytes) -> std::io::Result<()> {
@@ -278,21 +322,30 @@ mod tests {
     fn text_slug_keeps_readable_words() {
         assert_eq!(text_slug("spiritual drain"), "spiritual-drain");
         assert_eq!(text_slug("Don't give up!"), "don-t-give-up");
+        assert_eq!(text_slug("こんにちは 世界"), "こんにちは-世界");
         assert_eq!(text_slug("   "), "speech");
     }
 
     #[test]
     fn cache_filename_includes_text_slug_and_short_hash() {
         let cfg = crate::config::TtsConfig::default();
-        let path = cache_path(&cfg, "spiritual drain", Some(42));
+        let path = cache_path(&cfg, "spiritual drain", Some(42), "en");
         let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
         assert!(path.to_string_lossy().contains("material-42"));
-        assert!(name.starts_with("eleven_labs_spiritual-drain_"));
+        assert!(name.starts_with("eleven_labs_en_spiritual-drain_"));
         assert!(name.ends_with(".mp3"));
 
         let legacy = legacy_cache_path(&cfg, "spiritual drain", Some(42));
         let legacy_name = legacy.file_name().and_then(|v| v.to_str()).unwrap_or("");
         assert!(legacy_name.starts_with("eleven_labs_"));
         assert!(!legacy_name.contains("spiritual-drain"));
+    }
+
+    #[test]
+    fn cache_filename_includes_japanese_language() {
+        let cfg = crate::config::TtsConfig::default();
+        let path = cache_path(&cfg, "こんにちは", Some(42), "ja");
+        let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+        assert!(name.starts_with("eleven_labs_ja_こんにちは_"));
     }
 }

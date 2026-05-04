@@ -1,3 +1,6 @@
+import type { MaterialLanguage } from '../types';
+import { languageAdapter, normalizeLanguage } from './languages';
+
 interface DictionaryEntry {
   phonetics?: Array<{
     audio?: string;
@@ -8,7 +11,7 @@ const cache = new Map<string, string | null>();
 
 interface TtsProvider {
   name: string;
-  speak(text: string, materialId?: number): Promise<boolean>;
+  speak(text: string, materialId?: number, language?: MaterialLanguage): Promise<boolean>;
 }
 
 function normalizeWord(word: string): string {
@@ -45,7 +48,8 @@ async function fetchDictionaryAudio(word: string): Promise<string | null> {
 
 const dictionaryProvider: TtsProvider = {
   name: 'dictionary-mp3',
-  async speak(text) {
+  async speak(text, _materialId, language) {
+    if (!languageAdapter(language).dictionaryAudio) return false;
     const audioUrl = await fetchDictionaryAudio(text);
     if (!audioUrl) return false;
     try {
@@ -60,10 +64,12 @@ const dictionaryProvider: TtsProvider = {
 
 const remoteProvider: TtsProvider = {
   name: 'remote-tts',
-  async speak(text, materialId) {
+  async speak(text, materialId, language) {
     try {
       const body =
-        materialId == null ? { text } : { text, material_id: materialId };
+        materialId == null
+          ? { text, language }
+          : { text, material_id: materialId, language };
       const res = await fetch('/api/tts/speech', {
         method: 'POST',
         credentials: 'same-origin',
@@ -93,7 +99,7 @@ const remoteProvider: TtsProvider = {
 
 const browserSpeechProvider: TtsProvider = {
   name: 'browser-speech',
-  async speak(text) {
+  async speak(text, _materialId, language) {
     if (
       !('speechSynthesis' in window) ||
       !('SpeechSynthesisUtterance' in window)
@@ -103,7 +109,7 @@ const browserSpeechProvider: TtsProvider = {
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
+    utterance.lang = languageAdapter(language).browserTtsLang;
     utterance.rate = 0.9;
     window.speechSynthesis.speak(utterance);
     return true;
@@ -116,12 +122,17 @@ const providers: TtsProvider[] = [
   browserSpeechProvider,
 ];
 
-export async function speakWord(word: string, materialId?: number): Promise<void> {
+export async function speakWord(
+  word: string,
+  materialId?: number,
+  language: MaterialLanguage = 'en',
+): Promise<void> {
   const text = word.trim();
   if (!text) return;
+  const normalizedLanguage = normalizeLanguage(language);
 
   for (const provider of providers) {
-    if (await provider.speak(text, materialId)) return;
+    if (await provider.speak(text, materialId, normalizedLanguage)) return;
   }
 
   throw new Error('当前浏览器不支持朗读');

@@ -69,7 +69,7 @@ python worker.py
 - Backend Base URL:`http://<listen-panel后端IP>:9527`
 - Shared Token:如果 `ASR_TOKEN` 非空,这里填相同值
 - 模型:`large-v3`
-- 语言:`en`
+- 语言:`en` 或 `ja`;listen-panel V1 会优先使用每篇材料自己的语言设置,这里主要作为旧材料或手动测试的 fallback。
 
 ## 通用 Job API
 
@@ -202,7 +202,7 @@ curl -X POST http://127.0.0.1:8765/v1/transcribe \
 ## 运行建议
 
 - 长视频优先使用已有字幕,worker 会先试 `yt-dlp --write-subs --write-auto-subs`。
-- 如果主要学英语,listen-panel 设置里固定 `language=en`,减少模型语言误判。
+- 如果主要学英语,listen-panel 设置里固定 `language=en`,减少模型语言误判。多语种 V1 中,具体材料的语言会覆盖这个全局 fallback;日语材料会向 worker 发送 `language=ja`。
 - `condition_on_previous_text=false` 适合长视频,更不容易重复和跑偏。
 - 如果转写速度不够,可以把 `ASR_COMPUTE_TYPE` 改成 `int8_float16`。
 - 控制台会打印 job 阶段日志:收到任务、字幕抓取、字幕覆盖时长、媒体下载、下载文件时长、ffmpeg 音频时长、模型加载、ASR 进度、完成和清理。`asr-progress` 基于已输出 segment 的结束时间除以音频总时长估算。worker 也会把阶段进度回调到 listen-panel 后端,所以前端轮询能看到进度变化。日志级别可用 `ASR_LOG_LEVEL=INFO` 调整。

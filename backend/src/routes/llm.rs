@@ -8,26 +8,18 @@ use serde_json::json;
 use crate::auth::CurrentUser;
 use crate::config::SharedLlm;
 use crate::error::{AppError, Result};
+use crate::language::Language;
 
 pub fn router() -> Router<crate::AppState> {
     Router::new().route("/lookup", post(lookup))
 }
 
-const SYSTEM_PROMPT: &str = "你是英语词汇学习助手。给定一个英语词或短语,以及它所在的英文句子,返回 JSON,字段如下:\n\
-{\n\
-  \"lemma\": \"原形(动词原形 / 名词单数 / 短语规范形式)\",\n\
-  \"phonetic\": \"IPA 美音音标,如 /ˈrʌn/\",\n\
-  \"pos\": \"词性缩写,如 n. v. adj. adv. phrase\",\n\
-  \"definition_zh\": \"在该上下文中的简洁中文释义,1-2 句\",\n\
-  \"definition_en\": \"简洁英文释义,1 句\",\n\
-  \"example_zh\": \"原句的中文翻译\"\n\
-}\n\
-只返回 JSON,不要 markdown 代码块,不要解释。";
-
 #[derive(Debug, Deserialize)]
 pub struct LookupReq {
     pub word: String,
     pub context: String,
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,12 +50,17 @@ async fn lookup(
     }
 
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let language = req
+        .language
+        .as_deref()
+        .map(Language::from_code)
+        .unwrap_or(Language::English);
 
     let body = json!({
         "model": cfg.model,
         "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
-            { "role": "user", "content": format!("word: \"{}\"\ncontext: \"{}\"", req.word, req.context) }
+            { "role": "system", "content": language.lookup_system_prompt() },
+            { "role": "user", "content": language.lookup_user_prompt(&req.word, &req.context) }
         ],
         "response_format": { "type": "json_object" },
         "temperature": 0.3

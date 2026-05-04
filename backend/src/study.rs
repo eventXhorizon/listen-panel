@@ -6,27 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::config::SharedLlm;
+use crate::language::Language;
 use crate::models::TranscriptSegment;
-
-const SYSTEM_PROMPT: &str = "你是英语听力学习助手。你会把 ASR 转写分段整理成适合中文学习者阅读的学习讲解。\n\
-对每个分段返回:自然中文翻译、值得说明的常用语法点、固定用法/固定搭配。\n\
-语法点优先覆盖真实出现且有学习价值的结构,例如虚拟语气、现在完成时、过去完成时、被动语态、定语从句、状语从句、非谓语、情态动词、强调/倒装等;不要硬凑。\n\
-固定用法/搭配包含 phrasal verbs、介词搭配、常见句型、习惯表达等;不要编造文本里没有的内容。\n\
-只返回 JSON,不要 markdown 代码块,不要解释。JSON 格式:\n\
-{\n\
-  \"segments\": [\n\
-    {\n\
-      \"index\": 0,\n\
-      \"translation_zh\": \"自然中文翻译\",\n\
-      \"grammar_points\": [\n\
-        {\"title\": \"语法名\", \"explanation_zh\": \"简短说明\", \"evidence\": \"原文片段\", \"tip_zh\": \"识别/使用提示\"}\n\
-      ],\n\
-      \"usage_points\": [\n\
-        {\"phrase\": \"固定用法或搭配\", \"meaning_zh\": \"中文含义\", \"note_zh\": \"用法说明\", \"example\": \"原文或微改例句\"}\n\
-      ]\n\
-    }\n\
-  ]\n\
-}";
 
 const STUDY_BATCH_SIZE: usize = 8;
 const STUDY_BATCH_CHAR_LIMIT: usize = 5_000;
@@ -118,12 +99,14 @@ pub async fn generate_segment_studies_for_job(
         .timeout(Duration::from_secs(STUDY_TIMEOUT_SECONDS))
         .build()?;
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let language = load_job_language(pool, job_id).await?;
 
     for (index, chunk) in chunks.into_iter().enumerate() {
         let current = index + 1;
         let stage = format!("分析第 {current}/{total_chunks} 批");
         update_study_progress(pool, job_id, chunk_progress(index, total_chunks), &stage).await?;
-        let response = call_study_llm(&client, &url, &cfg.api_key, &cfg.model, chunk).await?;
+        let response =
+            call_study_llm(&client, &url, &cfg.api_key, &cfg.model, language, chunk).await?;
         persist_study_batch(pool, job_id, material_id, chunk, response).await?;
         let stage = format!("已完成第 {current}/{total_chunks} 批");
         update_study_progress(pool, job_id, chunk_progress(current, total_chunks), &stage).await?;
@@ -143,6 +126,15 @@ async fn load_job_segments(pool: &sqlx::SqlitePool, job_id: i64) -> Result<Vec<T
     .bind(job_id)
     .fetch_all(pool)
     .await?)
+}
+
+async fn load_job_language(pool: &sqlx::SqlitePool, job_id: i64) -> Result<Language> {
+    let language: String =
+        sqlx::query_scalar("SELECT language FROM transcription_jobs WHERE id = ?")
+            .bind(job_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(Language::from_code(&language))
 }
 
 pub async fn mark_study_failed(pool: &sqlx::SqlitePool, job_id: i64, error: &str) -> Result<()> {
@@ -182,6 +174,7 @@ async fn call_study_llm(
     url: &str,
     api_key: &str,
     model: &str,
+    language: Language,
     segments: &[TranscriptSegment],
 ) -> Result<StudyBatchResponse> {
     let prompt_segments = segments
@@ -194,15 +187,12 @@ async fn call_study_llm(
             text: segment.text.as_str(),
         })
         .collect::<Vec<_>>();
-    let user_prompt = format!(
-        "请分析以下英文听力分段。每个输入 index 都必须在输出中出现一次;如果某段没有明显语法或固定搭配,对应数组返回 []。\nsegments:\n{}",
-        serde_json::to_string(&prompt_segments)?
-    );
+    let user_prompt = language.study_user_prompt(&serde_json::to_string(&prompt_segments)?);
 
     let body = json!({
         "model": model,
         "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
+            { "role": "system", "content": language.study_system_prompt() },
             { "role": "user", "content": user_prompt }
         ],
         "response_format": { "type": "json_object" },

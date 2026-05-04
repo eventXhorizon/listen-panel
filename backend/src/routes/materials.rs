@@ -11,6 +11,7 @@ use sqlx::SqlitePool;
 
 use crate::auth::CurrentUser;
 use crate::error::Result;
+use crate::language::Language;
 use crate::models::{CreateMaterial, Material, UpdateMaterial};
 
 pub fn router() -> Router<crate::AppState> {
@@ -24,7 +25,7 @@ pub fn router() -> Router<crate::AppState> {
 }
 
 const SELECT_COLS: &str =
-    "id, user_id, title, source_type, source_ref, text, notes, created_at, updated_at";
+    "id, user_id, title, language, source_type, source_ref, text, notes, created_at, updated_at";
 
 #[derive(Debug, Deserialize)]
 struct MaterialMetadataReq {
@@ -167,16 +168,22 @@ async fn create(
     if input.source_type == "local" {
         crate::routes::media::ensure_upload_owner(&pool, &input.source_ref, user.id).await?;
     }
+    let language = input
+        .language
+        .as_deref()
+        .map(Language::normalize)
+        .unwrap_or(Language::English.code());
 
     let now = Utc::now();
     let row = sqlx::query_as::<_, Material>(&format!(
         "INSERT INTO materials \
-         (user_id, title, source_type, source_ref, text, notes, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         (user_id, title, language, source_type, source_ref, text, notes, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING {SELECT_COLS}"
     ))
     .bind(user.id)
     .bind(&input.title)
+    .bind(language)
     .bind(&input.source_type)
     .bind(&input.source_ref)
     .bind(&input.text)
@@ -204,6 +211,7 @@ async fn update(
 
     let next_source_type = input.source_type.as_deref().unwrap_or(&old.source_type);
     let next_source_ref = input.source_ref.as_deref().unwrap_or(&old.source_ref);
+    let next_language = input.language.as_deref().map(Language::normalize);
     if next_source_type == "local"
         && (old.source_type != "local" || next_source_ref != old.source_ref)
     {
@@ -218,6 +226,7 @@ async fn update(
     let row = sqlx::query_as::<_, Material>(&format!(
         "UPDATE materials SET \
            title       = COALESCE(?, title), \
+           language    = COALESCE(?, language), \
            source_type = COALESCE(?, source_type), \
            source_ref  = COALESCE(?, source_ref), \
            text        = COALESCE(?, text), \
@@ -228,6 +237,7 @@ async fn update(
          RETURNING {SELECT_COLS}"
     ))
     .bind(input.title)
+    .bind(next_language)
     .bind(input.source_type)
     .bind(input.source_ref)
     .bind(input.text)

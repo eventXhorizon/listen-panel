@@ -31,13 +31,14 @@ import type {
   UsagePoint,
   VocabEntry,
   SegmentStudy,
+  MaterialLanguage,
 } from '../types';
 import VideoPlayer from '../components/VideoPlayer';
 import SelectionPopup from '../components/SelectionPopup';
 import AddVocabDialog from '../components/AddVocabDialog';
 import VocabPanel from '../components/VocabPanel';
-import { findSentence } from '../lib/sentence';
 import { highlightText } from '../lib/highlight';
+import { languageAdapter, languageLabel } from '../lib/languages';
 
 interface PendingAdd {
   word: string;
@@ -602,8 +603,11 @@ export default function Reader() {
           .map((p) => p.trim())
           .filter(Boolean);
         const para = paragraphText(paraEl) || paragraphs[paraIdx] || '';
-        const offset = para.toLowerCase().indexOf(text.toLowerCase());
-        context = offset >= 0 ? findSentence(para, offset) : para;
+        const adapter = languageAdapter(m.language);
+        const offset = adapter
+          .normalizeTerm(para)
+          .indexOf(adapter.normalizeTerm(text));
+        context = offset >= 0 ? adapter.extractSentence(para, offset) : para;
       }
     }
     setPending({ word: text, context: context || text });
@@ -667,6 +671,9 @@ export default function Reader() {
             <h1 className="text-[17px] font-semibold text-stone-900 truncate tracking-tight">
               {m.title}
             </h1>
+            <span className="hidden rounded bg-stone-100 px-1.5 py-0.5 text-[11px] text-stone-500 sm:inline">
+              {languageLabel(m.language)}
+            </span>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -879,6 +886,7 @@ export default function Reader() {
                   group={group}
                   paragraphIndex={i}
                   materialId={m.id}
+                  language={m.language}
                   vocab={vocab}
                   highlightOn={highlightOn}
                   paragraphStyle={paragraphStyle}
@@ -896,6 +904,7 @@ export default function Reader() {
                   text={p}
                   paragraphIndex={i}
                   materialId={m.id}
+                  language={m.language}
                   vocab={vocab}
                   highlightOn={highlightOn}
                   paragraphStyle={paragraphStyle}
@@ -961,6 +970,7 @@ export default function Reader() {
       <SelectionPopup
         containerRef={articleRef}
         materialId={m.id}
+        language={m.language}
         onAdd={handleAddFromSelection}
       />
 
@@ -969,6 +979,7 @@ export default function Reader() {
           word={pending.word}
           context={pending.context}
           materialId={mid}
+          language={m.language}
           onClose={() => setPending(null)}
           onSaved={() => {
             setPending(null);
@@ -1088,6 +1099,7 @@ function ParagraphBlock({
   text,
   paragraphIndex,
   materialId,
+  language,
   vocab,
   highlightOn,
   paragraphStyle,
@@ -1097,6 +1109,7 @@ function ParagraphBlock({
   text: string;
   paragraphIndex: number;
   materialId: number;
+  language: MaterialLanguage;
   vocab: VocabEntry[];
   highlightOn: boolean;
   paragraphStyle: CSSProperties;
@@ -1127,7 +1140,7 @@ function ParagraphBlock({
         />
       </div>
       <p className="text-stone-800" style={paragraphStyle}>
-        {highlightOn ? highlightText(text, vocab, materialId) : text}
+        {highlightOn ? highlightText(text, vocab, materialId, language) : text}
       </p>
     </section>
   );
@@ -1211,6 +1224,7 @@ function TranscriptSegmentBlock({
   group,
   paragraphIndex,
   materialId,
+  language,
   vocab,
   highlightOn,
   paragraphStyle,
@@ -1221,6 +1235,7 @@ function TranscriptSegmentBlock({
   group: TranscriptSegment[];
   paragraphIndex: number;
   materialId: number;
+  language: MaterialLanguage;
   vocab: VocabEntry[];
   highlightOn: boolean;
   paragraphStyle: CSSProperties;
@@ -1261,7 +1276,7 @@ function TranscriptSegmentBlock({
         />
       </div>
       <p className="text-stone-800" style={paragraphStyle}>
-        {highlightOn ? highlightText(text, vocab, materialId) : text}
+        {highlightOn ? highlightText(text, vocab, materialId, language) : text}
       </p>
       {showStudy && studies.map((study, index) => (
         <div

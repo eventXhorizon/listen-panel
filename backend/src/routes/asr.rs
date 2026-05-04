@@ -15,6 +15,7 @@ use tokio_util::io::ReaderStream;
 use crate::auth::{self, CurrentUser};
 use crate::config::{AsrConfig, AsrProvider};
 use crate::error::{AppError, Result};
+use crate::language::Language;
 use crate::models::{Material, TranscriptSegment, TranscriptionJob};
 use crate::study::{SegmentStudyView, parse_study_view};
 
@@ -131,6 +132,7 @@ async fn create(
     let provider = match cfg.provider {
         AsrProvider::RemoteFasterWhisper => "remote_faster_whisper",
     };
+    let job_language = Language::normalize(&material.language);
 
     let job = sqlx::query_as::<_, TranscriptionJob>(&format!(
         "INSERT INTO transcription_jobs \
@@ -142,7 +144,7 @@ async fn create(
     .bind(material_id)
     .bind(provider)
     .bind(&cfg.model)
-    .bind(&cfg.language)
+    .bind(job_language)
     .bind(token_hash)
     .bind(now)
     .bind(now)
@@ -396,7 +398,7 @@ async fn call_worker(
         media_url,
         media_token: worker_media_token,
         model: &cfg.model,
-        language: &cfg.language,
+        language: Language::normalize(&material.language),
         beam_size: cfg.beam_size,
         vad_filter: cfg.vad_filter,
         condition_on_previous_text: cfg.condition_on_previous_text,
@@ -541,7 +543,7 @@ async fn material_for_user(
     user_id: i64,
 ) -> Result<Material> {
     Ok(sqlx::query_as::<_, Material>(
-        "SELECT id, user_id, title, source_type, source_ref, text, notes, created_at, updated_at \
+        "SELECT id, user_id, title, language, source_type, source_ref, text, notes, created_at, updated_at \
          FROM materials \
          WHERE id = ? AND user_id = ?",
     )

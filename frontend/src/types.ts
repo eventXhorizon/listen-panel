@@ -1,9 +1,11 @@
 export type SourceType = 'local' | 'youtube' | 'bilibili';
+export type MaterialLanguage = 'en' | 'ja';
 
 export interface Material {
   id: number;
   user_id: number;
   title: string;
+  language: MaterialLanguage;
   source_type: SourceType;
   source_ref: string;
   text: string;
@@ -33,6 +35,7 @@ export interface MaterialMetadata {
 export interface VocabEntry {
   id: number;
   word: string;
+  language: MaterialLanguage;
   lemma: string;
   phonetic?: string;
   pos?: string;

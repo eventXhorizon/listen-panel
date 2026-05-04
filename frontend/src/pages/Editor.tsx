@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { createMaterial, getMaterial, getMaterialMetadata, updateMaterial } from '../api';
-import type { MaterialMetadata, SourceType } from '../types';
+import type { MaterialLanguage, MaterialMetadata, SourceType } from '../types';
+import { LANGUAGE_OPTIONS, normalizeLanguage } from '../lib/languages';
 
 const TYPES: { value: SourceType; label: string; hint: string }[] = [
   { value: 'youtube', label: 'YouTube', hint: '粘贴 YouTube 链接或 11 位视频 ID' },
@@ -29,6 +30,7 @@ export default function Editor() {
   const navigate = useNavigate();
 
   const [title, setTitle] = useState('');
+  const [language, setLanguage] = useState<MaterialLanguage>('en');
   const [sourceType, setSourceType] = useState<SourceType>('youtube');
   const [sourceRef, setSourceRef] = useState('');
   const [text, setText] = useState('');
@@ -54,6 +56,7 @@ export default function Editor() {
         return;
       }
       setTitle(m.title);
+      setLanguage(normalizeLanguage(m.language));
       setSourceType(m.source_type);
       setSourceRef(m.source_ref);
       setText(m.text);
@@ -208,6 +211,7 @@ export default function Editor() {
       if (editingId) {
         await updateMaterial(editingId, {
           title: finalTitle,
+          language,
           source_type: finalSourceType,
           source_ref: finalSourceRef,
           text,
@@ -217,6 +221,7 @@ export default function Editor() {
       } else {
         const m = await createMaterial({
           title: finalTitle,
+          language,
           source_type: finalSourceType,
           source_ref: finalSourceRef,
           text,
@@ -267,6 +272,28 @@ export default function Editor() {
             placeholder="例:TED - The Power of Vulnerability"
             className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-stone-400 focus:ring-2 focus:ring-stone-100"
           />
+        </Field>
+
+        <Field label="学习语言">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {LANGUAGE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setLanguage(option.value)}
+                className={`rounded-md border px-3 py-2 text-left transition ${
+                  language === option.value
+                    ? 'border-teal-300 bg-teal-50 text-teal-900'
+                    : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
+                }`}
+              >
+                <span className="block text-sm font-medium">{option.label}</span>
+                <span className="mt-0.5 block text-xs text-stone-500">
+                  {option.hint}
+                </span>
+              </button>
+            ))}
+          </div>
         </Field>
 
         <Field label="视频源">

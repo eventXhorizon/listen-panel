@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod language;
 mod models;
 mod paths;
 mod routes;

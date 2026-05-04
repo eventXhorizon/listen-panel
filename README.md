@@ -1,6 +1,6 @@
 # Listen Panel
 
-一个本地用的英语听力 + 口语练习面板。Notion 风格 UI,**左原文 / 右视频**,支持 YouTube / Bilibili / 本地 mp4。可选词加生词,LLM 给上下文相关释义,生词在原文里高亮、点击弹释义卡,可翻卡片复习。所有数据落本机 SQLite。
+一个本地用的多语种听力 + 口语练习面板。Notion 风格 UI,**左原文 / 右视频**,支持 YouTube / Bilibili / 本地 mp4。可选词加生词,LLM 给上下文相关释义,生词在原文里高亮、点击弹释义卡,可翻卡片复习。当前内置英语和日语语言适配。所有数据落本机 SQLite。
 
 > 这是一份会随实现持续更新的活文档。改了代码就回头改这里。
 
@@ -20,6 +20,7 @@ listen-panel/
 │   │   ├── paths.rs             用户数据目录解析 + data-dir.json 设置
 │   │   ├── config.rs            LlmConfig + 数据目录内 config.json 读写
 │   │   ├── error.rs             AppError → IntoResponse
+│   │   ├── language.rs          语言 adapter 元数据 + LLM prompt
 │   │   ├── models.rs            Material / Vocab / ASR DTO
 │   │   ├── study.rs             转写后分段翻译、语法和固定搭配讲解
 │   │   └── routes/
@@ -64,10 +65,12 @@ listen-panel/
 │       └── lib/
 │           ├── settings.ts      localStorage 设置
 │           ├── llm.ts           DeepSeek lookupWord
+│           ├── languages.ts     前端语言 adapter
 │           ├── sentence.ts      句子定位
 │           └── highlight.tsx    原文高亮 + 点击 popover
 ├── docs/
-│   └── gpu-compute-platform.md  GPU 计算平台版本规划
+│   ├── gpu-compute-platform.md  GPU 计算平台版本规划
+│   └── multilingual-language-adapters.md 多语种方案 C 规划
 ├── asr-worker/                  GPU 机器上运行的 FastAPI 通用计算 worker
 │   ├── worker.py                `/v1/jobs` 通用 Job API + `/v1/transcribe` 兼容协议
 │   ├── requirements.txt
@@ -97,7 +100,7 @@ listen-panel/
 - `react-router-dom`
 
 **外部依赖**
-- DeepSeek `chat/completions`(JSON mode):用于生词释义。**Key 存在数据目录的 `config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。
+- DeepSeek `chat/completions`(JSON mode):用于生词释义和分段分析。**Key 存在数据目录的 `config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。lookup 和 study prompt 会按材料语言切换。
 - ElevenLabs Text to Speech:用于生词朗读。**Key 存在数据目录的 `tts.json`**(gitignored),前端通过 `POST /api/tts/speech` 走后端适配层,key 不出服务端。
 - 远程 GPU worker:用于视频转写。当前 ASR 仍兼容 `POST /v1/transcribe`;worker 也提供通用 `POST /v1/jobs`、`GET /v1/jobs/:id`、`GET /v1/jobs/:id/result` V1 API,后续可扩展 TTS/OCR/embedding 等 GPU workload。长期规划见 `docs/gpu-compute-platform.md`。
 - YouTube oEmbed / Bilibili `x/web-interface/view` API:用于新建材料时根据链接自动识别视频源并读取标题;Bilibili 会额外读取分 P、aid、cid 和时长,用于外链播放器和 worker 下载定位。Bilibili API 失败时再回退解析视频页 HTML;最终失败时只回退为手动标题或链接本身,不阻塞保存。
@@ -110,6 +113,7 @@ listen-panel/
 | id | INTEGER PK | autoincrement |
 | user_id | INTEGER | FK 到 users,材料 owner |
 | title | TEXT | |
+| language | TEXT | 学习语言,V1 支持 `en` / `ja`,默认 `en` |
 | source_type | TEXT | CHECK ∈ `'local' / 'youtube' / 'bilibili'` |
 | source_ref | TEXT | local→`<uuid>.<ext>`,youtube→URL/ID,bilibili→`BV...` 或 `BV...?p=2&cid=...&aid=...` |
 | text | TEXT | 原文,空行分段 |
@@ -123,8 +127,9 @@ listen-panel/
 | id | INTEGER PK | |
 | material_id | INTEGER | FK,**ON DELETE CASCADE** |
 | word | TEXT | 实际选中的词形,小写 |
+| language | TEXT | 生词语言,默认继承材料语言 |
 | lemma | TEXT | LLM 给的原形 |
-| phonetic | TEXT? | IPA |
+| phonetic | TEXT? | 英语为 IPA;日语为假名读音 |
 | pos | TEXT? | n. / v. / adj. ... |
 | definition_zh | TEXT | 主释义(必填) |
 | definition_en | TEXT? | |
@@ -169,7 +174,7 @@ listen-panel/
 | material_id | INTEGER | FK 到 materials,ON DELETE CASCADE |
 | provider | TEXT | V1 为 `remote_faster_whisper` |
 | model | TEXT | 默认 `large-v3` |
-| language | TEXT | 默认 `en` |
+| language | TEXT | 默认 `en`;新任务优先使用材料语言 |
 | status | TEXT | `queued/running/succeeded/failed` |
 | progress | INTEGER | 0..100;worker 阶段回调更新,成功/失败时置 100 |
 | error | TEXT? | 失败原因 |
@@ -232,10 +237,10 @@ listen-panel/
 | GET | `/media/:file` | Range 流式;200 / 206;Accept-Ranges + Content-Range;路径校验 |
 | GET | `/settings/llm` | 返 `{configured, base_url, model}`,**永不返 api_key** |
 | PUT | `/settings/llm` | 局部更新 `{api_key?, base_url?, model?}`,空字符串字段视为不变;写盘 `<数据目录>/config.json` 同时刷新内存 |
-| POST | `/lookup` | `{word, context}` → 走 DeepSeek 兼容协议 → `{lemma, phonetic, pos, definition_zh, ...}`;未配置 key 直接返 500 + `not configured` 文案 |
+| POST | `/lookup` | `{word, context, language?}` → 走 DeepSeek 兼容协议 → `{lemma, phonetic, pos, definition_zh, ...}`;未配置 key 直接返 500 + `not configured` 文案 |
 | GET | `/settings/tts` | 返 `{configured, provider, base_url, voice_id, model, output_format}`,**永不返 api_key** |
 | PUT | `/settings/tts` | 局部更新 `{api_key?, base_url?, voice_id?, model?, output_format?}`,空字符串字段视为不变;写盘 `<数据目录>/tts.json` 同时刷新内存 |
-| POST | `/tts/speech` | `{text, material_id?}` → 先查 `<数据目录>/tts-cache/`;传 `material_id` 时按文章目录缓存,未命中时走 ElevenLabs `text-to-speech/:voice_id`,成功后缓存并返回 `audio/mpeg`;未配置 key 返回 503 |
+| POST | `/tts/speech` | `{text, material_id?, language?}` → 先查 `<数据目录>/tts-cache/`;传 `material_id` 时按文章目录缓存,文件名和 hash 包含语言,未命中时走 ElevenLabs `text-to-speech/:voice_id`,成功后缓存并返回 `audio/mpeg`;未配置 key 返回 503 |
 | GET | `/auth/status` | `{needs_setup, user}`;未登录 user 为 null |
 | POST | `/auth/setup` | 首次初始化管理员账户,并把旧材料归属给该用户 |
 | POST | `/auth/register` | 创建普通账户并登录 |
@@ -294,7 +299,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `AsrConfig` 单独持久化到 `<数据目录>/asr.json`,默认 `provider=remote_faster_whisper`、`base_url=http://127.0.0.1:8765`、`backend_base_url=http://127.0.0.1:9527`、`model=large-v3`、`language=en`、`beam_size=5`、`vad_filter=true`、`condition_on_previous_text=false`、`timeout_seconds=7200`。`api_token` 可选,空字符串 / 未传都视为保留现有。
 
 ### 4.8 远程 ASR worker 协议
-- 后端创建 `transcription_jobs` 后启动后台 task。任务切到 `running`,调用 `POST <base_url>/v1/transcribe`。
+- 后端创建 `transcription_jobs` 后启动后台 task。任务切到 `running`,调用 `POST <base_url>/v1/transcribe`。`language` 使用材料语言;旧材料缺语言时回退 `en`。
 - 对 local 材料,请求体包含 `media_url=http://<listen-panel后端>/api/asr/media/<job_id>` 和 `media_token`;worker 从这个 URL 拉视频时带 `Authorization: Bearer <media_token>`。该 token 只在 job `queued/running` 时有效,完成/失败后清空 hash,且不会出现在 URL 日志里。
 - 请求体也包含 `progress_url` 和 `progress_token`;worker 在字幕、下载、ffmpeg、模型加载、ASR segment 进度等阶段 POST 回调后端,前端轮询 `GET /api/transcriptions/:id` 看到实时进度。
 - 对 YouTube/Bilibili,请求体不含 `media_url`,worker 直接使用 `source_type/source_ref`;GPU 机器侧可用 `yt-dlp` 先拉字幕/音频,再走 faster-whisper。Bilibili 的 `source_ref` 可包含 `p/cid/aid`;worker 会转成 `https://www.bilibili.com/video/<BV>?...` 交给 `yt-dlp`。
@@ -453,7 +458,13 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   3. `browser-speech`:前两档不可用时,自动 fallback 到浏览器 `speechSynthesis`
 - ElevenLabs 音频按 `provider/base_url/voice_id/model/output_format/text` 做 SHA-256 hash;有文章上下文时缓存到 `<数据目录>/tts-cache/material-<material_id>/<provider>_<word-or-phrase>_<hash16>.mp3`,没有文章上下文时缓存到 `<数据目录>/tts-cache/<provider>_<word-or-phrase>_<hash16>.mp3`;命中缓存不再请求 ElevenLabs,不消耗 credits。旧版 `<provider>_<hash>.mp3` 文件仍可读取。失败结果不缓存。清缓存直接删 `<数据目录>/tts-cache/`。
 - Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。
-- 浏览器朗读固定 `en-US`,语速 `0.9`;不同系统/浏览器的声音会不同。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
+- 浏览器朗读按语言选择 fallback,英语 `en-US`,日语 `ja-JP`,语速 `0.9`;不同系统/浏览器的声音会不同。Free Dictionary mp3 只在英语材料启用。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
+
+### 5.14 多语种适配
+- V1 把语言设为材料级属性,新建/编辑材料时选择。当前支持 `en` 和 `ja`。
+- ASR 创建任务时优先使用材料语言,全局 ASR `language` 只作为旧材料或手动测试的 fallback。
+- 生词保存时记录语言;查词 prompt、分段翻译分析 prompt、朗读 fallback 和高亮匹配都会按语言切换。
+- 日语 V1 使用精确文本高亮,没有做完整词形还原和分词点击。详细方案和后续路线见 `docs/multilingual-language-adapters.md`。
 
 ## 6. 启动方式
 
@@ -515,8 +526,8 @@ worker V1 已提供通用 GPU Job API:
 
 ### 已知小毛刺(行为正确,品味略差,不阻塞)
 - 上传时给坏扩展 / `/api/media/..` 路径穿越,后端返 **500** 而非 400(请求被正确拒绝,只是状态码不规范)
-- 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran"),没做词形还原
-- 生词朗读 V1 优先走本地 TTS 缓存,缓存未命中才请求 ElevenLabs 并消耗 credits;未配置、额度不足、网络失败时退回 Free Dictionary mp3 与浏览器 `speechSynthesis`
+- 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran";日语也只做精确表记匹配),没做词形还原
+- 生词朗读 V1 优先走本地 TTS 缓存,缓存未命中才请求 ElevenLabs 并消耗 credits;未配置、额度不足、网络失败时英语退回 Free Dictionary mp3 与浏览器 `speechSynthesis`,日语直接退回浏览器 `speechSynthesis`
 - ASR V1 不内置 GPU worker,只定义远程 worker 协议;worker 崩溃、网络断开或超时会把 job 标记为 failed。V1 没有取消任务和进度回传。
 - 账户系统 V1 没有密码找回/管理员重置 UI。忘记密码只能本地操作 SQLite 或后续补 admin 用户管理页
 - 复习无 SRS 算法,只是随机抽 + 三档手判 mastery

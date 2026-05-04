@@ -8,6 +8,7 @@ use sqlx::SqlitePool;
 
 use crate::auth::CurrentUser;
 use crate::error::Result;
+use crate::language::Language;
 use crate::models::{CreateVocab, UpdateVocab, Vocab};
 
 pub fn router() -> Router<crate::AppState> {
@@ -16,9 +17,9 @@ pub fn router() -> Router<crate::AppState> {
         .route("/vocab/:id", get(get_one).put(update).delete(delete_one))
 }
 
-const SELECT_COLS: &str = "id, material_id, word, lemma, phonetic, pos, \
+const SELECT_COLS: &str = "id, material_id, word, language, lemma, phonetic, pos, \
     definition_zh, definition_en, example_zh, context, mastery, created_at";
-const SELECT_COLS_V: &str = "v.id, v.material_id, v.word, v.lemma, v.phonetic, v.pos, \
+const SELECT_COLS_V: &str = "v.id, v.material_id, v.word, v.language, v.lemma, v.phonetic, v.pos, \
     v.definition_zh, v.definition_en, v.example_zh, v.context, v.mastery, v.created_at";
 
 #[derive(Debug, Deserialize)]
@@ -78,16 +79,22 @@ async fn create(
     user: CurrentUser,
     Json(input): Json<CreateVocab>,
 ) -> Result<Json<Vocab>> {
-    ensure_material_owner(&pool, input.material_id, user.id).await?;
+    let material_language = material_language_for_user(&pool, input.material_id, user.id).await?;
+    let language = input
+        .language
+        .as_deref()
+        .map(Language::normalize)
+        .unwrap_or(material_language.as_str());
     let row = sqlx::query_as::<_, Vocab>(&format!(
         "INSERT INTO vocab \
-         (material_id, word, lemma, phonetic, pos, \
+         (material_id, word, language, lemma, phonetic, pos, \
           definition_zh, definition_en, example_zh, context, mastery) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING {SELECT_COLS}"
     ))
     .bind(input.material_id)
     .bind(&input.word)
+    .bind(language)
     .bind(&input.lemma)
     .bind(input.phonetic.as_deref())
     .bind(input.pos.as_deref())
@@ -110,6 +117,7 @@ async fn update(
     let row = sqlx::query_as::<_, Vocab>(&format!(
         "UPDATE vocab SET \
            word          = COALESCE(?, word), \
+           language      = COALESCE(?, language), \
            lemma         = COALESCE(?, lemma), \
            phonetic      = COALESCE(?, phonetic), \
            pos           = COALESCE(?, pos), \
@@ -126,6 +134,7 @@ async fn update(
          RETURNING {SELECT_COLS}"
     ))
     .bind(input.word)
+    .bind(input.language.as_deref().map(Language::normalize))
     .bind(input.lemma)
     .bind(input.phonetic)
     .bind(input.pos)
@@ -164,15 +173,16 @@ async fn delete_one(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn ensure_material_owner(pool: &SqlitePool, material_id: i64, user_id: i64) -> Result<()> {
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM materials WHERE id = ? AND user_id = ?")
+async fn material_language_for_user(
+    pool: &SqlitePool,
+    material_id: i64,
+    user_id: i64,
+) -> Result<String> {
+    Ok(
+        sqlx::query_scalar("SELECT language FROM materials WHERE id = ? AND user_id = ?")
             .bind(material_id)
             .bind(user_id)
-            .fetch_optional(pool)
-            .await?;
-    if exists.is_none() {
-        return Err(sqlx::Error::RowNotFound.into());
-    }
-    Ok(())
+            .fetch_one(pool)
+            .await?,
+    )
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
+import type { MaterialLanguage } from '../types';
 import SpeakButton from './SpeakButton';
 
 interface Sel {
@@ -9,12 +10,14 @@ interface Sel {
 interface Props {
   containerRef: RefObject<HTMLElement | null>;
   materialId?: number;
+  language?: MaterialLanguage;
   onAdd: (text: string) => void;
 }
 
 export default function SelectionPopup({
   containerRef,
   materialId,
+  language = 'en',
   onAdd,
 }: Props) {
   const [sel, setSel] = useState<Sel | null>(null);
@@ -91,6 +94,7 @@ export default function SelectionPopup({
       <SpeakButton
         word={sel.text}
         materialId={materialId}
+        language={language}
         className="h-7 w-7"
       />
       <button

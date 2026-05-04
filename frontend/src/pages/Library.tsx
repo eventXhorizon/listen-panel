@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { listMaterials, deleteMaterial } from '../api';
 import type { Material, SourceType } from '../types';
+import { languageLabel } from '../lib/languages';
 
 const SOURCE_LABEL: Record<SourceType, string> = {
   local: '本地',
@@ -63,7 +64,7 @@ export default function Library() {
             >
               <div className="flex items-start justify-between mb-2">
                 <span className="text-[11px] text-stone-500 uppercase tracking-wider">
-                  {SOURCE_LABEL[m.source_type]}
+                  {SOURCE_LABEL[m.source_type]} · {languageLabel(m.language)}
                 </span>
                 <button
                   onClick={(e) => onDelete(e, m.id)}

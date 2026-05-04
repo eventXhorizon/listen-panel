@@ -7,6 +7,7 @@ pub struct Material {
     pub id: i64,
     pub user_id: i64,
     pub title: String,
+    pub language: String,
     pub source_type: String,
     pub source_ref: String,
     pub text: String,
@@ -18,6 +19,8 @@ pub struct Material {
 #[derive(Debug, Deserialize)]
 pub struct CreateMaterial {
     pub title: String,
+    #[serde(default)]
+    pub language: Option<String>,
     pub source_type: String,
     pub source_ref: String,
     #[serde(default)]
@@ -29,6 +32,7 @@ pub struct CreateMaterial {
 #[derive(Debug, Deserialize)]
 pub struct UpdateMaterial {
     pub title: Option<String>,
+    pub language: Option<String>,
     pub source_type: Option<String>,
     pub source_ref: Option<String>,
     pub text: Option<String>,
@@ -40,6 +44,7 @@ pub struct Vocab {
     pub id: i64,
     pub material_id: i64,
     pub word: String,
+    pub language: String,
     pub lemma: String,
     pub phonetic: Option<String>,
     pub pos: Option<String>,
@@ -55,6 +60,8 @@ pub struct Vocab {
 pub struct CreateVocab {
     pub material_id: i64,
     pub word: String,
+    #[serde(default)]
+    pub language: Option<String>,
     pub lemma: String,
     #[serde(default)]
     pub phonetic: Option<String>,
@@ -74,6 +81,7 @@ pub struct CreateVocab {
 #[derive(Debug, Deserialize)]
 pub struct UpdateVocab {
     pub word: Option<String>,
+    pub language: Option<String>,
     pub lemma: Option<String>,
     pub phonetic: Option<String>,
     pub pos: Option<String>,

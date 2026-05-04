@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { listMaterials, listVocab, updateVocab } from '../api';
-import type { Material, VocabEntry } from '../types';
+import type { Material, MaterialLanguage, VocabEntry } from '../types';
 import SpeakButton from '../components/SpeakButton';
 
 const ESCAPE = /[.*+?^${}()|[\]\\]/g;
@@ -15,9 +15,17 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-function maskWord(context: string, word: string): ReactNode[] {
+function maskWord(
+  context: string,
+  word: string,
+  language: MaterialLanguage,
+): ReactNode[] {
   if (!word) return [context];
-  const re = new RegExp(`\\b${word.replace(ESCAPE, '\\$&')}\\b`, 'gi');
+  const pattern = word.replace(ESCAPE, '\\$&');
+  const re =
+    language === 'ja'
+      ? new RegExp(pattern, 'g')
+      : new RegExp(`\\b${pattern}\\b`, 'gi');
   const parts: ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
@@ -202,6 +210,7 @@ export default function Review() {
               <SpeakButton
                 word={cur.word}
                 materialId={cur.material_id}
+                language={cur.language}
                 className="mt-1"
               />
             </div>
@@ -214,7 +223,7 @@ export default function Review() {
 
           {cur.context && (
             <div className="text-sm text-stone-600 leading-relaxed border-l-2 border-stone-200 pl-3 mb-6">
-              {revealed ? cur.context : maskWord(cur.context, cur.word)}
+              {revealed ? cur.context : maskWord(cur.context, cur.word, cur.language)}
             </div>
           )}
 

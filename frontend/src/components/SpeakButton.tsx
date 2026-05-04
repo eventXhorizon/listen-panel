@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import type { MaterialLanguage } from '../types';
 import { speakWord } from '../lib/audio';
 
 interface Props {
   word: string;
   materialId?: number;
+  language?: MaterialLanguage;
   variant?: 'default' | 'dark';
   className?: string;
 }
@@ -11,6 +13,7 @@ interface Props {
 export default function SpeakButton({
   word,
   materialId,
+  language = 'en',
   variant = 'default',
   className = '',
 }: Props) {
@@ -24,7 +27,7 @@ export default function SpeakButton({
     if (busy) return;
     setBusy(true);
     try {
-      await speakWord(word, materialId);
+      await speakWord(word, materialId, language);
     } catch (e) {
       alert(e instanceof Error ? e.message : '朗读失败');
     } finally {
