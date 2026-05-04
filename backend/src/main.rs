@@ -3,6 +3,7 @@ mod config;
 mod db;
 mod error;
 mod models;
+mod paths;
 mod routes;
 
 use std::time::Duration;
@@ -34,6 +35,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    paths::init()?;
     routes::media::ensure_dirs().await?;
     routes::tts::ensure_cache_dir().await?;
     let pool = db::pool().await?;

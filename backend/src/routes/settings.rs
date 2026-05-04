@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 use crate::auth::{self, CurrentUser};
 use crate::config::{self, AsrProvider, SharedAsr, SharedLlm, SharedTts, TtsProvider};
 use crate::error::Result;
+use crate::paths::DataDirStatus;
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/settings/llm", get(get_llm).put(put_llm))
         .route("/settings/tts", get(get_tts).put(put_tts))
         .route("/settings/asr", get(get_asr).put(put_asr))
+        .route("/settings/data-dir", get(get_data_dir).put(put_data_dir))
 }
 
 #[derive(Debug, Serialize)]
@@ -46,6 +48,11 @@ pub struct AsrStatus {
     pub vad_filter: bool,
     pub condition_on_previous_text: bool,
     pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateDataDir {
+    pub data_dir: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -302,4 +309,23 @@ async fn put_asr(
         timeout_seconds: snapshot.timeout_seconds,
     }))
     .map(axum::response::IntoResponse::into_response)
+}
+
+async fn get_data_dir(user: CurrentUser) -> Result<axum::response::Response> {
+    if !user.is_admin {
+        return Ok(auth::forbidden());
+    }
+    let status = crate::paths::status().await?;
+    Ok(Json(status).into_response())
+}
+
+async fn put_data_dir(
+    user: CurrentUser,
+    Json(patch): Json<UpdateDataDir>,
+) -> Result<axum::response::Response> {
+    if !user.is_admin {
+        return Ok(auth::forbidden());
+    }
+    let status: DataDirStatus = crate::paths::save_configured_dir(&patch.data_dir).await?;
+    Ok(Json(status).into_response())
 }

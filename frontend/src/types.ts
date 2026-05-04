@@ -70,6 +70,14 @@ export interface AsrStatus {
   timeout_seconds: number;
 }
 
+export interface DataDirStatus {
+  active_dir: string;
+  configured_dir?: string | null;
+  pending_dir?: string | null;
+  source: 'env' | 'config' | 'default';
+  restart_required: boolean;
+}
+
 export interface TranscriptionJob {
   id: number;
   user_id: number;

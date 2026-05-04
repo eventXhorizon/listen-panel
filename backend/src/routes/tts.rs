@@ -14,14 +14,12 @@ use crate::auth::CurrentUser;
 use crate::config::{SharedTts, TtsProvider};
 use crate::error::Result;
 
-const CACHE_DIR: &str = "data/tts-cache";
-
 pub fn router() -> Router<crate::AppState> {
     Router::new().route("/tts/speech", axum::routing::post(speech))
 }
 
 pub async fn ensure_cache_dir() -> std::io::Result<()> {
-    fs::create_dir_all(CACHE_DIR).await
+    fs::create_dir_all(crate::paths::tts_cache_dir()).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,10 +169,10 @@ fn cache_path(cfg: &crate::config::TtsConfig, text: &str, material_id: Option<i6
     let hash = hasher.finalize();
     let filename = format!("{provider}_{hash:x}.mp3");
     match material_id {
-        Some(id) => PathBuf::from(CACHE_DIR)
+        Some(id) => crate::paths::tts_cache_dir()
             .join(format!("material-{id}"))
             .join(filename),
-        None => PathBuf::from(CACHE_DIR).join(filename),
+        None => crate::paths::tts_cache_dir().join(filename),
     }
 }
 

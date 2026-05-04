@@ -20,7 +20,6 @@ use crate::models::{Material, TranscriptSegment, TranscriptionJob};
 const JOB_SELECT_COLS: &str = "id, user_id, material_id, provider, model, language, \
     status, progress, error, created_at, updated_at, completed_at";
 const SEGMENT_SELECT_COLS: &str = "id, job_id, material_id, start_ms, end_ms, text";
-const MEDIA_DIR: &str = "data/uploads";
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -492,7 +491,7 @@ async fn stream_file(file: &str) -> Result<Response> {
     if file.is_empty() || file.contains("..") || file.contains('/') || file.contains('\\') {
         return Err(AppError(anyhow::anyhow!("invalid filename")));
     }
-    let path = std::path::Path::new(MEDIA_DIR).join(file);
+    let path = crate::paths::uploads_dir().join(file);
     let f = match fs::File::open(&path).await {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

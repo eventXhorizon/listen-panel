@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth-context';
 import { loadSettings, saveSettings } from '../lib/settings';
-import type { AsrStatus, LlmStatus, TtsStatus } from '../types';
+import type { AsrStatus, DataDirStatus, LlmStatus, TtsStatus } from '../types';
 
 export default function Settings() {
   const auth = useAuth();
@@ -31,12 +31,15 @@ export default function Settings() {
   const [asrConditionPrevious, setAsrConditionPrevious] = useState(false);
   const [asrTimeoutSeconds, setAsrTimeoutSeconds] = useState(7200);
   const [showAsrToken, setShowAsrToken] = useState(false);
+  const [dataDirStatus, setDataDirStatus] = useState<DataDirStatus | null>(null);
+  const [dataDir, setDataDir] = useState('');
 
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [ttsLoadErr, setTtsLoadErr] = useState<string | null>(null);
   const [asrLoadErr, setAsrLoadErr] = useState<string | null>(null);
+  const [dataDirLoadErr, setDataDirLoadErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!auth.user?.is_admin) return;
@@ -90,6 +93,23 @@ export default function Settings() {
         setTtsOutputFormat(s.output_format);
       } catch (e) {
         setTtsLoadErr((e as Error).message);
+      }
+    })();
+  }, [auth.user?.is_admin]);
+
+  useEffect(() => {
+    if (!auth.user?.is_admin) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/settings/data-dir', {
+          credentials: 'same-origin',
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const s = (await res.json()) as DataDirStatus;
+        setDataDirStatus(s);
+        setDataDir(s.pending_dir ?? s.configured_dir ?? s.active_dir);
+      } catch (e) {
+        setDataDirLoadErr((e as Error).message);
       }
     })();
   }, [auth.user?.is_admin]);
@@ -227,6 +247,29 @@ export default function Settings() {
         setAsrToken('');
       }
 
+      if (dataDirStatus && dataDirStatus.source !== 'env') {
+        const trimmed = dataDir.trim();
+        const current =
+          dataDirStatus.pending_dir ??
+          dataDirStatus.configured_dir ??
+          dataDirStatus.active_dir;
+        if (trimmed && trimmed !== current) {
+          const res = await fetch('/api/settings/data-dir', {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data_dir: trimmed }),
+          });
+          if (!res.ok) {
+            const err = (await res.json().catch(() => ({}))) as { error?: string };
+            throw new Error(err.error ?? `HTTP ${res.status}`);
+          }
+          const s = (await res.json()) as DataDirStatus;
+          setDataDirStatus(s);
+          setDataDir(s.pending_dir ?? s.configured_dir ?? s.active_dir);
+        }
+      }
+
       setSavedAt(new Date().toLocaleTimeString());
     } catch (e) {
       alert(`保存失败:${(e as Error).message}`);
@@ -244,6 +287,7 @@ export default function Settings() {
   const asrTokenPlaceholder = asrStatus?.token_configured
     ? '已配置 ●●●●●● (留空保留现有 token)'
     : '可选 shared token';
+  const dataDirLocked = dataDirStatus?.source === 'env';
 
   if (!auth.user?.is_admin) {
     return (
@@ -267,11 +311,58 @@ export default function Settings() {
           设置
         </h1>
         <p className="text-sm text-stone-500 mb-8">
-          DeepSeek 与 TTS 凭据保存在 <code className="text-xs bg-stone-100 px-1 py-0.5 rounded">backend/data/</code>
-          (已 gitignore),不会进数据库,API key 也不会回传到前端。本地音量存浏览器 localStorage。
+          DeepSeek、TTS、ASR 凭据和本地数据保存在数据目录中,不会回传 API key。本地音量存浏览器 localStorage。
         </p>
 
         <div className="space-y-7">
+          <section className="bg-white border border-stone-200 rounded-lg p-5">
+            <div className="flex items-baseline justify-between mb-4">
+              <h2 className="text-sm font-medium text-stone-800">数据存储</h2>
+              {dataDirLoadErr ? (
+                <span className="text-xs px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                  后端不可达 · {dataDirLoadErr}
+                </span>
+              ) : dataDirStatus ? (
+                <span className="text-xs px-2 py-0.5 rounded bg-stone-100 text-stone-600 border border-stone-200">
+                  {dataDirSourceLabel(dataDirStatus.source)}
+                </span>
+              ) : (
+                <span className="text-xs text-stone-400">读取中...</span>
+              )}
+            </div>
+
+            <div className="space-y-5">
+              <Field label="当前使用目录">
+                <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-mono text-stone-700 break-all">
+                  {dataDirStatus?.active_dir ?? '读取中...'}
+                </div>
+              </Field>
+
+              <Field label="重启后使用目录">
+                <input
+                  value={dataDir}
+                  onChange={(e) => setDataDir(e.target.value)}
+                  disabled={dataDirLocked}
+                  placeholder="/Users/you/listen-panel-data"
+                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400 disabled:bg-stone-50 disabled:text-stone-400"
+                />
+                <p className="mt-2 text-xs text-stone-500">
+                  这里是整个本机服务的数据目录,包含 SQLite、生词、文章、上传视频、TTS 缓存和凭据。修改后需要重启服务才会生效;旧数据不会自动搬迁。
+                </p>
+                {dataDirLocked && (
+                  <p className="mt-2 text-xs text-amber-700">
+                    当前由 LISTEN_PANEL_DATA_DIR 环境变量指定,设置页不能覆盖。
+                  </p>
+                )}
+                {dataDirStatus?.restart_required && (
+                  <p className="mt-2 text-xs text-amber-700">
+                    已保存新的目录,重启后才会切换。
+                  </p>
+                )}
+              </Field>
+            </div>
+          </section>
+
           <section className="bg-white border border-stone-200 rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
               <h2 className="text-sm font-medium text-stone-800">DeepSeek</h2>
@@ -596,4 +687,10 @@ function Field({
       {children}
     </div>
   );
+}
+
+function dataDirSourceLabel(source: DataDirStatus['source']) {
+  if (source === 'env') return '环境变量';
+  if (source === 'config') return '本地配置';
+  return '默认目录';
 }

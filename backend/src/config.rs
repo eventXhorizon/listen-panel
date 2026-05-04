@@ -1,12 +1,9 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-
-const PATH: &str = "data/config.json";
-const TTS_PATH: &str = "data/tts.json";
-const ASR_PATH: &str = "data/asr.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -133,17 +130,24 @@ impl AsrConfig {
 pub type SharedAsr = Arc<RwLock<AsrConfig>>;
 
 pub async fn load() -> SharedLlm {
-    let cfg = match tokio::fs::read_to_string(PATH).await {
+    let path = crate::paths::llm_config_path();
+    let cfg = match tokio::fs::read_to_string(&path).await {
         Ok(s) => match serde_json::from_str::<LlmConfig>(&s) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("config.json malformed ({e}); falling back to defaults");
+                tracing::warn!(
+                    path = %path.display(),
+                    "config.json malformed ({e}); falling back to defaults"
+                );
                 LlmConfig::default()
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => LlmConfig::default(),
         Err(e) => {
-            tracing::warn!("config.json read error: {e}; falling back to defaults");
+            tracing::warn!(
+                path = %path.display(),
+                "config.json read error: {e}; falling back to defaults"
+            );
             LlmConfig::default()
         }
     };
@@ -151,25 +155,28 @@ pub async fn load() -> SharedLlm {
 }
 
 pub async fn save(cfg: &LlmConfig) -> Result<()> {
-    let body = serde_json::to_string_pretty(cfg)?;
-    let tmp = format!("{PATH}.tmp");
-    tokio::fs::write(&tmp, body).await?;
-    tokio::fs::rename(&tmp, PATH).await?;
-    Ok(())
+    write_json_atomic(crate::paths::llm_config_path(), cfg).await
 }
 
 pub async fn load_tts() -> SharedTts {
-    let cfg = match tokio::fs::read_to_string(TTS_PATH).await {
+    let path = crate::paths::tts_config_path();
+    let cfg = match tokio::fs::read_to_string(&path).await {
         Ok(s) => match serde_json::from_str::<TtsConfig>(&s) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("tts.json malformed ({e}); falling back to defaults");
+                tracing::warn!(
+                    path = %path.display(),
+                    "tts.json malformed ({e}); falling back to defaults"
+                );
                 TtsConfig::default()
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => TtsConfig::default(),
         Err(e) => {
-            tracing::warn!("tts.json read error: {e}; falling back to defaults");
+            tracing::warn!(
+                path = %path.display(),
+                "tts.json read error: {e}; falling back to defaults"
+            );
             TtsConfig::default()
         }
     };
@@ -177,25 +184,28 @@ pub async fn load_tts() -> SharedTts {
 }
 
 pub async fn save_tts(cfg: &TtsConfig) -> Result<()> {
-    let body = serde_json::to_string_pretty(cfg)?;
-    let tmp = format!("{TTS_PATH}.tmp");
-    tokio::fs::write(&tmp, body).await?;
-    tokio::fs::rename(&tmp, TTS_PATH).await?;
-    Ok(())
+    write_json_atomic(crate::paths::tts_config_path(), cfg).await
 }
 
 pub async fn load_asr() -> SharedAsr {
-    let cfg = match tokio::fs::read_to_string(ASR_PATH).await {
+    let path = crate::paths::asr_config_path();
+    let cfg = match tokio::fs::read_to_string(&path).await {
         Ok(s) => match serde_json::from_str::<AsrConfig>(&s) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("asr.json malformed ({e}); falling back to defaults");
+                tracing::warn!(
+                    path = %path.display(),
+                    "asr.json malformed ({e}); falling back to defaults"
+                );
                 AsrConfig::default()
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => AsrConfig::default(),
         Err(e) => {
-            tracing::warn!("asr.json read error: {e}; falling back to defaults");
+            tracing::warn!(
+                path = %path.display(),
+                "asr.json read error: {e}; falling back to defaults"
+            );
             AsrConfig::default()
         }
     };
@@ -203,9 +213,27 @@ pub async fn load_asr() -> SharedAsr {
 }
 
 pub async fn save_asr(cfg: &AsrConfig) -> Result<()> {
+    write_json_atomic(crate::paths::asr_config_path(), cfg).await
+}
+
+async fn write_json_atomic<T>(path: PathBuf, cfg: &T) -> Result<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
     let body = serde_json::to_string_pretty(cfg)?;
-    let tmp = format!("{ASR_PATH}.tmp");
+    let tmp = tmp_path(&path);
     tokio::fs::write(&tmp, body).await?;
-    tokio::fs::rename(&tmp, ASR_PATH).await?;
+    tokio::fs::rename(&tmp, &path).await?;
     Ok(())
+}
+
+fn tmp_path(path: &Path) -> PathBuf {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.json");
+    path.with_file_name(format!("{filename}.tmp"))
 }

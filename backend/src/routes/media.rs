@@ -1,4 +1,4 @@
-use std::path::{Path as FsPath, PathBuf};
+use std::path::Path as FsPath;
 
 use axum::Json;
 use axum::Router;
@@ -16,7 +16,6 @@ use uuid::Uuid;
 use crate::auth::CurrentUser;
 use crate::error::{AppError, Result};
 
-const UPLOAD_DIR: &str = "data/uploads";
 const ALLOWED_EXTS: &[&str] = &["mp4", "mkv", "webm", "mov", "m4v"];
 const MAX_UPLOAD: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
@@ -30,7 +29,7 @@ pub fn router() -> Router<crate::AppState> {
 }
 
 pub async fn ensure_dirs() -> std::io::Result<()> {
-    fs::create_dir_all(UPLOAD_DIR).await
+    fs::create_dir_all(crate::paths::uploads_dir()).await
 }
 
 /// Remove an upload file iff no material still references it as a local
@@ -61,7 +60,7 @@ pub async fn delete_upload_if_orphan(pool: &sqlx::SqlitePool, source_ref: &str) 
     if still_used > 0 {
         return;
     }
-    let path = std::path::Path::new(UPLOAD_DIR).join(source_ref);
+    let path = crate::paths::uploads_dir().join(source_ref);
     match fs::remove_file(&path).await {
         Ok(()) => tracing::info!("removed orphan upload: {source_ref}"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -95,7 +94,7 @@ async fn upload(
             )));
         }
         let stored = format!("{}.{}", Uuid::new_v4(), ext);
-        let path: PathBuf = [UPLOAD_DIR, &stored].iter().collect();
+        let path = crate::paths::uploads_dir().join(&stored);
         let mut out = fs::File::create(&path).await?;
         while let Some(chunk) = field.chunk().await.map_err(anyhow::Error::from)? {
             out.write_all(&chunk).await?;
@@ -127,7 +126,7 @@ async fn stream(
         return Err(AppError(anyhow::anyhow!("invalid filename")));
     }
     ensure_media_owner(&pool, &file, user.id).await?;
-    let path: PathBuf = [UPLOAD_DIR, &file].iter().collect();
+    let path = crate::paths::uploads_dir().join(&file);
 
     let mut f = match fs::File::open(&path).await {
         Ok(f) => f,
