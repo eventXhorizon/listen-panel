@@ -102,6 +102,34 @@ export interface AsrStatus {
   timeout_seconds: number;
 }
 
+export interface WorkerEndpointProbe {
+  ok: boolean;
+  status?: number | null;
+  latency_ms: number;
+  error?: string | null;
+}
+
+export interface WorkerSummary {
+  service?: string | null;
+  version?: string | null;
+  queue?: string | null;
+  max_concurrent_jobs?: number | null;
+  device?: string | null;
+  compute_type?: string | null;
+  capabilities: string[];
+}
+
+export interface AsrHealthCheckStatus {
+  ok: boolean;
+  configured: boolean;
+  base_url: string;
+  token_configured: boolean;
+  checked_at: string;
+  health: WorkerEndpointProbe;
+  capabilities: WorkerEndpointProbe;
+  worker?: WorkerSummary | null;
+}
+
 export interface DataDirStatus {
   active_dir: string;
   configured_dir?: string | null;

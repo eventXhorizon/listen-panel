@@ -1,9 +1,14 @@
+use std::time::Instant;
+
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
+use axum::http::header;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::auth::{self, CurrentUser};
 use crate::config::{self, AsrProvider, SharedAsr, SharedLlm, SharedTts, TtsProvider};
@@ -14,6 +19,7 @@ pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/settings/llm", get(get_llm).put(put_llm))
         .route("/settings/tts", get(get_tts).put(put_tts))
+        .route("/settings/asr/health-check", post(check_asr_health))
         .route("/settings/asr", get(get_asr).put(put_asr))
         .route("/settings/data-dir", get(get_data_dir).put(put_data_dir))
 }
@@ -48,6 +54,38 @@ pub struct AsrStatus {
     pub vad_filter: bool,
     pub condition_on_previous_text: bool,
     pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AsrHealthCheckStatus {
+    pub ok: bool,
+    pub configured: bool,
+    pub base_url: String,
+    pub token_configured: bool,
+    pub checked_at: DateTime<Utc>,
+    pub health: WorkerEndpointProbe,
+    pub capabilities: WorkerEndpointProbe,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkerEndpointProbe {
+    pub ok: bool,
+    pub status: Option<u16>,
+    pub latency_ms: u128,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkerSummary {
+    pub service: Option<String>,
+    pub version: Option<String>,
+    pub queue: Option<String>,
+    pub max_concurrent_jobs: Option<i64>,
+    pub device: Option<String>,
+    pub compute_type: Option<String>,
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +123,14 @@ pub struct UpdateAsr {
     pub vad_filter: Option<bool>,
     pub condition_on_previous_text: Option<bool>,
     pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckAsrHealth {
+    /// Optional unsaved URL from the settings form.
+    pub base_url: Option<String>,
+    /// Empty string or absent uses the currently saved token.
+    pub api_token: Option<String>,
 }
 
 async fn get_llm(State(llm): State<SharedLlm>, user: CurrentUser) -> axum::response::Response {
@@ -311,6 +357,81 @@ async fn put_asr(
     .map(axum::response::IntoResponse::into_response)
 }
 
+async fn check_asr_health(
+    State(asr): State<SharedAsr>,
+    user: CurrentUser,
+    Json(input): Json<CheckAsrHealth>,
+) -> Result<axum::response::Response> {
+    if !user.is_admin {
+        return Ok(auth::forbidden());
+    }
+
+    let cfg = asr.read().await.clone();
+    let base_url = input
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(cfg.base_url.trim())
+        .trim_end_matches('/')
+        .to_string();
+    let api_token = input
+        .api_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(cfg.api_token.trim())
+        .to_string();
+
+    if base_url.is_empty() {
+        let skipped = WorkerEndpointProbe {
+            ok: false,
+            status: None,
+            latency_ms: 0,
+            error: Some("ASR worker base URL is empty".to_string()),
+        };
+        return Ok(Json(AsrHealthCheckStatus {
+            ok: false,
+            configured: false,
+            base_url,
+            token_configured: !api_token.is_empty(),
+            checked_at: Utc::now(),
+            health: skipped.clone(),
+            capabilities: skipped,
+            worker: None,
+        })
+        .into_response());
+    }
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
+    let health_url = format!("{base_url}/health");
+    let capabilities_url = format!("{base_url}/v1/capabilities");
+    let health = probe_worker_endpoint(&client, &health_url, None).await;
+    let capabilities =
+        probe_worker_endpoint(&client, &capabilities_url, Some(api_token.as_str())).await;
+    let worker = capabilities
+        .body
+        .as_ref()
+        .and_then(worker_summary_from_capabilities);
+    let health_probe = health.into_probe();
+    let capabilities_probe = capabilities.into_probe();
+
+    Ok(Json(AsrHealthCheckStatus {
+        ok: health_probe.ok && capabilities_probe.ok,
+        configured: cfg.configured(),
+        base_url,
+        token_configured: !api_token.is_empty(),
+        checked_at: Utc::now(),
+        health: health_probe,
+        capabilities: capabilities_probe,
+        worker,
+    })
+    .into_response())
+}
+
 async fn get_data_dir(user: CurrentUser) -> Result<axum::response::Response> {
     if !user.is_admin {
         return Ok(auth::forbidden());
@@ -328,4 +449,118 @@ async fn put_data_dir(
     }
     let status: DataDirStatus = crate::paths::save_configured_dir(&patch.data_dir).await?;
     Ok(Json(status).into_response())
+}
+
+#[derive(Debug, Clone)]
+struct WorkerEndpointResult {
+    ok: bool,
+    status: Option<u16>,
+    latency_ms: u128,
+    error: Option<String>,
+    body: Option<Value>,
+}
+
+impl WorkerEndpointResult {
+    fn into_probe(self) -> WorkerEndpointProbe {
+        WorkerEndpointProbe {
+            ok: self.ok,
+            status: self.status,
+            latency_ms: self.latency_ms,
+            error: self.error,
+        }
+    }
+}
+
+async fn probe_worker_endpoint(
+    client: &reqwest::Client,
+    url: &str,
+    api_token: Option<&str>,
+) -> WorkerEndpointResult {
+    let started = Instant::now();
+    let mut req = client.get(url);
+    if let Some(token) = api_token.map(str::trim).filter(|value| !value.is_empty()) {
+        req = req.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    let response = match req.send().await {
+        Ok(response) => response,
+        Err(err) => {
+            return WorkerEndpointResult {
+                ok: false,
+                status: None,
+                latency_ms: started.elapsed().as_millis(),
+                error: Some(err.to_string()),
+                body: None,
+            };
+        }
+    };
+    let status = response.status();
+    let text = match response.text().await {
+        Ok(text) => text,
+        Err(err) => {
+            return WorkerEndpointResult {
+                ok: false,
+                status: Some(status.as_u16()),
+                latency_ms: started.elapsed().as_millis(),
+                error: Some(err.to_string()),
+                body: None,
+            };
+        }
+    };
+    let body = serde_json::from_str::<Value>(&text).ok();
+    WorkerEndpointResult {
+        ok: status.is_success(),
+        status: Some(status.as_u16()),
+        latency_ms: started.elapsed().as_millis(),
+        error: if status.is_success() {
+            None
+        } else {
+            Some(trim_probe_body(&text))
+        },
+        body,
+    }
+}
+
+fn trim_probe_body(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "empty response body".to_string();
+    }
+    trimmed.chars().take(500).collect()
+}
+
+fn worker_summary_from_capabilities(value: &Value) -> Option<WorkerSummary> {
+    let object = value.as_object()?;
+    Some(WorkerSummary {
+        service: object
+            .get("service")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        version: object
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        queue: object
+            .get("queue")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        max_concurrent_jobs: object.get("max_concurrent_jobs").and_then(Value::as_i64),
+        device: object
+            .get("device")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        compute_type: object
+            .get("compute_type")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        capabilities: object
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("type").and_then(Value::as_str).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
 }

@@ -2,6 +2,7 @@ import type {
   CreateMaterial,
   CreateMaterialNote,
   CreateVocab,
+  AsrHealthCheckStatus,
   AuthStatus,
   JobWithSegments,
   Material,
@@ -208,4 +209,16 @@ export function createTranscriptionStudy(id: number): Promise<TranscriptionJob> 
 
 export function getTranscriptionSegments(id: number): Promise<JobWithSegments> {
   return request<JobWithSegments>(`/api/transcriptions/${id}/segments`);
+}
+
+// Settings
+
+export function checkAsrHealth(data: {
+  base_url?: string;
+  api_token?: string;
+}): Promise<AsrHealthCheckStatus> {
+  return request<AsrHealthCheckStatus>('/api/settings/asr/health-check', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
 }

@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
+import { checkAsrHealth } from '../api';
 import { useAuth } from '../lib/auth-context';
 import { loadSettings, saveSettings } from '../lib/settings';
-import type { AsrStatus, DataDirStatus, LlmStatus, TtsStatus } from '../types';
+import type {
+  AsrHealthCheckStatus,
+  AsrStatus,
+  DataDirStatus,
+  LlmStatus,
+  TtsStatus,
+  WorkerEndpointProbe,
+} from '../types';
 
 export default function Settings() {
   const auth = useAuth();
@@ -33,6 +41,9 @@ export default function Settings() {
   const [showAsrToken, setShowAsrToken] = useState(false);
   const [dataDirStatus, setDataDirStatus] = useState<DataDirStatus | null>(null);
   const [dataDir, setDataDir] = useState('');
+  const [asrHealth, setAsrHealth] = useState<AsrHealthCheckStatus | null>(null);
+  const [checkingAsrHealth, setCheckingAsrHealth] = useState(false);
+  const [asrHealthErr, setAsrHealthErr] = useState<string | null>(null);
 
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -278,6 +289,22 @@ export default function Settings() {
     }
   }
 
+  async function onCheckAsrHealth() {
+    setCheckingAsrHealth(true);
+    setAsrHealthErr(null);
+    try {
+      const result = await checkAsrHealth({
+        base_url: asrBaseUrl.trim(),
+        api_token: asrToken.trim() || undefined,
+      });
+      setAsrHealth(result);
+    } catch (e) {
+      setAsrHealthErr((e as Error).message);
+    } finally {
+      setCheckingAsrHealth(false);
+    }
+  }
+
   const keyPlaceholder = status?.configured
     ? '已配置 ●●●●●● (留空保留现有 key)'
     : 'sk-...';
@@ -512,6 +539,22 @@ export default function Settings() {
                   placeholder="http://192.168.0.50:8765"
                   className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
                 />
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={onCheckAsrHealth}
+                    disabled={checkingAsrHealth || !asrBaseUrl.trim()}
+                    className="inline-flex h-8 items-center rounded-md border border-sky-200 bg-sky-50 px-3 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+                  >
+                    {checkingAsrHealth ? '检查中...' : '健康检查'}
+                  </button>
+                  <span className="text-xs text-stone-500">
+                    从 listen-panel 后端访问 worker,适合验证公网/隧道地址。
+                  </span>
+                </div>
+                {(asrHealth || asrHealthErr) && (
+                  <AsrHealthResult result={asrHealth} error={asrHealthErr} />
+                )}
               </Field>
 
               <Field label="Backend Base URL">
@@ -671,6 +714,103 @@ function StatusBadge({
     <span className="text-xs px-2 py-0.5 rounded bg-stone-100 text-stone-600 border border-stone-200">
       ○ 未配置
     </span>
+  );
+}
+
+function AsrHealthResult({
+  result,
+  error,
+}: {
+  result: AsrHealthCheckStatus | null;
+  error: string | null;
+}) {
+  if (error) {
+    return (
+      <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+        健康检查失败: {error}
+      </div>
+    );
+  }
+  if (!result) return null;
+
+  return (
+    <div
+      className={`mt-3 rounded-md border px-3 py-3 text-xs ${
+        result.ok
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          : 'border-amber-200 bg-amber-50 text-amber-800'
+      }`}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="font-medium">
+          {result.ok ? 'GPU Worker 可达' : 'GPU Worker 未完全可达'}
+        </span>
+        <span className="font-mono text-[11px] text-stone-500">
+          {new Date(result.checked_at).toLocaleTimeString()}
+        </span>
+      </div>
+      <div className="space-y-1.5 text-stone-700">
+        <EndpointProbe label="/health" probe={result.health} />
+        <EndpointProbe label="/v1/capabilities" probe={result.capabilities} />
+      </div>
+      {result.worker && (
+        <div className="mt-3 grid grid-cols-1 gap-1.5 border-t border-current/10 pt-3 text-stone-700 sm:grid-cols-2">
+          <InfoLine label="Service" value={result.worker.service} />
+          <InfoLine label="Version" value={result.worker.version} />
+          <InfoLine label="Device" value={result.worker.device} />
+          <InfoLine label="Compute" value={result.worker.compute_type} />
+          <InfoLine label="Queue" value={result.worker.queue} />
+          <InfoLine
+            label="Jobs"
+            value={
+              result.worker.max_concurrent_jobs == null
+                ? undefined
+                : String(result.worker.max_concurrent_jobs)
+            }
+          />
+        </div>
+      )}
+      {result.worker?.capabilities.length ? (
+        <p className="mt-2 text-stone-600">
+          Capabilities: {result.worker.capabilities.join(', ')}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function EndpointProbe({
+  label,
+  probe,
+}: {
+  label: string;
+  probe: WorkerEndpointProbe;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span className={probe.ok ? 'text-emerald-700' : 'text-rose-700'}>
+        {probe.ok ? '通过' : '失败'}
+      </span>
+      <span className="font-mono">{label}</span>
+      {probe.status != null && <span>HTTP {probe.status}</span>}
+      <span>{probe.latency_ms}ms</span>
+      {probe.error && <span className="break-all text-rose-700">{probe.error}</span>}
+    </div>
+  );
+}
+
+function InfoLine({
+  label,
+  value,
+}: {
+  label: string;
+  value?: string | null;
+}) {
+  return (
+    <div className="min-w-0">
+      <span className="text-stone-500">{label}: </span>
+      <span className="font-mono break-all">{value || '-'}</span>
+    </div>
   );
 }
 

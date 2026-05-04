@@ -243,6 +243,7 @@ listen-panel/
 | POST | `/auth/logout` | 删除当前 session,清 cookie |
 | GET | `/settings/asr` | 返 `{configured, provider, base_url, token_configured, backend_base_url, model, language, beam_size, vad_filter, condition_on_previous_text, timeout_seconds}`,**永不返 api_token** |
 | PUT | `/settings/asr` | 局部更新远程 ASR worker 配置;空 token 保留现有 |
+| POST | `/settings/asr/health-check` | 管理员手动检测 GPU worker `/health` 和 `/v1/capabilities`;可传 `{base_url, api_token?}` 检查未保存的公网/隧道地址,不返回 token |
 | GET | `/settings/data-dir` | 返 `{active_dir, configured_dir, pending_dir, source, restart_required}`;管理员可见 |
 | PUT | `/settings/data-dir` | 保存 `{data_dir}` 到 `backend/data-dir.json`,重启后生效;如果已设置 `LISTEN_PANEL_DATA_DIR` 则拒绝覆盖 |
 | POST | `/materials/:id/transcriptions` | 为当前用户材料创建转写任务,后台调用远程 worker |
@@ -418,6 +419,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   - 输出格式(默认 `mp3_44100_128`)
 - **远程 ASR Worker**(走后端 `/api/settings/asr`)
   - Worker Base URL:GPU 机器上的 worker 地址,如 `http://192.168.0.50:8765`
+  - 健康检查:从 listen-panel 后端请求 worker 的 `/health` 和 `/v1/capabilities`,用于验证局域网、公网或隧道地址是否可达,并显示 device、compute type、capabilities 和延迟
   - Backend Base URL:GPU 机器回连本机后端读取 local 视频的地址,如 `http://192.168.0.113:9527`
   - Shared Token:可选 worker 鉴权 token;仅保存,不回传前端
   - 模型默认 `large-v3`,语言默认 `en`,Beam Size 默认 5,超时默认 7200 秒
