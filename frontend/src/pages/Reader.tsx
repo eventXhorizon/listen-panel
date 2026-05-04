@@ -4,16 +4,27 @@ import {
   useRef,
   useCallback,
   type CSSProperties,
+  type ReactNode,
 } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  createTranscriptionStudy,
   createTranscriptionJob,
   getMaterial,
   getTranscriptionJob,
+  getTranscriptionSegments,
   listTranscriptionJobs,
   listVocab,
 } from '../api';
-import type { Material, TranscriptionJob, VocabEntry } from '../types';
+import type {
+  GrammarPoint,
+  Material,
+  TranscriptSegment,
+  TranscriptionJob,
+  UsagePoint,
+  VocabEntry,
+  SegmentStudy,
+} from '../types';
 import VideoPlayer from '../components/VideoPlayer';
 import SelectionPopup from '../components/SelectionPopup';
 import AddVocabDialog from '../components/AddVocabDialog';
@@ -47,6 +58,8 @@ interface ReaderTypography {
 
 const TYPOGRAPHY_STORAGE_KEY = 'listen-panel.readerTypography';
 const ARTICLE_SCROLL_PREFIX = 'listen-panel:article-scroll:';
+const STUDY_VISIBLE_PREFIX = 'listen-panel:study-visible:';
+const SEGMENT_MERGE_GAP_MS = 1200;
 const DEFAULT_TYPOGRAPHY: ReaderTypography = {
   font: 'system',
   fontSize: 17,
@@ -160,6 +173,26 @@ function articleScrollKey(materialId: number): string {
   return `${ARTICLE_SCROLL_PREFIX}${materialId}`;
 }
 
+function studyVisibleKey(materialId: number): string {
+  return `${STUDY_VISIBLE_PREFIX}${materialId}`;
+}
+
+function loadStudyVisible(materialId: number): boolean {
+  try {
+    return window.localStorage.getItem(studyVisibleKey(materialId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveStudyVisible(materialId: number, visible: boolean) {
+  try {
+    window.localStorage.setItem(studyVisibleKey(materialId), visible ? '1' : '0');
+  } catch {
+    // ignore storage failures
+  }
+}
+
 function loadArticleScroll(materialId: number): number | null {
   try {
     const raw = window.localStorage.getItem(articleScrollKey(materialId));
@@ -181,6 +214,51 @@ function saveArticleScroll(materialId: number, top: number) {
   );
 }
 
+function formatTimestamp(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '00:00';
+  const totalSeconds = Math.round(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function canMergeSegment(
+  previous: TranscriptSegment | undefined,
+  current: TranscriptSegment,
+): boolean {
+  if (!previous) return false;
+  if (previous.study || current.study) return false;
+  return current.start_ms - previous.end_ms <= SEGMENT_MERGE_GAP_MS;
+}
+
+function groupPlainSegments(
+  segments: TranscriptSegment[],
+): Array<TranscriptSegment[]> {
+  const groups: Array<TranscriptSegment[]> = [];
+  for (const segment of segments) {
+    const lastGroup = groups.at(-1);
+    const previous = lastGroup?.at(-1);
+    if (lastGroup && canMergeSegment(previous, segment)) {
+      lastGroup.push(segment);
+    } else {
+      groups.push([segment]);
+    }
+  }
+  return groups;
+}
+
+function paragraphText(el: HTMLElement): string {
+  return el.dataset.paragraphText || el.textContent || '';
+}
+
+function isSegmentStudy(value: SegmentStudy | undefined): value is SegmentStudy {
+  return Boolean(value);
+}
+
 export default function Reader() {
   const { id } = useParams();
   const mid = Number(id);
@@ -192,6 +270,11 @@ export default function Reader() {
   const [pending, setPending] = useState<PendingAdd | null>(null);
   const [showVocabPanel, setShowVocabPanel] = useState(false);
   const [job, setJob] = useState<TranscriptionJob | null>(null);
+  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [segmentsErr, setSegmentsErr] = useState<string | null>(null);
+  const [showStudy, setShowStudy] = useState(false);
+  const [studyErr, setStudyErr] = useState<string | null>(null);
+  const [studySubmitting, setStudySubmitting] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptionErr, setTranscriptionErr] = useState<string | null>(null);
   const [showTypography, setShowTypography] = useState(false);
@@ -218,12 +301,27 @@ export default function Reader() {
       setM(data);
       setVocab(await listVocab(mid));
       const jobs = await listTranscriptionJobs(mid);
-      setJob(jobs[0] ?? null);
+      const latest = jobs[0] ?? null;
+      setJob(latest);
+      const shouldShowStudy = latest?.status === 'succeeded' && loadStudyVisible(mid);
+      setShowStudy(shouldShowStudy);
+      if (latest?.status === 'succeeded') {
+        try {
+          const withSegments = await getTranscriptionSegments(latest.id);
+          setSegments(withSegments.segments);
+          setSegmentsErr(null);
+        } catch (e) {
+          setSegmentsErr((e as Error).message);
+        }
+      } else {
+        setSegments([]);
+        setSegmentsErr(null);
+      }
     })();
   }, [mid, navigate]);
 
   useEffect(() => {
-    if (!job || (job.status !== 'queued' && job.status !== 'running')) return;
+    if (!job || !shouldPollTranscription(job, showStudy)) return;
     const timer = window.setInterval(async () => {
       try {
         const next = await getTranscriptionJob(job.id);
@@ -231,17 +329,28 @@ export default function Reader() {
         if (next.status === 'failed') {
           setTranscriptionErr(next.error || '转写失败,请检查 ASR worker 配置');
         }
-        if (next.status === 'succeeded') {
+        if (next.status === 'succeeded' && segments.length === 0) {
           setTranscriptionErr(null);
           const refreshed = await getMaterial(mid);
           if (refreshed) setM(refreshed);
+          const withSegments = await getTranscriptionSegments(next.id);
+          setSegments(withSegments.segments);
+          setSegmentsErr(null);
+          if (!loadStudyVisible(mid)) {
+            setShowStudy(false);
+          }
+        }
+        if (next.status === 'succeeded' && showStudy) {
+          const withSegments = await getTranscriptionSegments(next.id);
+          setSegments(withSegments.segments);
+          setSegmentsErr(null);
         }
       } catch (e) {
         setTranscriptionErr((e as Error).message);
       }
     }, 2500);
     return () => window.clearInterval(timer);
-  }, [job, mid]);
+  }, [job, mid, segments.length, showStudy]);
 
   async function refreshVocab() {
     setVocab(await listVocab(mid));
@@ -251,14 +360,40 @@ export default function Reader() {
     if (!m || transcribing) return;
     if (job && (job.status === 'queued' || job.status === 'running')) return;
     setTranscriptionErr(null);
+    setStudyErr(null);
     setTranscribing(true);
     try {
       const created = await createTranscriptionJob(m.id);
       setJob(created);
+      setSegments([]);
+      setSegmentsErr(null);
+      setShowStudy(false);
+      saveStudyVisible(m.id, false);
     } catch (e) {
       setTranscriptionErr((e as Error).message);
     } finally {
       setTranscribing(false);
+    }
+  }
+
+  async function toggleStudy() {
+    if (!m || !job || job.status !== 'succeeded') return;
+    const nextVisible = !showStudy;
+    setShowStudy(nextVisible);
+    saveStudyVisible(m.id, nextVisible);
+    setStudyErr(null);
+
+    if (!nextVisible) return;
+    if (job.study_status === 'succeeded') return;
+
+    setStudySubmitting(true);
+    try {
+      const updated = await createTranscriptionStudy(job.id);
+      setJob(updated);
+    } catch (e) {
+      setStudyErr((e as Error).message);
+    } finally {
+      setStudySubmitting(false);
     }
   }
 
@@ -374,7 +509,7 @@ export default function Reader() {
           .split(/\n{2,}/)
           .map((p) => p.trim())
           .filter(Boolean);
-        const para = paragraphs[paraIdx] ?? '';
+        const para = paragraphText(paraEl) || paragraphs[paraIdx] || '';
         const offset = para.toLowerCase().indexOf(text.toLowerCase());
         context = offset >= 0 ? findSentence(para, offset) : para;
       }
@@ -398,6 +533,8 @@ export default function Reader() {
         .map((p) => p.trim())
         .filter(Boolean)
     : [];
+  const segmentGroups =
+    segments.length > 0 ? groupPlainSegments(segments) : [];
   const fontFamily =
     FONT_OPTIONS.find((x) => x.value === typography.font)?.family ??
     FONT_OPTIONS[0].family;
@@ -539,6 +676,21 @@ export default function Reader() {
             >
               {transcriptionButtonLabel(job, transcribing)}
             </button>
+            {job?.status === 'succeeded' && (
+              <button
+                type="button"
+                onClick={toggleStudy}
+                disabled={studySubmitting}
+                className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400 ${
+                  showStudy
+                    ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                    : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
+                }`}
+                title="按需生成并显示分段翻译、语法和固定搭配"
+              >
+                {studyButtonLabel(job, showStudy, studySubmitting)}
+              </button>
+            )}
             <Link
               to={`/m/${m.id}/edit`}
               className="inline-flex h-8 items-center rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-800 hover:bg-violet-100"
@@ -551,6 +703,12 @@ export default function Reader() {
           <div className="border-t border-rose-100 bg-rose-50 px-6 py-2 text-sm text-rose-700">
             生成原文失败:{' '}
             <span className="font-medium break-words">{transcriptionErr}</span>
+          </div>
+        )}
+        {studyErr && (
+          <div className="border-t border-rose-100 bg-rose-50 px-6 py-2 text-sm text-rose-700">
+            翻译分析失败:{' '}
+            <span className="font-medium break-words">{studyErr}</span>
           </div>
         )}
       </div>
@@ -587,13 +745,40 @@ export default function Reader() {
                           : '失败'}
                   </span>
                 )}
+                {job?.status === 'succeeded' && (
+                  <span className="ml-3">
+                    翻译分析: {studyStatusLabel(job)}
+                  </span>
+                )}
+                {segmentsErr && (
+                  <span className="ml-3 text-rose-600">
+                    分段加载失败: {segmentsErr}
+                  </span>
+                )}
+                {showStudy && job?.study_status === 'running' && (
+                  <StudyProgress job={job} analyzedCount={analyzedSegmentCount(segments)} />
+                )}
               </div>
             )}
-            {paragraphs.length > 0 ? (
+            {segmentGroups.length > 0 ? (
+              segmentGroups.map((group, i) => (
+                <TranscriptSegmentBlock
+                  key={group.map((s) => s.id).join('-')}
+                  group={group}
+                  paragraphIndex={i}
+                  materialId={m.id}
+                  vocab={vocab}
+                  highlightOn={highlightOn}
+                  paragraphStyle={paragraphStyle}
+                  showStudy={showStudy}
+                />
+              ))
+            ) : paragraphs.length > 0 ? (
               paragraphs.map((p, i) => (
                 <p
                   key={i}
                   data-paragraph={i}
+                  data-paragraph-text={p}
                   className="mb-5 text-stone-800"
                   style={paragraphStyle}
                 >
@@ -682,6 +867,187 @@ function transcriptionButtonLabel(
   if (job?.status === 'running') return `转写中 ${job.progress}%`;
   if (job?.status === 'succeeded') return '重转写';
   return '转写';
+}
+
+function studyButtonLabel(
+  job: TranscriptionJob | null,
+  showStudy: boolean,
+  submitting: boolean,
+): string {
+  if (submitting) return '提交分析...';
+  if (job?.study_status === 'running') return '分析中';
+  if (showStudy) return '隐藏分析';
+  if (job?.study_status === 'succeeded') return '显示分析';
+  return '翻译分析';
+}
+
+function shouldPollTranscription(
+  job: TranscriptionJob,
+  showStudy: boolean,
+): boolean {
+  if (job.status === 'queued' || job.status === 'running') return true;
+  if (job.status !== 'succeeded') return false;
+  return showStudy && job.study_status === 'running';
+}
+
+function studyStatusLabel(job: TranscriptionJob): string {
+  if (job.study_status === 'pending') return '等待中';
+  if (job.study_status === 'running') {
+    return `${job.study_stage || '分析中'} ${job.study_progress}%`;
+  }
+  if (job.study_status === 'succeeded') return '已生成';
+  if (job.study_status === 'skipped') {
+    return job.study_error ? `已跳过 (${job.study_error})` : '已跳过';
+  }
+  return job.study_error ? `失败 (${job.study_error})` : '失败';
+}
+
+function analyzedSegmentCount(segments: TranscriptSegment[]): number {
+  return segments.filter((segment) => segment.study).length;
+}
+
+function StudyProgress({
+  job,
+  analyzedCount,
+}: {
+  job: TranscriptionJob;
+  analyzedCount: number;
+}) {
+  const progress = Math.max(0, Math.min(100, job.study_progress));
+  return (
+    <div className="mt-2 rounded-md border border-indigo-100 bg-white px-3 py-2">
+      <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-stone-500">
+        <span>
+          {job.study_stage || '正在分批分析'} · 已完成 {analyzedCount} 段
+        </span>
+        <span className="font-mono text-indigo-700">{progress}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-stone-200">
+        <div
+          className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+      <p className="mt-1 text-[11px] leading-5 text-stone-500">
+        长文章会分批处理，已完成的段落会先显示。
+      </p>
+    </div>
+  );
+}
+
+function TranscriptSegmentBlock({
+  group,
+  paragraphIndex,
+  materialId,
+  vocab,
+  highlightOn,
+  paragraphStyle,
+  showStudy,
+}: {
+  group: TranscriptSegment[];
+  paragraphIndex: number;
+  materialId: number;
+  vocab: VocabEntry[];
+  highlightOn: boolean;
+  paragraphStyle: CSSProperties;
+  showStudy: boolean;
+}) {
+  const text = group.map((segment) => segment.text).join(' ');
+  const start = group[0]?.start_ms ?? 0;
+  const end = group[group.length - 1]?.end_ms ?? start;
+  const studies = group.map((segment) => segment.study).filter(isSegmentStudy);
+
+  return (
+    <section
+      data-paragraph={paragraphIndex}
+      data-paragraph-text={text}
+      className="mb-7 scroll-mt-6"
+    >
+      <div className="mb-2 text-[11px] font-medium text-stone-400">
+        {formatTimestamp(start)} - {formatTimestamp(end)}
+      </div>
+      <p className="text-stone-800" style={paragraphStyle}>
+        {highlightOn ? highlightText(text, vocab, materialId) : text}
+      </p>
+      {showStudy && studies.map((study, index) => (
+        <div
+          key={group[index]?.id ?? index}
+          className="mt-3 rounded-md border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-700"
+        >
+          {study.translation_zh && (
+            <p className="leading-7 text-stone-800">{study.translation_zh}</p>
+          )}
+          {study.grammar_points.length > 0 && (
+            <StudyPointList
+              title="语法"
+              items={study.grammar_points}
+              render={(point) => <GrammarPointItem point={point} />}
+            />
+          )}
+          {study.usage_points.length > 0 && (
+            <StudyPointList
+              title="搭配"
+              items={study.usage_points}
+              render={(point) => <UsagePointItem point={point} />}
+            />
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function StudyPointList<T>({
+  title,
+  items,
+  render,
+}: {
+  title: string;
+  items: T[];
+  render: (item: T) => ReactNode;
+}) {
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-stone-500">
+        {title}
+      </div>
+      <ul className="space-y-2">
+        {items.map((item, index) => (
+          <li key={index}>{render(item)}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function GrammarPointItem({ point }: { point: GrammarPoint }) {
+  return (
+    <div className="leading-6">
+      <span className="font-medium text-stone-900">{point.title}</span>
+      <span className="text-stone-600">: {point.explanation_zh}</span>
+      {point.evidence && (
+        <span className="ml-1 text-stone-500">例: {point.evidence}</span>
+      )}
+      {point.tip_zh && (
+        <div className="text-xs leading-5 text-stone-500">{point.tip_zh}</div>
+      )}
+    </div>
+  );
+}
+
+function UsagePointItem({ point }: { point: UsagePoint }) {
+  return (
+    <div className="leading-6">
+      <span className="font-medium text-stone-900">{point.phrase}</span>
+      <span className="text-stone-600">: {point.meaning_zh}</span>
+      {point.note_zh && (
+        <div className="text-xs leading-5 text-stone-500">{point.note_zh}</div>
+      )}
+      {point.example && (
+        <div className="text-xs leading-5 text-stone-500">例: {point.example}</div>
+      )}
+    </div>
+  );
 }
 
 function TypographySlider({

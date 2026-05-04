@@ -88,9 +88,33 @@ export interface TranscriptionJob {
   status: 'queued' | 'running' | 'succeeded' | 'failed';
   progress: number;
   error?: string | null;
+  study_status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
+  study_error?: string | null;
+  study_progress: number;
+  study_stage: string;
   created_at: string;
   updated_at: string;
   completed_at?: string | null;
+}
+
+export interface GrammarPoint {
+  title: string;
+  explanation_zh: string;
+  evidence?: string;
+  tip_zh?: string;
+}
+
+export interface UsagePoint {
+  phrase: string;
+  meaning_zh: string;
+  note_zh?: string;
+  example?: string;
+}
+
+export interface SegmentStudy {
+  translation_zh: string;
+  grammar_points: GrammarPoint[];
+  usage_points: UsagePoint[];
 }
 
 export interface TranscriptSegment {
@@ -100,6 +124,7 @@ export interface TranscriptSegment {
   start_ms: number;
   end_ms: number;
   text: string;
+  study?: SegmentStudy;
 }
 
 export interface JobWithSegments {

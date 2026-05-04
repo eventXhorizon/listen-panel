@@ -5,6 +5,7 @@ mod error;
 mod models;
 mod paths;
 mod routes;
+mod study;
 
 use std::time::Duration;
 

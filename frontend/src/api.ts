@@ -170,6 +170,12 @@ export function getTranscriptionJob(id: number): Promise<TranscriptionJob> {
   return request<TranscriptionJob>(`/api/transcriptions/${id}`);
 }
 
+export function createTranscriptionStudy(id: number): Promise<TranscriptionJob> {
+  return request<TranscriptionJob>(`/api/transcriptions/${id}/study`, {
+    method: 'POST',
+  });
+}
+
 export function getTranscriptionSegments(id: number): Promise<JobWithSegments> {
   return request<JobWithSegments>(`/api/transcriptions/${id}/segments`);
 }

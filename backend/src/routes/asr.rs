@@ -16,16 +16,19 @@ use crate::auth::{self, CurrentUser};
 use crate::config::{AsrConfig, AsrProvider};
 use crate::error::{AppError, Result};
 use crate::models::{Material, TranscriptSegment, TranscriptionJob};
+use crate::study::{SegmentStudyView, parse_study_view};
 
 const JOB_SELECT_COLS: &str = "id, user_id, material_id, provider, model, language, \
-    status, progress, error, created_at, updated_at, completed_at";
-const SEGMENT_SELECT_COLS: &str = "id, job_id, material_id, start_ms, end_ms, text";
+    status, progress, error, study_status, study_error, study_progress, study_stage, \
+    created_at, updated_at, completed_at";
+const SEGMENT_SELECT_COLS: &str = "s.id, s.job_id, s.material_id, s.start_ms, s.end_ms, s.text";
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/materials/:id/transcriptions", post(create).get(list))
         .route("/transcriptions/:id", get(get_one))
         .route("/transcriptions/:id/segments", get(segments))
+        .route("/transcriptions/:id/study", post(create_study))
         .route("/asr/media/:job_id", get(stream_job_media))
         .route("/asr/progress/:job_id", post(update_progress))
 }
@@ -33,7 +36,32 @@ pub fn router() -> Router<crate::AppState> {
 #[derive(Debug, Serialize)]
 struct JobWithSegments {
     job: TranscriptionJob,
-    segments: Vec<TranscriptSegment>,
+    segments: Vec<TranscriptSegmentWithStudy>,
+}
+
+#[derive(Debug, Serialize)]
+struct TranscriptSegmentWithStudy {
+    id: i64,
+    job_id: i64,
+    material_id: i64,
+    start_ms: i64,
+    end_ms: i64,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    study: Option<SegmentStudyView>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TranscriptSegmentRow {
+    id: i64,
+    job_id: i64,
+    material_id: i64,
+    start_ms: i64,
+    end_ms: i64,
+    text: String,
+    translation_zh: Option<String>,
+    grammar_points: Option<String>,
+    usage_points: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,15 +177,7 @@ async fn get_one(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<TranscriptionJob>> {
-    let row = sqlx::query_as::<_, TranscriptionJob>(&format!(
-        "SELECT {JOB_SELECT_COLS} FROM transcription_jobs \
-         WHERE id = ? AND user_id = ?"
-    ))
-    .bind(id)
-    .bind(user.id)
-    .fetch_one(&pool)
-    .await?;
-    Ok(Json(row))
+    Ok(Json(job_for_user(&pool, id, user.id).await?))
 }
 
 async fn segments(
@@ -165,23 +185,79 @@ async fn segments(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<JobWithSegments>> {
-    let job = sqlx::query_as::<_, TranscriptionJob>(&format!(
-        "SELECT {JOB_SELECT_COLS} FROM transcription_jobs \
-         WHERE id = ? AND user_id = ?"
-    ))
-    .bind(id)
-    .bind(user.id)
-    .fetch_one(&pool)
-    .await?;
-    let segments = sqlx::query_as::<_, TranscriptSegment>(&format!(
-        "SELECT {SEGMENT_SELECT_COLS} FROM transcript_segments \
-         WHERE job_id = ? \
-         ORDER BY start_ms ASC, id ASC"
+    let job = job_for_user(&pool, id, user.id).await?;
+    let rows = sqlx::query_as::<_, TranscriptSegmentRow>(&format!(
+        "SELECT {SEGMENT_SELECT_COLS}, \
+                st.translation_zh, st.grammar_points, st.usage_points \
+         FROM transcript_segments s \
+         LEFT JOIN transcript_segment_studies st ON st.segment_id = s.id \
+         WHERE s.job_id = ? \
+         ORDER BY s.start_ms ASC, s.id ASC"
     ))
     .bind(id)
     .fetch_all(&pool)
     .await?;
+    let segments = rows
+        .into_iter()
+        .map(|row| TranscriptSegmentWithStudy {
+            id: row.id,
+            job_id: row.job_id,
+            material_id: row.material_id,
+            start_ms: row.start_ms,
+            end_ms: row.end_ms,
+            text: row.text,
+            study: parse_study_view(
+                row.id,
+                row.translation_zh,
+                row.grammar_points,
+                row.usage_points,
+            ),
+        })
+        .collect();
     Ok(Json(JobWithSegments { job, segments }))
+}
+
+async fn create_study(
+    State(state): State<crate::AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<TranscriptionJob>> {
+    let job = job_for_user(&state.pool, id, user.id).await?;
+    if job.status != "succeeded" {
+        return Err(AppError(anyhow::anyhow!(
+            "transcription must succeed before study generation"
+        )));
+    }
+    if job.study_status == "running" {
+        return Ok(Json(job));
+    }
+
+    crate::study::mark_study_running(&state.pool, id).await?;
+    let spawned_state = state.clone();
+    tokio::spawn(async move {
+        tracing::info!(job_id = id, "starting segment study generation");
+        if let Err(e) = crate::study::generate_segment_studies_for_job(
+            &spawned_state.pool,
+            &spawned_state.llm,
+            id,
+        )
+        .await
+        {
+            let error = format!("{e:#}");
+            if let Err(mark_err) =
+                crate::study::mark_study_failed(&spawned_state.pool, id, &error).await
+            {
+                tracing::warn!(
+                    job_id = id,
+                    "failed to mark segment study failure: {mark_err:#}"
+                );
+            }
+            tracing::warn!(job_id = id, "segment study generation failed: {error}");
+        }
+    });
+
+    let updated = job_for_user(&state.pool, id, user.id).await?;
+    Ok(Json(updated))
 }
 
 async fn stream_job_media(
@@ -263,9 +339,10 @@ async fn run_job(
     );
     update_job_running(&state.pool, job_id).await?;
 
-    let result = async {
+    let result: Result<()> = async {
         let worker = call_worker(&cfg, &material, job_id, &media_token).await?;
-        persist_worker_result(&state.pool, job_id, material.id, worker).await
+        persist_worker_result(&state.pool, job_id, material.id, worker).await?;
+        Ok(())
     }
     .await;
 
@@ -352,7 +429,7 @@ async fn persist_worker_result(
     job_id: i64,
     material_id: i64,
     worker: WorkerResponse,
-) -> Result<()> {
+) -> Result<Vec<TranscriptSegment>> {
     let mut segments = worker.segments;
     if segments.is_empty() {
         segments.push(WorkerSegment {
@@ -374,6 +451,7 @@ async fn persist_worker_result(
     }
 
     let now = Utc::now();
+    let mut persisted = Vec::new();
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM transcript_segments WHERE job_id = ?")
         .bind(job_id)
@@ -386,17 +464,19 @@ async fn persist_worker_result(
         }
         let start_ms = seconds_to_ms(segment.start);
         let end_ms = seconds_to_ms(segment.end).max(start_ms);
-        sqlx::query(
+        let row = sqlx::query_as::<_, TranscriptSegment>(
             "INSERT INTO transcript_segments (job_id, material_id, start_ms, end_ms, text) \
-             VALUES (?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?) \
+             RETURNING id, job_id, material_id, start_ms, end_ms, text",
         )
         .bind(job_id)
         .bind(material_id)
         .bind(start_ms)
         .bind(end_ms)
         .bind(text)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
+        persisted.push(row);
     }
     sqlx::query("UPDATE materials SET text = ?, updated_at = ? WHERE id = ?")
         .bind(&text)
@@ -415,7 +495,7 @@ async fn persist_worker_result(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(())
+    Ok(persisted)
 }
 
 async fn update_job_running(pool: &sqlx::SqlitePool, job_id: i64) -> Result<()> {
@@ -465,6 +545,21 @@ async fn material_for_user(
          WHERE id = ? AND user_id = ?",
     )
     .bind(material_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn job_for_user(
+    pool: &sqlx::SqlitePool,
+    job_id: i64,
+    user_id: i64,
+) -> Result<TranscriptionJob> {
+    Ok(sqlx::query_as::<_, TranscriptionJob>(&format!(
+        "SELECT {JOB_SELECT_COLS} FROM transcription_jobs \
+         WHERE id = ? AND user_id = ?"
+    ))
+    .bind(job_id)
     .bind(user_id)
     .fetch_one(pool)
     .await?)
