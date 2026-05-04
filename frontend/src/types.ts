@@ -18,6 +18,16 @@ export interface MaterialMetadata {
   source_type: Exclude<SourceType, 'local'> | null;
   source_ref: string;
   title?: string | null;
+  bilibili?: {
+    bvid: string;
+    page: number;
+    page_count: number;
+    aid?: number | null;
+    cid?: number | null;
+    duration?: number | null;
+    total_duration?: number | null;
+    part?: string | null;
+  } | null;
 }
 
 export interface VocabEntry {

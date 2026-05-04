@@ -195,8 +195,8 @@ export default function Editor() {
         const cachedMetadata =
           metadataInputRef.current === finalSourceRef ? metadata : null;
         const detected = cachedMetadata?.source_type
-          ? cachedMetadata
-          : await getMaterialMetadata(finalSourceRef);
+          ? normalizeDetectedMetadata(cachedMetadata)
+          : normalizeDetectedMetadata(await getMaterialMetadata(finalSourceRef));
         if (detected.source_type) {
           finalSourceType = detected.source_type;
           finalSourceRef = detected.source_ref;
@@ -459,6 +459,9 @@ function MetadataHint({
       <p className="mt-2 text-xs text-emerald-700">
         已识别为 {label}
         {metadata.title ? ` · 已读取标题: ${metadata.title}` : ' · 暂未读取到标题'}
+        {metadata.bilibili?.page_count && metadata.bilibili.page_count > 1
+          ? ` · 分P ${metadata.bilibili.page}/${metadata.bilibili.page_count}`
+          : ''}
         {error ? ` · 后端标题读取未完成: ${error}` : ''}
       </p>
     );
@@ -483,11 +486,37 @@ function detectExternalSource(input: string): MaterialMetadata | null {
   if (youtube) {
     return { source_type: 'youtube', source_ref: youtube, title: null };
   }
-  const bvid = bilibiliBvid(sourceRef);
-  if (bvid) {
-    return { source_type: 'bilibili', source_ref: bvid, title: null };
+  const bilibili = bilibiliRef(sourceRef);
+  if (bilibili) {
+    return {
+      source_type: 'bilibili',
+      source_ref: formatBilibiliSourceRef(bilibili),
+      title: null,
+      bilibili: {
+        bvid: bilibili.bvid,
+        page: bilibili.page ?? 1,
+        page_count: 1,
+        aid: bilibili.aid,
+        cid: bilibili.cid,
+      },
+    };
   }
   return null;
+}
+
+function normalizeDetectedMetadata(metadata: MaterialMetadata): MaterialMetadata {
+  if (metadata.source_type !== 'bilibili' || !metadata.bilibili) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    source_ref: formatBilibiliSourceRef({
+      bvid: metadata.bilibili.bvid,
+      page: metadata.bilibili.page,
+      cid: metadata.bilibili.cid ?? undefined,
+      aid: metadata.bilibili.aid ?? undefined,
+    }),
+  };
 }
 
 function youtubeId(input: string): string | null {
@@ -511,19 +540,57 @@ function youtubeId(input: string): string | null {
   }
 }
 
-function bilibiliBvid(input: string): string | null {
+interface BilibiliSourceRef {
+  bvid: string;
+  page?: number;
+  cid?: number;
+  aid?: number;
+}
+
+function bilibiliRef(input: string): BilibiliSourceRef | null {
   try {
     const url = new URL(input);
     const host = url.hostname.replace(/^www\./, '').toLowerCase();
     if (!isHostOrSubdomain(host, 'bilibili.com')) return null;
-    return findBvid(url.pathname) ?? url.searchParams.get('bvid');
+    const bvid = findBvid(url.pathname) ?? url.searchParams.get('bvid');
+    if (!bvid) return null;
+    return {
+      bvid,
+      page: positiveInt(url.searchParams.get('p') ?? url.searchParams.get('page')),
+      cid: positiveInt(url.searchParams.get('cid')),
+      aid: positiveInt(url.searchParams.get('aid')),
+    };
   } catch {
-    return findBvid(input);
+    const bvid = findBvid(input);
+    if (!bvid) return null;
+    const query = input.split('?', 2)[1] ?? '';
+    const params = new URLSearchParams(query);
+    return {
+      bvid,
+      page: positiveInt(params.get('p') ?? params.get('page')),
+      cid: positiveInt(params.get('cid')),
+      aid: positiveInt(params.get('aid')),
+    };
   }
 }
 
 function findBvid(input: string): string | null {
   return input.match(/BV[a-zA-Z0-9]{8,}/)?.[0] ?? null;
+}
+
+function positiveInt(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function formatBilibiliSourceRef(ref: BilibiliSourceRef): string {
+  const params = new URLSearchParams();
+  if (ref.page && ref.page > 1) params.set('p', String(ref.page));
+  if (ref.cid) params.set('cid', String(ref.cid));
+  if (ref.aid) params.set('aid', String(ref.aid));
+  const query = params.toString();
+  return query ? `${ref.bvid}?${query}` : ref.bvid;
 }
 
 function isHostOrSubdomain(host: string, domain: string): boolean {

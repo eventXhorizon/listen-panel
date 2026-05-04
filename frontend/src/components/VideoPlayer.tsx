@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { getMaterialMetadata } from '../api';
 import { loadSettings, saveSettings } from '../lib/settings';
-import type { SourceType } from '../types';
+import type { MaterialMetadata, SourceType } from '../types';
 
 function youTubeId(input: string): string | null {
   const trimmed = input.trim();
@@ -16,11 +17,6 @@ function youTubeId(input: string): string | null {
     // not a URL, fall through
   }
   return null;
-}
-
-function bilibiliBvid(input: string): string | null {
-  const m = input.match(/BV[\w]+/);
-  return m ? m[0] : null;
 }
 
 interface Props {
@@ -105,12 +101,13 @@ export default function VideoPlayer({ materialId, sourceType, sourceRef }: Props
     );
   }
   if (sourceType === 'bilibili') {
-    const bv = bilibiliBvid(sourceRef);
-    if (!bv) return <Placeholder error>无法解析 Bilibili BV 号:{sourceRef}</Placeholder>;
+    const ref = parseBilibiliSourceRef(sourceRef);
+    if (!ref) return <Placeholder error>无法解析 Bilibili BV 号:{sourceRef}</Placeholder>;
     return (
       <BilibiliVideo
-        bvid={bv}
-        progressKey={progressKey(materialId, `bilibili:${bv}`)}
+        sourceRef={sourceRef}
+        initial={ref}
+        progressKey={progressKey(materialId, `bilibili:${formatBilibiliProgressRef(ref)}`)}
       />
     );
   }
@@ -271,17 +268,28 @@ function YouTubeVideo({
   return <div ref={hostRef} className="w-full h-full bg-black" />;
 }
 
+interface BilibiliSourceRef {
+  bvid: string;
+  page: number;
+  cid?: number;
+  aid?: number;
+}
+
 function BilibiliVideo({
-  bvid,
+  sourceRef,
+  initial,
   progressKey,
 }: {
-  bvid: string;
+  sourceRef: string;
+  initial: BilibiliSourceRef;
   progressKey: string;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const currentSecondsRef = useRef(loadVideoProgress(progressKey) ?? 0);
   const playingRef = useRef(false);
   const playStartedAtRef = useRef<number | null>(null);
+  const [resolved, setResolved] = useState<BilibiliSourceRef>(initial);
+  const [metadataErr, setMetadataErr] = useState('');
 
   const flushProgress = useCallback(() => {
     if (playingRef.current && playStartedAtRef.current != null) {
@@ -293,6 +301,28 @@ function BilibiliVideo({
     }
     saveProgressSeconds(progressKey, currentSecondsRef.current);
   }, [progressKey]);
+
+  useEffect(() => {
+    setResolved(initial);
+    setMetadataErr('');
+  }, [initial.bvid, initial.page, initial.cid, initial.aid]);
+
+  useEffect(() => {
+    if (initial.cid && initial.aid) return;
+    let cancelled = false;
+    getMaterialMetadata(sourceRef)
+      .then((metadata) => {
+        if (cancelled) return;
+        const ref = sourceRefFromBilibiliMetadata(metadata);
+        if (ref) setResolved(ref);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setMetadataErr(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initial.aid, initial.cid, sourceRef]);
 
   useEffect(() => {
     function onMessage(e: MessageEvent) {
@@ -342,13 +372,20 @@ function BilibiliVideo({
   }, [flushProgress]);
 
   return (
-    <iframe
-      ref={iframeRef}
-      src={bilibiliSrc(bvid, currentSecondsRef.current)}
-      scrolling="no"
-      allowFullScreen
-      className="w-full h-full border-0 bg-black"
-    />
+    <div className="relative h-full w-full bg-black">
+      <iframe
+        ref={iframeRef}
+        src={bilibiliSrc(resolved, currentSecondsRef.current)}
+        scrolling="no"
+        allowFullScreen
+        className="h-full w-full border-0 bg-black"
+      />
+      {metadataErr && (
+        <div className="absolute left-3 top-3 rounded-md bg-amber-50/95 px-3 py-2 text-xs text-amber-800 shadow">
+          Bilibili 视频信息读取失败，已使用基础 BV 播放。
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -453,17 +490,72 @@ function safePlayerNumber(read: () => number): number | null {
   }
 }
 
-function bilibiliSrc(bvid: string, savedSeconds: number): string {
+function bilibiliSrc(ref: BilibiliSourceRef, savedSeconds: number): string {
   const params = new URLSearchParams({
-    bvid,
-    page: '1',
+    bvid: ref.bvid,
+    p: String(ref.page),
+    page: String(ref.page),
     autoplay: '0',
     high_quality: '1',
+    isOutside: 'true',
   });
+  if (ref.cid) params.set('cid', String(ref.cid));
+  if (ref.aid) {
+    params.set('aid', String(ref.aid));
+  }
   if (savedSeconds > 0) {
     params.set('t', String(Math.floor(savedSeconds)));
   }
   return `https://player.bilibili.com/player.html?${params.toString()}`;
+}
+
+function parseBilibiliSourceRef(input: string): BilibiliSourceRef | null {
+  const bvid = findBilibiliBvid(input);
+  if (!bvid) return null;
+  const params = sourceRefParams(input);
+  return {
+    bvid,
+    page: positiveInt(params.get('p') ?? params.get('page')) ?? 1,
+    cid: positiveInt(params.get('cid')),
+    aid: positiveInt(params.get('aid')),
+  };
+}
+
+function sourceRefFromBilibiliMetadata(metadata: MaterialMetadata): BilibiliSourceRef | null {
+  if (metadata.source_type !== 'bilibili' || !metadata.bilibili) return null;
+  return {
+    bvid: metadata.bilibili.bvid,
+    page: metadata.bilibili.page || 1,
+    cid: metadata.bilibili.cid ?? undefined,
+    aid: metadata.bilibili.aid ?? undefined,
+  };
+}
+
+function formatBilibiliProgressRef(ref: BilibiliSourceRef): string {
+  const params = new URLSearchParams();
+  if (ref.page > 1) params.set('p', String(ref.page));
+  if (ref.cid) params.set('cid', String(ref.cid));
+  if (ref.aid) params.set('aid', String(ref.aid));
+  const query = params.toString();
+  return query ? `${ref.bvid}?${query}` : ref.bvid;
+}
+
+function sourceRefParams(input: string): URLSearchParams {
+  try {
+    return new URL(input).searchParams;
+  } catch {
+    return new URLSearchParams(input.split('?', 2)[1] ?? '');
+  }
+}
+
+function findBilibiliBvid(input: string): string | null {
+  return input.match(/BV[a-zA-Z0-9]{8,}/)?.[0] ?? null;
+}
+
+function positiveInt(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function isBilibiliOrigin(origin: string): boolean {

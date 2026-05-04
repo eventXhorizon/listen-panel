@@ -231,9 +231,14 @@ def run_transcribe(req: TranscribeRequest) -> TranscribeResponse:
     try:
         subtitle = try_fetch_subtitle(req, work_dir)
         if subtitle:
-            log_job(req, "subtitle-found", path=str(subtitle))
+            log_job(
+                req,
+                "subtitle-found",
+                path=str(subtitle),
+                size_kb=f"{subtitle.stat().st_size / 1024:.1f}",
+            )
             segments = parse_subtitle(subtitle)
-            log_job(req, "subtitle-parsed", segments=len(segments))
+            log_segments_summary(req, "subtitle-parsed", segments)
             if segments:
                 report_progress(req, 95, "subtitle-parsed")
                 response = response_from_segments(segments)
@@ -503,7 +508,12 @@ def try_fetch_subtitle(req: TranscribeRequest, work_dir: Path) -> Path | None:
     ]
     run(cmd, check=False)
     candidates = sorted(work_dir.glob("subtitle.*"))
-    log_job(req, "subtitle-fetch-done", candidates=len(candidates))
+    log_job(
+        req,
+        "subtitle-fetch-done",
+        candidates=len(candidates),
+        files=",".join(f"{p.name}:{p.stat().st_size}" for p in candidates) or "none",
+    )
     report_progress(req, 12, "subtitle-done")
     return candidates[0] if candidates else None
 
@@ -549,6 +559,7 @@ def fetch_media(req: TranscribeRequest, work_dir: Path) -> Path:
             "media-download-done",
             path=str(target),
             size_mb=f"{target.stat().st_size / 1024 / 1024:.1f}",
+            duration=format_duration(probe_duration(target)),
         )
         report_progress(req, 25, "media-downloaded")
         return target
@@ -578,6 +589,7 @@ def fetch_media(req: TranscribeRequest, work_dir: Path) -> Path:
                 "yt-dlp-media-done",
                 path=str(candidates[0]),
                 size_mb=f"{candidates[0].stat().st_size / 1024 / 1024:.1f}",
+                duration=format_duration(probe_duration(candidates[0])),
             )
             report_progress(req, 25, "media-downloaded")
             return candidates[0]
@@ -590,6 +602,8 @@ def media_locator(req: TranscribeRequest) -> str:
         return source
     if req.source_type == "bilibili" and _BILIBILI_BVID.match(source):
         return f"https://www.bilibili.com/video/{source}"
+    if req.source_type == "bilibili" and source.startswith("BV"):
+        return f"https://www.bilibili.com/video/{source}"
     if req.source_type == "youtube" and _YOUTUBE_ID.match(source):
         return f"https://www.youtube.com/watch?v={source}"
     return source
@@ -597,7 +611,12 @@ def media_locator(req: TranscribeRequest) -> str:
 
 def extract_audio(media: Path, work_dir: Path) -> Path:
     audio = work_dir / "audio.wav"
-    logger.info("event=ffmpeg-start media=%s audio=%s", media, audio)
+    logger.info(
+        "event=ffmpeg-start media=%s media_duration=%s audio=%s",
+        media,
+        format_duration(probe_duration(media)),
+        audio,
+    )
     run(
         [
             "ffmpeg",
@@ -614,10 +633,10 @@ def extract_audio(media: Path, work_dir: Path) -> Path:
         check=True,
     )
     logger.info(
-        "event=ffmpeg-done audio=%s size_mb=%.1f duration=%.1fs",
+        "event=ffmpeg-done audio=%s size_mb=%.1f duration=%s",
         audio,
         audio.stat().st_size / 1024 / 1024,
-        probe_duration(audio) or 0,
+        format_duration(probe_duration(audio)),
     )
     return audio
 
@@ -666,7 +685,7 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
         elif len(segments) % 20 == 0:
             log_job(req, "asr-progress", segments=len(segments))
             report_progress(req, min(95, 40 + len(segments)), "asr-progress")
-    log_job(req, "asr-done", segments=len(segments))
+    log_segments_summary(req, "asr-done", segments)
     report_progress(req, 95, "asr-done")
     return response_from_segments(segments)
 
@@ -782,6 +801,33 @@ def parse_content_length(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def format_duration(value: float | None) -> str:
+    return f"{value:.1f}s" if value and value > 0 else "unknown"
+
+
+def segment_coverage(segments: list[Segment]) -> tuple[float | None, float | None, float | None]:
+    starts = [segment.start for segment in segments if segment.start >= 0]
+    ends = [segment.end for segment in segments if segment.end >= 0]
+    if not starts or not ends:
+        return (None, None, None)
+    start = min(starts)
+    end = max(ends)
+    return (start, end, max(0.0, end - start))
+
+
+def log_segments_summary(req: TranscribeRequest, event: str, segments: list[Segment]) -> None:
+    start, end, coverage = segment_coverage(segments)
+    log_job(
+        req,
+        event,
+        segments=len(segments),
+        start=format_duration(start),
+        end=format_duration(end),
+        coverage=format_duration(coverage),
+        chars=sum(len(segment.text) for segment in segments),
+    )
 
 
 def probe_duration(path: Path) -> float | None:

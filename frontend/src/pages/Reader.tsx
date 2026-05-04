@@ -619,8 +619,9 @@ export default function Reader() {
         .map((p) => p.trim())
         .filter(Boolean)
     : [];
+  const shouldUseTextParagraphs = paragraphs.length > 1;
   const segmentGroups =
-    segments.length > 0 ? groupPlainSegments(segments) : [];
+    !shouldUseTextParagraphs && segments.length > 0 ? groupPlainSegments(segments) : [];
   const fontFamily =
     FONT_OPTIONS.find((x) => x.value === typography.font)?.family ??
     FONT_OPTIONS[0].family;

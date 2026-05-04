@@ -36,6 +36,20 @@ struct MaterialMetadataResp {
     source_type: Option<&'static str>,
     source_ref: String,
     title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bilibili: Option<BilibiliMetadataResp>,
+}
+
+#[derive(Debug, Serialize)]
+struct BilibiliMetadataResp {
+    bvid: String,
+    page: u32,
+    page_count: usize,
+    aid: Option<i64>,
+    cid: Option<i64>,
+    duration: Option<i64>,
+    total_duration: Option<i64>,
+    part: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +71,31 @@ impl ExternalSourceType {
 struct DetectedExternalSource {
     kind: ExternalSourceType,
     source_ref: String,
+    bilibili_page: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DetectedBilibiliRef {
+    bvid: String,
+    page: Option<u32>,
+    cid: Option<i64>,
+    aid: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct BilibiliApiMetadata {
+    title: String,
+    aid: Option<i64>,
+    total_duration: Option<i64>,
+    pages: Vec<BilibiliApiPage>,
+}
+
+#[derive(Debug, Clone)]
+struct BilibiliApiPage {
+    page: u32,
+    cid: Option<i64>,
+    duration: Option<i64>,
+    part: Option<String>,
 }
 
 async fn metadata(
@@ -70,14 +109,26 @@ async fn metadata(
             source_type: None,
             source_ref: raw.to_string(),
             title: None,
+            bilibili: None,
         }));
     };
 
-    let title = fetch_source_title(&http, &detected).await;
+    let (title, bilibili) = match detected.kind {
+        ExternalSourceType::Bilibili => {
+            let bvid = bilibili_ref(&detected.source_ref)
+                .map(|bili| bili.bvid)
+                .unwrap_or_else(|| detected.source_ref.clone());
+            fetch_bilibili_title_and_metadata(&http, &bvid, detected.bilibili_page)
+                .await
+                .unwrap_or((None, None))
+        }
+        ExternalSourceType::YouTube => (fetch_source_title(&http, &detected).await, None),
+    };
     Ok(Json(MaterialMetadataResp {
         source_type: Some(detected.kind.as_str()),
         source_ref: detected.source_ref,
         title,
+        bilibili,
     }))
 }
 
@@ -256,13 +307,15 @@ fn detect_external_source(input: &str) -> Option<DetectedExternalSource> {
         return Some(DetectedExternalSource {
             kind: ExternalSourceType::YouTube,
             source_ref: id,
+            bilibili_page: None,
         });
     }
 
-    if let Some(bvid) = bilibili_bvid(trimmed) {
+    if let Some(bili) = bilibili_ref(trimmed) {
         return Some(DetectedExternalSource {
             kind: ExternalSourceType::Bilibili,
-            source_ref: bvid,
+            source_ref: format_bilibili_source_ref(&bili),
+            bilibili_page: bili.page,
         });
     }
 
@@ -313,16 +366,29 @@ fn is_youtube_id(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-fn bilibili_bvid(input: &str) -> Option<String> {
+fn bilibili_ref(input: &str) -> Option<DetectedBilibiliRef> {
     if let Ok(url) = Url::parse(input) {
         let host = normalized_host(&url)?;
         if is_host_or_subdomain(&host, "bilibili.com") {
-            return find_bvid(url.path()).map(str::to_string);
+            let bvid = find_bvid(url.path())
+                .map(str::to_string)
+                .or_else(|| query_string(&url, "bvid"))?;
+            return Some(DetectedBilibiliRef {
+                bvid,
+                page: query_u32(&url, &["p", "page"]),
+                cid: query_i64(&url, &["cid"]),
+                aid: query_i64(&url, &["aid"]),
+            });
         }
         return None;
     }
 
-    find_bvid(input).map(str::to_string)
+    find_bvid(input).map(|bvid| DetectedBilibiliRef {
+        bvid: bvid.to_string(),
+        page: query_u32_from_text(input, &["p", "page"]),
+        cid: query_i64_from_text(input, &["cid"]),
+        aid: query_i64_from_text(input, &["aid"]),
+    })
 }
 
 fn find_bvid(input: &str) -> Option<&str> {
@@ -348,6 +414,46 @@ fn normalized_host(url: &Url) -> Option<String> {
 
 fn is_host_or_subdomain(host: &str, domain: &str) -> bool {
     host == domain || host.ends_with(&format!(".{domain}"))
+}
+
+fn query_string(url: &Url, key: &str) -> Option<String> {
+    url.query_pairs().find_map(|(name, value)| {
+        if name == key && !value.trim().is_empty() {
+            Some(value.into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+fn query_u32(url: &Url, keys: &[&str]) -> Option<u32> {
+    keys.iter().find_map(|key| {
+        query_string(url, key).and_then(|value| value.parse::<u32>().ok().filter(|n| *n > 0))
+    })
+}
+
+fn query_i64(url: &Url, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        query_string(url, key).and_then(|value| value.parse::<i64>().ok().filter(|n| *n > 0))
+    })
+}
+
+fn query_u32_from_text(input: &str, keys: &[&str]) -> Option<u32> {
+    query_value_from_text(input, keys)
+        .and_then(|value| value.parse::<u32>().ok().filter(|n| *n > 0))
+}
+
+fn query_i64_from_text(input: &str, keys: &[&str]) -> Option<i64> {
+    query_value_from_text(input, keys)
+        .and_then(|value| value.parse::<i64>().ok().filter(|n| *n > 0))
+}
+
+fn query_value_from_text(input: &str, keys: &[&str]) -> Option<String> {
+    let query = input.split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        keys.contains(&key).then(|| value.to_string())
+    })
 }
 
 async fn fetch_source_title(
@@ -398,6 +504,56 @@ async fn fetch_bilibili_title(
         return Ok(Some(title));
     }
     fetch_bilibili_html_title(http, bvid).await
+}
+
+async fn fetch_bilibili_title_and_metadata(
+    http: &reqwest::Client,
+    bvid: &str,
+    requested_page: Option<u32>,
+) -> anyhow::Result<(Option<String>, Option<BilibiliMetadataResp>)> {
+    if let Some(metadata) = fetch_bilibili_api_metadata(http, bvid).await? {
+        let page = select_bilibili_page(&metadata.pages, requested_page);
+        let resp = BilibiliMetadataResp {
+            bvid: bvid.to_string(),
+            page: page
+                .as_ref()
+                .map(|p| p.page)
+                .unwrap_or(requested_page.unwrap_or(1)),
+            page_count: metadata.pages.len(),
+            aid: metadata.aid,
+            cid: page.as_ref().and_then(|p| p.cid),
+            duration: page.as_ref().and_then(|p| p.duration),
+            total_duration: metadata.total_duration,
+            part: page.and_then(|p| p.part),
+        };
+        return Ok((Some(metadata.title), Some(resp)));
+    }
+    Ok((fetch_bilibili_html_title(http, bvid).await?, None))
+}
+
+async fn fetch_bilibili_api_metadata(
+    http: &reqwest::Client,
+    bvid: &str,
+) -> anyhow::Result<Option<BilibiliApiMetadata>> {
+    let referer = format!("https://www.bilibili.com/video/{bvid}/");
+    let url = Url::parse_with_params(
+        "https://api.bilibili.com/x/web-interface/view",
+        &[("bvid", bvid)],
+    )?;
+    let resp = http
+        .get(url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 listen-panel metadata fetcher",
+        )
+        .header(reqwest::header::REFERER, referer)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let body: Value = resp.json().await?;
+    Ok(extract_bilibili_api_metadata(&body))
 }
 
 async fn fetch_bilibili_api_title(
@@ -467,6 +623,68 @@ fn extract_bilibili_api_title(body: &Value) -> Option<String> {
         .and_then(|data| data.get("title"))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn extract_bilibili_api_metadata(body: &Value) -> Option<BilibiliApiMetadata> {
+    if body.get("code").and_then(Value::as_i64) != Some(0) {
+        return None;
+    }
+    let data = body.get("data")?;
+    let title = data.get("title")?.as_str()?.to_string();
+    let pages = data
+        .get("pages")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let page = item.get("page")?.as_u64()?;
+                    Some(BilibiliApiPage {
+                        page: u32::try_from(page).ok()?,
+                        cid: item.get("cid").and_then(Value::as_i64),
+                        duration: item.get("duration").and_then(Value::as_i64),
+                        part: item.get("part").and_then(Value::as_str).map(str::to_string),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(BilibiliApiMetadata {
+        title,
+        aid: data.get("aid").and_then(Value::as_i64),
+        total_duration: data.get("duration").and_then(Value::as_i64),
+        pages,
+    })
+}
+
+fn select_bilibili_page(
+    pages: &[BilibiliApiPage],
+    requested_page: Option<u32>,
+) -> Option<BilibiliApiPage> {
+    if let Some(page) = requested_page {
+        if let Some(found) = pages.iter().find(|item| item.page == page) {
+            return Some(found.clone());
+        }
+    }
+    pages.first().cloned()
+}
+
+fn format_bilibili_source_ref(refs: &DetectedBilibiliRef) -> String {
+    let mut parts = Vec::new();
+    if let Some(page) = refs.page.filter(|page| *page > 1) {
+        parts.push(format!("p={page}"));
+    }
+    if let Some(cid) = refs.cid {
+        parts.push(format!("cid={cid}"));
+    }
+    if let Some(aid) = refs.aid {
+        parts.push(format!("aid={aid}"));
+    }
+    if parts.is_empty() {
+        refs.bvid.clone()
+    } else {
+        format!("{}?{}", refs.bvid, parts.join("&"))
+    }
 }
 
 fn find_meta_content(html: &str, property: &str) -> Option<String> {
@@ -549,6 +767,7 @@ mod tests {
             Some(DetectedExternalSource {
                 kind: ExternalSourceType::YouTube,
                 source_ref: "dQw4w9WgXcQ".to_string(),
+                bilibili_page: None,
             })
         );
         assert_eq!(
@@ -556,6 +775,7 @@ mod tests {
             Some(DetectedExternalSource {
                 kind: ExternalSourceType::YouTube,
                 source_ref: "dQw4w9WgXcQ".to_string(),
+                bilibili_page: None,
             })
         );
         assert_eq!(
@@ -573,6 +793,7 @@ mod tests {
             Some(DetectedExternalSource {
                 kind: ExternalSourceType::Bilibili,
                 source_ref: "BV1xx411c7mD".to_string(),
+                bilibili_page: None,
             })
         );
         assert_eq!(
@@ -580,6 +801,16 @@ mod tests {
                 .expect("expected bare bvid")
                 .kind,
             ExternalSourceType::Bilibili
+        );
+        assert_eq!(
+            detect_external_source(
+                "https://www.bilibili.com/video/BV1xx411c7mD/?p=2&cid=123&aid=456"
+            ),
+            Some(DetectedExternalSource {
+                kind: ExternalSourceType::Bilibili,
+                source_ref: "BV1xx411c7mD?p=2&cid=123&aid=456".to_string(),
+                bilibili_page: Some(2),
+            })
         );
     }
 
@@ -603,12 +834,26 @@ mod tests {
             "code": 0,
             "data": {
                 "bvid": "BV1CRogByENi",
-                "title": "A Bilibili Video Title"
+                "aid": 12345,
+                "title": "A Bilibili Video Title",
+                "duration": 1408,
+                "pages": [
+                    { "page": 1, "cid": 111, "duration": 704, "part": "中英字幕" },
+                    { "page": 2, "cid": 222, "duration": 704, "part": "英文字幕" }
+                ]
             }
         });
         assert_eq!(
             extract_bilibili_api_title(&body),
             Some("A Bilibili Video Title".to_string())
+        );
+        let metadata = extract_bilibili_api_metadata(&body).expect("metadata");
+        assert_eq!(metadata.aid, Some(12345));
+        assert_eq!(metadata.total_duration, Some(1408));
+        assert_eq!(metadata.pages.len(), 2);
+        assert_eq!(
+            select_bilibili_page(&metadata.pages, Some(2)).and_then(|page| page.cid),
+            Some(222)
         );
 
         let failed = serde_json::json!({

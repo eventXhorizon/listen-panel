@@ -22,6 +22,12 @@ const JOB_SELECT_COLS: &str = "id, user_id, material_id, provider, model, langua
     status, progress, error, study_status, study_error, study_progress, study_stage, \
     created_at, updated_at, completed_at";
 const SEGMENT_SELECT_COLS: &str = "s.id, s.job_id, s.material_id, s.start_ms, s.end_ms, s.text";
+const PARAGRAPH_GAP_SECONDS: f64 = 1.8;
+const PARAGRAPH_MIN_CHARS: usize = 360;
+const PARAGRAPH_TARGET_CHARS: usize = 700;
+const PARAGRAPH_MAX_CHARS: usize = 900;
+const PARAGRAPH_TARGET_SENTENCES: usize = 4;
+const PARAGRAPH_MAX_SENTENCES: usize = 6;
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -438,12 +444,7 @@ async fn persist_worker_result(
             text: worker.text.unwrap_or_default(),
         });
     }
-    let text = segments
-        .iter()
-        .map(|s| s.text.trim())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let text = paragraphize_segments(&segments);
     if text.is_empty() {
         return Err(AppError(anyhow::anyhow!(
             "ASR worker returned only blank text"
@@ -615,7 +616,163 @@ fn seconds_to_ms(seconds: f64) -> i64 {
     (seconds.max(0.0) * 1000.0).round() as i64
 }
 
+fn paragraphize_segments(segments: &[WorkerSegment]) -> String {
+    let mut paragraphs = Vec::new();
+    let mut current = String::new();
+    let mut sentence_count = 0_usize;
+    let mut last_end: Option<f64> = None;
+
+    for segment in segments {
+        let text = segment.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        let gap = last_end
+            .filter(|end| segment.start.is_finite() && end.is_finite())
+            .map(|end| segment.start - end)
+            .unwrap_or(0.0);
+        let should_break_for_gap = !current.is_empty()
+            && gap >= PARAGRAPH_GAP_SECONDS
+            && current.chars().count() >= PARAGRAPH_MIN_CHARS / 2;
+        if should_break_for_gap {
+            push_paragraph(&mut paragraphs, &mut current);
+            sentence_count = 0;
+        }
+
+        for chunk in sentence_chunks(text) {
+            append_segment_text(&mut current, chunk);
+            sentence_count += usize::from(ends_with_sentence_punctuation(chunk));
+
+            let char_count = current.chars().count();
+            let ends_sentence = ends_with_sentence_punctuation(chunk);
+            let should_break_for_sentence = ends_sentence
+                && char_count >= PARAGRAPH_MIN_CHARS
+                && sentence_count >= PARAGRAPH_TARGET_SENTENCES;
+            let should_break_for_sentence_cap =
+                ends_sentence && sentence_count >= PARAGRAPH_MAX_SENTENCES;
+            let should_break_for_length = char_count >= PARAGRAPH_TARGET_CHARS
+                && (ends_sentence || char_count >= PARAGRAPH_MAX_CHARS);
+
+            if should_break_for_sentence || should_break_for_sentence_cap || should_break_for_length
+            {
+                push_paragraph(&mut paragraphs, &mut current);
+                sentence_count = 0;
+            }
+        }
+
+        last_end = Some(segment.end);
+    }
+
+    push_paragraph(&mut paragraphs, &mut current);
+    paragraphs.join("\n\n")
+}
+
+fn sentence_chunks(text: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    let mut pending_end = None;
+    for (index, ch) in text.char_indices() {
+        if is_sentence_punctuation(ch) {
+            pending_end = Some(index + ch.len_utf8());
+            continue;
+        }
+        if let Some(end) = pending_end {
+            if is_sentence_closer(ch) {
+                pending_end = Some(index + ch.len_utf8());
+                continue;
+            }
+            if ch.is_whitespace() {
+                push_sentence_chunk(&mut chunks, text, start, end);
+                start = index + ch.len_utf8();
+                pending_end = None;
+            }
+        }
+    }
+    push_sentence_chunk(&mut chunks, text, start, text.len());
+    chunks
+}
+
+fn push_sentence_chunk<'a>(chunks: &mut Vec<&'a str>, text: &'a str, start: usize, end: usize) {
+    let chunk = text[start..end].trim();
+    if !chunk.is_empty() {
+        chunks.push(chunk);
+    }
+}
+
+fn append_segment_text(target: &mut String, text: &str) {
+    if target.is_empty() {
+        target.push_str(text);
+        return;
+    }
+    if needs_space_between(target, text) {
+        target.push(' ');
+    }
+    target.push_str(text);
+}
+
+fn needs_space_between(left: &str, right: &str) -> bool {
+    let Some(last) = left.chars().rev().find(|c| !c.is_whitespace()) else {
+        return false;
+    };
+    let Some(first) = right.chars().find(|c| !c.is_whitespace()) else {
+        return false;
+    };
+    !matches!(
+        first,
+        '.' | ',' | '?' | '!' | ':' | ';' | ')' | ']' | '}' | '%' | '\'' | '"'
+    ) && !matches!(last, '(' | '[' | '{' | '\'' | '"')
+}
+
+fn ends_with_sentence_punctuation(text: &str) -> bool {
+    text.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ')' | ']' | '}'))
+        .chars()
+        .next_back()
+        .is_some_and(is_sentence_punctuation)
+}
+
+fn is_sentence_punctuation(c: char) -> bool {
+    matches!(c, '.' | '?' | '!' | '。' | '？' | '！')
+}
+
+fn is_sentence_closer(c: char) -> bool {
+    matches!(c, '"' | '\'' | ')' | ']' | '}')
+}
+
+fn push_paragraph(paragraphs: &mut Vec<String>, current: &mut String) {
+    let text = current.trim();
+    if !text.is_empty() {
+        paragraphs.push(text.to_string());
+    }
+    current.clear();
+}
+
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     raw.strip_prefix("Bearer ").filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paragraphizes_single_long_worker_segment() {
+        let text = "You spend years getting a top degree and then quit to become a security guard. \
+            It sounds crazy, but across China, burned out young professionals are ditching the rat race for manual labor. \
+            Wait, manual labor, like working on a construction site, hauling bricks or sweating in a factory? \
+            No, not quite. The image you're picturing is probably a bit too extreme for this context. \
+            When we talk about manual labor here, it's mostly light physical labor. \
+            So we're talking about jobs like being a grocery cashier, delivering takeout food on a scooter or pulling espresso shots as a barista. \
+            Rather, you're on your feet for a whole shift using your hands and stepping far away from a corporate computer screen. \
+            But still, after spending years studying for a top tier degree, why would anyone choose to do that?";
+        let output = paragraphize_segments(&[WorkerSegment {
+            start: 0.0,
+            end: 180.0,
+            text: text.to_string(),
+        }]);
+        let paragraphs = output.split("\n\n").collect::<Vec<_>>();
+        assert!(paragraphs.len() > 1);
+        assert!(paragraphs.iter().all(|p| p.ends_with(['.', '?', '!'])));
+    }
 }
