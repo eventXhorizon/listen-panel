@@ -158,6 +158,10 @@ async fn update(
     {
         crate::routes::media::ensure_upload_owner(&pool, next_source_ref, user.id).await?;
     }
+    let text_changed = input
+        .text
+        .as_ref()
+        .is_some_and(|next_text| next_text != &old.text);
 
     let now = Utc::now();
     let row = sqlx::query_as::<_, Material>(&format!(
@@ -182,6 +186,25 @@ async fn update(
     .bind(user.id)
     .fetch_one(&pool)
     .await?;
+
+    if text_changed {
+        let deleted = sqlx::query(
+            "DELETE FROM transcription_jobs \
+             WHERE material_id = ? AND user_id = ?",
+        )
+        .bind(id)
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
+        if deleted.rows_affected() > 0 {
+            tracing::info!(
+                material_id = id,
+                user_id = user.id,
+                jobs = deleted.rows_affected(),
+                "cleared stale transcription jobs after material text edit"
+            );
+        }
+    }
 
     if old.source_type == "local"
         && (row.source_type != "local" || row.source_ref != old.source_ref)
