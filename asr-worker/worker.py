@@ -4,11 +4,15 @@ import html
 import json
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
+import threading
 import time
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,9 +32,10 @@ SHARED_TOKEN = os.getenv("ASR_TOKEN", "").strip()
 DEFAULT_MODEL = os.getenv("ASR_MODEL", "large-v3")
 DEVICE = os.getenv("ASR_DEVICE", "cuda")
 COMPUTE_TYPE = os.getenv("ASR_COMPUTE_TYPE", "float16")
-DOWNLOAD_DIR = Path(os.getenv("ASR_DOWNLOAD_DIR", "./data"))
+DOWNLOAD_DIR = Path(os.getenv("GPU_DATA_DIR", os.getenv("ASR_DOWNLOAD_DIR", "./data")))
 KEEP_MEDIA = os.getenv("ASR_KEEP_MEDIA", "0") == "1"
 LOG_LEVEL = os.getenv("ASR_LOG_LEVEL", "INFO").upper()
+MAX_JOBS = int(os.getenv("GPU_MAX_JOBS", "100"))
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -38,16 +43,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger("asr-worker")
 
-app = FastAPI(title="Listen Panel ASR Worker")
+app = FastAPI(title="Listen Panel GPU Worker")
 _model_cache: dict[str, WhisperModel] = {}
+_jobs: dict[str, "JobRecord"] = {}
+_jobs_lock = threading.Lock()
+_job_queue: queue.Queue[str] = queue.Queue()
+_job_worker_started = False
 _YOUTUBE_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _BILIBILI_BVID = re.compile(r"^BV[A-Za-z0-9]+$")
 _VTT_TIMESTAMP_TAG = re.compile(r"<\d{2}:\d{2}:\d{2}\.\d{3}>")
 _HTML_TAG = re.compile(r"</?[^>]+>")
 
 
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+@dataclass
+class JobRecord:
+    id: str
+    job_type: str
+    request: "CreateJobRequest"
+    status: str = "queued"
+    progress: int = 0
+    stage: str = "queued"
+    error: str | None = None
+    result: dict[str, Any] | None = None
+    created_at: str = field(default_factory=utc_now)
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
 class TranscribeRequest(BaseModel):
-    job_id: int
+    job_id: int | str
     source_type: str
     source_ref: str
     media_url: str | None = None
@@ -72,9 +100,109 @@ class TranscribeResponse(BaseModel):
     segments: list[Segment]
 
 
+class JobCallback(BaseModel):
+    progress_url: str | None = None
+    progress_token: str | None = None
+
+
+class CreateJobRequest(BaseModel):
+    type: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=dict)
+    callback: JobCallback | None = None
+
+
+class JobStatus(BaseModel):
+    id: str
+    type: str
+    status: str
+    progress: int
+    stage: str
+    error: str | None = None
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class JobResultResponse(BaseModel):
+    id: str
+    type: str
+    result: dict[str, Any]
+
+
+@app.on_event("startup")
+def startup() -> None:
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    start_job_worker()
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/capabilities")
+def capabilities(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    verify_worker_token(authorization)
+    return {
+        "service": "listen-panel-gpu-worker",
+        "version": "1.0",
+        "queue": "in_memory",
+        "max_concurrent_jobs": 1,
+        "device": DEVICE,
+        "compute_type": COMPUTE_TYPE,
+        "data_dir": str(DOWNLOAD_DIR),
+        "capabilities": [
+            {
+                "type": "asr.transcribe",
+                "models": [DEFAULT_MODEL],
+                "default_model": DEFAULT_MODEL,
+                "languages": ["en"],
+            }
+        ],
+    }
+
+
+@app.post("/v1/jobs", status_code=202)
+def create_job(
+    req: CreateJobRequest,
+    authorization: str | None = Header(default=None),
+) -> JobStatus:
+    verify_worker_token(authorization)
+    if req.type != "asr.transcribe":
+        raise HTTPException(status_code=400, detail=f"unsupported job type: {req.type}")
+    job_id = uuid.uuid4().hex
+    record = JobRecord(id=job_id, job_type=req.type, request=req)
+    with _jobs_lock:
+        prune_finished_jobs_locked()
+        if len(_jobs) >= MAX_JOBS:
+            raise HTTPException(status_code=429, detail="too many retained jobs")
+        _jobs[job_id] = record
+    _job_queue.put(job_id)
+    logger.info("job_id=%s type=%s event=queued", job_id, req.type)
+    return job_status(record)
+
+
+@app.get("/v1/jobs/{job_id}")
+def get_job(
+    job_id: str,
+    authorization: str | None = Header(default=None),
+) -> JobStatus:
+    verify_worker_token(authorization)
+    record = get_job_record(job_id)
+    return job_status(record)
+
+
+@app.get("/v1/jobs/{job_id}/result")
+def get_job_result(
+    job_id: str,
+    authorization: str | None = Header(default=None),
+) -> JobResultResponse:
+    verify_worker_token(authorization)
+    record = get_job_record(job_id)
+    if record.status != "succeeded" or record.result is None:
+        raise HTTPException(status_code=409, detail=f"job is {record.status}")
+    return JobResultResponse(id=record.id, type=record.job_type, result=record.result)
 
 
 @app.post("/v1/transcribe")
@@ -83,6 +211,10 @@ def transcribe(
     authorization: str | None = Header(default=None),
 ) -> TranscribeResponse:
     verify_worker_token(authorization)
+    return run_transcribe(req)
+
+
+def run_transcribe(req: TranscribeRequest) -> TranscribeResponse:
     work_dir = DOWNLOAD_DIR / f"job-{req.job_id}-{uuid.uuid4().hex[:8]}"
     work_dir.mkdir(parents=True, exist_ok=False)
     started_at = time.monotonic()
@@ -129,6 +261,188 @@ def transcribe(
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def start_job_worker() -> None:
+    global _job_worker_started
+    with _jobs_lock:
+        if _job_worker_started:
+            return
+        _job_worker_started = True
+    thread = threading.Thread(target=job_worker_loop, name="gpu-job-worker", daemon=True)
+    thread.start()
+    logger.info("event=job-worker-started queue=in_memory max_concurrent_jobs=1")
+
+
+def job_worker_loop() -> None:
+    while True:
+        job_id = _job_queue.get()
+        try:
+            execute_job(job_id)
+        except Exception:
+            logger.exception("job_id=%s event=job-worker-unhandled-error", job_id)
+            mark_job_failed(job_id, "internal worker error")
+        finally:
+            _job_queue.task_done()
+
+
+def execute_job(job_id: str) -> None:
+    record = get_job_record(job_id)
+    mark_job_running(job_id)
+    started_at = time.monotonic()
+    logger.info("job_id=%s type=%s event=job-started", job_id, record.job_type)
+    try:
+        if record.job_type == "asr.transcribe":
+            transcribe_req = transcribe_request_from_job(record)
+            response = run_transcribe(transcribe_req)
+            result = model_to_dict(response)
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"unsupported job type: {record.job_type}"
+            )
+    except HTTPException as exc:
+        mark_job_failed(job_id, str(exc.detail))
+        logger.warning(
+            "job_id=%s type=%s event=job-failed error=%s elapsed=%.1fs",
+            job_id,
+            record.job_type,
+            exc.detail,
+            time.monotonic() - started_at,
+        )
+        return
+    except Exception as exc:
+        mark_job_failed(job_id, str(exc))
+        logger.exception(
+            "job_id=%s type=%s event=job-failed elapsed=%.1fs",
+            job_id,
+            record.job_type,
+            time.monotonic() - started_at,
+        )
+        return
+    mark_job_succeeded(job_id, result)
+    logger.info(
+        "job_id=%s type=%s event=job-succeeded elapsed=%.1fs",
+        job_id,
+        record.job_type,
+        time.monotonic() - started_at,
+    )
+
+
+def transcribe_request_from_job(record: JobRecord) -> TranscribeRequest:
+    payload = record.request.input
+    options = record.request.options
+    callback = record.request.callback
+    data = {
+        "job_id": record.id,
+        "source_type": payload.get("source_type"),
+        "source_ref": payload.get("source_ref"),
+        "media_url": payload.get("media_url"),
+        "media_token": payload.get("media_token"),
+        "model": options.get("model", DEFAULT_MODEL),
+        "language": options.get("language", "en"),
+        "beam_size": options.get("beam_size", 5),
+        "vad_filter": options.get("vad_filter", True),
+        "condition_on_previous_text": options.get(
+            "condition_on_previous_text", False
+        ),
+        "progress_url": (
+            callback.progress_url
+            if callback and callback.progress_url
+            else payload.get("progress_url")
+        ),
+        "progress_token": (
+            callback.progress_token
+            if callback and callback.progress_token
+            else payload.get("progress_token")
+        ),
+    }
+    return TranscribeRequest(**data)
+
+
+def get_job_record(job_id: str) -> JobRecord:
+    with _jobs_lock:
+        record = _jobs.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return record
+
+
+def mark_job_running(job_id: str) -> None:
+    with _jobs_lock:
+        record = _jobs.get(job_id)
+        if record is None:
+            return
+        record.status = "running"
+        record.progress = max(record.progress, 1)
+        record.stage = "running"
+        record.started_at = utc_now()
+
+
+def update_internal_job_progress(job_id: str, progress: int, stage: str) -> None:
+    with _jobs_lock:
+        record = _jobs.get(job_id)
+        if record is None or record.status != "running":
+            return
+        record.progress = max(record.progress, max(0, min(99, progress)))
+        record.stage = stage
+
+
+def mark_job_succeeded(job_id: str, result: dict[str, Any]) -> None:
+    with _jobs_lock:
+        record = _jobs.get(job_id)
+        if record is None:
+            return
+        record.status = "succeeded"
+        record.progress = 100
+        record.stage = "completed"
+        record.error = None
+        record.result = result
+        record.completed_at = utc_now()
+
+
+def mark_job_failed(job_id: str, error: str) -> None:
+    with _jobs_lock:
+        record = _jobs.get(job_id)
+        if record is None:
+            return
+        record.status = "failed"
+        record.progress = 100
+        record.stage = "failed"
+        record.error = error[-2000:]
+        record.completed_at = utc_now()
+
+
+def prune_finished_jobs_locked() -> None:
+    if len(_jobs) < MAX_JOBS:
+        return
+    finished = [
+        record
+        for record in _jobs.values()
+        if record.status in {"succeeded", "failed", "canceled"}
+    ]
+    finished.sort(key=lambda record: record.completed_at or record.created_at)
+    for record in finished[: max(1, len(_jobs) - MAX_JOBS + 1)]:
+        _jobs.pop(record.id, None)
+
+
+def job_status(record: JobRecord) -> JobStatus:
+    return JobStatus(
+        id=record.id,
+        type=record.job_type,
+        status=record.status,
+        progress=record.progress,
+        stage=record.stage,
+        error=record.error,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        completed_at=record.completed_at,
+    )
+
+
+def model_to_dict(model: BaseModel) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
 def log_job(req: TranscribeRequest, event: str, **fields: Any) -> None:
     extras = " ".join(f"{key}={value}" for key, value in fields.items())
     if extras:
@@ -138,6 +452,7 @@ def log_job(req: TranscribeRequest, event: str, **fields: Any) -> None:
 
 
 def report_progress(req: TranscribeRequest, progress: int, stage: str) -> None:
+    update_internal_job_progress(str(req.job_id), progress, stage)
     if not req.progress_url:
         return
     headers = {}
