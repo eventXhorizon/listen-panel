@@ -85,6 +85,7 @@ async fn cached_elevenlabs_speech(
     material_id: Option<i64>,
 ) -> Result<Response> {
     let cache_path = cache_path(cfg, text, material_id);
+    let legacy_cache_path = legacy_cache_path(cfg, text, material_id);
     match fs::read(&cache_path).await {
         Ok(bytes) => {
             tracing::debug!(path = %cache_path.display(), "tts cache hit");
@@ -96,6 +97,21 @@ async fn cached_elevenlabs_speech(
                 path = %cache_path.display(),
                 "failed to read tts cache entry: {e}"
             );
+        }
+    }
+    if legacy_cache_path != cache_path {
+        match fs::read(&legacy_cache_path).await {
+            Ok(bytes) => {
+                tracing::debug!(path = %legacy_cache_path.display(), "tts legacy cache hit");
+                return Ok(audio_response(Bytes::from(bytes)));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(
+                    path = %legacy_cache_path.display(),
+                    "failed to read legacy tts cache entry: {e}"
+                );
+            }
         }
     }
 
@@ -151,6 +167,41 @@ async fn elevenlabs_speech(
 }
 
 fn cache_path(cfg: &crate::config::TtsConfig, text: &str, material_id: Option<i64>) -> PathBuf {
+    let provider = tts_provider_name(cfg);
+    let hash = cache_key_hash(cfg, text);
+    let filename = format!(
+        "{provider}_{}_{}.mp3",
+        text_slug(text),
+        hash.chars().take(16).collect::<String>()
+    );
+    cache_dir_for_material(material_id).join(filename)
+}
+
+fn legacy_cache_path(
+    cfg: &crate::config::TtsConfig,
+    text: &str,
+    material_id: Option<i64>,
+) -> PathBuf {
+    let provider = tts_provider_name(cfg);
+    let hash = cache_key_hash(cfg, text);
+    let filename = format!("{provider}_{hash}.mp3");
+    cache_dir_for_material(material_id).join(filename)
+}
+
+fn cache_dir_for_material(material_id: Option<i64>) -> PathBuf {
+    match material_id {
+        Some(id) => crate::paths::tts_cache_dir().join(format!("material-{id}")),
+        None => crate::paths::tts_cache_dir(),
+    }
+}
+
+fn tts_provider_name(cfg: &crate::config::TtsConfig) -> &'static str {
+    match cfg.provider {
+        TtsProvider::ElevenLabs => "eleven_labs",
+    }
+}
+
+fn cache_key_hash(cfg: &crate::config::TtsConfig, text: &str) -> String {
     let provider = match cfg.provider {
         TtsProvider::ElevenLabs => "eleven_labs",
     };
@@ -167,12 +218,35 @@ fn cache_path(cfg: &crate::config::TtsConfig, text: &str, material_id: Option<i6
         hasher.update([0]);
     }
     let hash = hasher.finalize();
-    let filename = format!("{provider}_{hash:x}.mp3");
-    match material_id {
-        Some(id) => crate::paths::tts_cache_dir()
-            .join(format!("material-{id}"))
-            .join(filename),
-        None => crate::paths::tts_cache_dir().join(filename),
+    format!("{hash:x}")
+}
+
+fn text_slug(text: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_sep = false;
+    for ch in text.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            if slug.len() >= 48 {
+                break;
+            }
+            slug.push(ch);
+            last_was_sep = false;
+        } else if (ch.is_whitespace() || matches!(ch, '-' | '_' | '\'' | '.' | '/'))
+            && !slug.is_empty()
+            && !last_was_sep
+            && slug.len() < 48
+        {
+            slug.push('-');
+            last_was_sep = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "speech".to_string()
+    } else {
+        slug
     }
 }
 
@@ -194,4 +268,31 @@ fn audio_response(bytes: Bytes) -> Response {
         HeaderValue::from_static("private, max-age=31536000, immutable"),
     );
     (headers, bytes).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_slug_keeps_readable_words() {
+        assert_eq!(text_slug("spiritual drain"), "spiritual-drain");
+        assert_eq!(text_slug("Don't give up!"), "don-t-give-up");
+        assert_eq!(text_slug("   "), "speech");
+    }
+
+    #[test]
+    fn cache_filename_includes_text_slug_and_short_hash() {
+        let cfg = crate::config::TtsConfig::default();
+        let path = cache_path(&cfg, "spiritual drain", Some(42));
+        let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+        assert!(path.to_string_lossy().contains("material-42"));
+        assert!(name.starts_with("eleven_labs_spiritual-drain_"));
+        assert!(name.ends_with(".mp3"));
+
+        let legacy = legacy_cache_path(&cfg, "spiritual drain", Some(42));
+        let legacy_name = legacy.file_name().and_then(|v| v.to_str()).unwrap_or("");
+        assert!(legacy_name.starts_with("eleven_labs_"));
+        assert!(!legacy_name.contains("spiritual-drain"));
+    }
 }

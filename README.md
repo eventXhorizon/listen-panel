@@ -451,7 +451,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 ElevenLabs,返回 `audio/mpeg`
   2. `dictionary-mp3`:请求 Free Dictionary API (`https://api.dictionaryapi.dev/api/v2/entries/en/<word>`) 找 `phonetics[].audio` 的 mp3
   3. `browser-speech`:前两档不可用时,自动 fallback 到浏览器 `speechSynthesis`
-- ElevenLabs 音频按 `provider/base_url/voice_id/model/output_format/text` 做 SHA-256 hash;有文章上下文时缓存到 `<数据目录>/tts-cache/material-<material_id>/<provider>_<hash>.mp3`,没有文章上下文时缓存到 `<数据目录>/tts-cache/<provider>_<hash>.mp3`;命中缓存不再请求 ElevenLabs,不消耗 credits。失败结果不缓存。清缓存直接删 `<数据目录>/tts-cache/`。
+- ElevenLabs 音频按 `provider/base_url/voice_id/model/output_format/text` 做 SHA-256 hash;有文章上下文时缓存到 `<数据目录>/tts-cache/material-<material_id>/<provider>_<word-or-phrase>_<hash16>.mp3`,没有文章上下文时缓存到 `<数据目录>/tts-cache/<provider>_<word-or-phrase>_<hash16>.mp3`;命中缓存不再请求 ElevenLabs,不消耗 credits。旧版 `<provider>_<hash>.mp3` 文件仍可读取。失败结果不缓存。清缓存直接删 `<数据目录>/tts-cache/`。
 - Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。
 - 浏览器朗读固定 `en-US`,语速 `0.9`;不同系统/浏览器的声音会不同。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
 
