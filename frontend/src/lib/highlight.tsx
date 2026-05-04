@@ -49,6 +49,7 @@ function HighlightedWord({
 
   function toggle(e: React.MouseEvent | React.PointerEvent | React.TouchEvent) {
     if (!entry) return;
+    if (hasActiveTextSelection()) return;
     e.stopPropagation();
     if (onPick) onPick(entry);
     if (!open) {
@@ -88,7 +89,7 @@ function HighlightedWord({
     <>
       <mark
         ref={markRef}
-        className="bg-amber-100 hover:bg-amber-200 rounded px-0.5 cursor-pointer transition-colors text-stone-900 select-none"
+        className="bg-amber-100 hover:bg-amber-200 rounded px-0.5 cursor-pointer transition-colors text-stone-900"
         onPointerUp={(e) => {
           if (e.pointerType === 'touch') toggle(e);
         }}
@@ -161,6 +162,11 @@ function isUsableRect(rect: DOMRect | DOMRectReadOnly): boolean {
     rect.width > 0 &&
     rect.height > 0
   );
+}
+
+function hasActiveTextSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
 }
 
 export function highlightText(
