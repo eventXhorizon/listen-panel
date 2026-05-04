@@ -332,11 +332,13 @@ export default function Reader() {
   const [transcriptionErr, setTranscriptionErr] = useState<string | null>(null);
   const [showTypography, setShowTypography] = useState(false);
   const [typography, setTypography] = useState<ReaderTypography>(loadTypography);
+  const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const typographyRef = useRef<HTMLDivElement>(null);
   const articleScrollRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
+  const resizePointerIdRef = useRef<number | null>(null);
   const restoredScrollForRef = useRef<number | null>(null);
   const lastScrollSavedAtRef = useRef(0);
   const notesByTarget = useMemo(() => {
@@ -470,28 +472,45 @@ export default function Reader() {
     }
   }
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    draggingRef.current = true;
-    e.preventDefault();
+  const updateSplitFromClientX = useCallback((clientX: number) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const pct = ((clientX - rect.left) / rect.width) * 100;
+    setLeftPct(Math.max(28, Math.min(78, pct)));
   }, []);
 
+  const onResizePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    draggingRef.current = true;
+    resizePointerIdRef.current = e.pointerId;
+    setResizing(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    updateSplitFromClientX(e.clientX);
+    e.preventDefault();
+  }, [updateSplitFromClientX]);
+
   useEffect(() => {
-    function onMove(e: MouseEvent) {
-      if (!draggingRef.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const pct = ((e.clientX - rect.left) / rect.width) * 100;
-      setLeftPct(Math.max(28, Math.min(78, pct)));
+    function onMove(e: PointerEvent) {
+      if (!draggingRef.current || resizePointerIdRef.current !== e.pointerId) return;
+      updateSplitFromClientX(e.clientX);
+      e.preventDefault();
     }
-    function onUp() {
+    function onUp(e: PointerEvent) {
+      if (resizePointerIdRef.current !== e.pointerId) return;
       draggingRef.current = false;
+      resizePointerIdRef.current = null;
+      setResizing(false);
     }
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
-  }, []);
+  }, [updateSplitFromClientX]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -909,9 +928,15 @@ export default function Reader() {
         </div>
 
         <div
-          onMouseDown={onMouseDown}
-          className="w-1 bg-stone-200 hover:bg-stone-400 active:bg-stone-500 cursor-col-resize transition shrink-0"
-        />
+          onPointerDown={onResizePointerDown}
+          className="group relative w-3 shrink-0 cursor-col-resize touch-none select-none"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整左右分栏宽度"
+          title="拖动调整左右分栏"
+        >
+          <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-stone-200 transition group-hover:bg-stone-400 group-active:bg-stone-500" />
+        </div>
 
         <div
           className="bg-stone-900 flex flex-col"
@@ -925,6 +950,12 @@ export default function Reader() {
             />
           </div>
         </div>
+        {resizing && (
+          <div
+            className="fixed inset-0 z-50 cursor-col-resize select-none"
+            style={{ touchAction: 'none' }}
+          />
+        )}
       </div>
 
       <SelectionPopup
