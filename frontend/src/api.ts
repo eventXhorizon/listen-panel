@@ -1,9 +1,11 @@
 import type {
   CreateMaterial,
+  CreateMaterialNote,
   CreateVocab,
   AuthStatus,
   JobWithSegments,
   Material,
+  MaterialNote,
   MaterialMetadata,
   TranscriptionJob,
   User,
@@ -113,6 +115,34 @@ export function updateVocab(
 
 export async function deleteVocab(id: number): Promise<void> {
   await request<void>(`/api/vocab/${id}`, { method: 'DELETE' });
+}
+
+// Notes
+
+export function listNotes(materialId?: number): Promise<MaterialNote[]> {
+  const qs = materialId == null ? '' : `?material_id=${materialId}`;
+  return request<MaterialNote[]>(`/api/notes${qs}`);
+}
+
+export function createNote(data: CreateMaterialNote): Promise<MaterialNote> {
+  return request<MaterialNote>('/api/notes', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateNote(
+  id: number,
+  patch: Partial<Pick<CreateMaterialNote, 'anchor_text' | 'anchor_hash' | 'content'>>,
+): Promise<MaterialNote> {
+  return request<MaterialNote>(`/api/notes/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteNote(id: number): Promise<void> {
+  await request<void>(`/api/notes/${id}`, { method: 'DELETE' });
 }
 
 // Auth

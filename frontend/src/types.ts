@@ -37,6 +37,28 @@ export interface VocabEntry {
 
 export type CreateVocab = Omit<VocabEntry, 'id' | 'created_at'>;
 
+export type NoteTargetType = 'paragraph' | 'segment';
+
+export interface MaterialNote {
+  id: number;
+  user_id: number;
+  material_id: number;
+  material_title?: string | null;
+  target_type: NoteTargetType;
+  target_id?: number | null;
+  paragraph_index?: number | null;
+  anchor_text: string;
+  anchor_hash: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CreateMaterialNote = Omit<
+  MaterialNote,
+  'id' | 'user_id' | 'created_at' | 'updated_at'
+>;
+
 export interface AppSettings {
   default_volume: number; // 0.0 - 1.0
 }

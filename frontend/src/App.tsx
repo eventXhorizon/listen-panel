@@ -14,6 +14,7 @@ import Library from './pages/Library';
 import Editor from './pages/Editor';
 import Reader from './pages/Reader';
 import Vocab from './pages/Vocab';
+import Notes from './pages/Notes';
 import Review from './pages/Review';
 import Settings from './pages/Settings';
 
@@ -32,6 +33,7 @@ export default function App() {
               <Route path="m/:id" element={<Reader />} />
               <Route path="m/:id/edit" element={<Editor />} />
               <Route path="vocab" element={<Vocab />} />
+              <Route path="notes" element={<Notes />} />
               <Route path="review" element={<Review />} />
               <Route path="settings" element={<Settings />} />
             </Route>

@@ -113,3 +113,42 @@ pub struct TranscriptSegment {
     pub end_ms: i64,
     pub text: String,
 }
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct MaterialNote {
+    pub id: i64,
+    pub user_id: i64,
+    pub material_id: i64,
+    pub material_title: Option<String>,
+    pub target_type: String,
+    pub target_id: Option<i64>,
+    pub paragraph_index: Option<i64>,
+    pub anchor_text: String,
+    pub anchor_hash: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateMaterialNote {
+    pub material_id: i64,
+    pub target_type: String,
+    #[serde(default)]
+    pub target_id: Option<i64>,
+    #[serde(default)]
+    pub paragraph_index: Option<i64>,
+    #[serde(default)]
+    pub anchor_text: String,
+    #[serde(default)]
+    pub anchor_hash: String,
+    #[serde(default)]
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMaterialNote {
+    pub anchor_text: Option<String>,
+    pub anchor_hash: Option<String>,
+    pub content: Option<String>,
+}

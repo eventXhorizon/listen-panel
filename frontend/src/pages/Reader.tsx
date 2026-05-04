@@ -3,6 +3,7 @@ import {
   useState,
   useRef,
   useCallback,
+  useMemo,
   type CSSProperties,
   type ReactNode,
 } from 'react';
@@ -10,15 +11,21 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   createTranscriptionStudy,
   createTranscriptionJob,
+  createNote,
+  deleteNote,
   getMaterial,
   getTranscriptionJob,
   getTranscriptionSegments,
+  listNotes,
   listTranscriptionJobs,
   listVocab,
+  updateNote,
 } from '../api';
 import type {
   GrammarPoint,
+  MaterialNote,
   Material,
+  NoteTargetType,
   TranscriptSegment,
   TranscriptionJob,
   UsagePoint,
@@ -35,6 +42,16 @@ import { highlightText } from '../lib/highlight';
 interface PendingAdd {
   word: string;
   context: string;
+}
+
+interface PendingNote {
+  targetType: NoteTargetType;
+  targetId?: number;
+  paragraphIndex?: number;
+  anchorText: string;
+  anchorHash: string;
+  rect: DOMRectReadOnly;
+  note?: MaterialNote;
 }
 
 type ReaderFont =
@@ -259,6 +276,39 @@ function isSegmentStudy(value: SegmentStudy | undefined): value is SegmentStudy 
   return Boolean(value);
 }
 
+function anchorHash(text: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function noteKeyFor(
+  targetType: NoteTargetType,
+  targetId?: number,
+  paragraphIndex?: number,
+): string {
+  if (targetType === 'segment') return `segment:${targetId ?? ''}`;
+  return `paragraph:${paragraphIndex ?? ''}`;
+}
+
+function elementRect(el: HTMLElement): DOMRectReadOnly {
+  const rect = el.getBoundingClientRect();
+  return {
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    left: rect.left,
+    width: rect.width,
+    height: rect.height,
+    x: rect.x,
+    y: rect.y,
+    toJSON: () => ({}),
+  };
+}
+
 export default function Reader() {
   const { id } = useParams();
   const mid = Number(id);
@@ -268,9 +318,12 @@ export default function Reader() {
   const [leftPct, setLeftPct] = useState(50);
   const [highlightOn, setHighlightOn] = useState(true);
   const [pending, setPending] = useState<PendingAdd | null>(null);
+  const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
   const [showVocabPanel, setShowVocabPanel] = useState(false);
   const [job, setJob] = useState<TranscriptionJob | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [notes, setNotes] = useState<MaterialNote[]>([]);
+  const [notesErr, setNotesErr] = useState<string | null>(null);
   const [segmentsErr, setSegmentsErr] = useState<string | null>(null);
   const [showStudy, setShowStudy] = useState(false);
   const [studyErr, setStudyErr] = useState<string | null>(null);
@@ -286,6 +339,20 @@ export default function Reader() {
   const draggingRef = useRef(false);
   const restoredScrollForRef = useRef<number | null>(null);
   const lastScrollSavedAtRef = useRef(0);
+  const notesByTarget = useMemo(() => {
+    const map = new Map<string, MaterialNote>();
+    for (const note of notes) {
+      map.set(
+        noteKeyFor(
+          note.target_type,
+          note.target_id ?? undefined,
+          note.paragraph_index ?? undefined,
+        ),
+        note,
+      );
+    }
+    return map;
+  }, [notes]);
 
   useEffect(() => {
     if (Number.isNaN(mid)) {
@@ -300,6 +367,12 @@ export default function Reader() {
       }
       setM(data);
       setVocab(await listVocab(mid));
+      try {
+        setNotes(await listNotes(mid));
+        setNotesErr(null);
+      } catch (e) {
+        setNotesErr((e as Error).message);
+      }
       const jobs = await listTranscriptionJobs(mid);
       const latest = jobs[0] ?? null;
       setJob(latest);
@@ -517,6 +590,19 @@ export default function Reader() {
     setPending({ word: text, context: context || text });
   }
 
+  function openNote(target: Omit<PendingNote, 'note' | 'rect'>, trigger: HTMLElement) {
+    const key = noteKeyFor(
+      target.targetType,
+      target.targetId,
+      target.paragraphIndex,
+    );
+    setPendingNote({
+      ...target,
+      rect: elementRect(trigger),
+      note: notesByTarget.get(key),
+    });
+  }
+
   if (!m) {
     return (
       <main className="flex-1 overflow-y-auto">
@@ -711,6 +797,12 @@ export default function Reader() {
             <span className="font-medium break-words">{studyErr}</span>
           </div>
         )}
+        {notesErr && (
+          <div className="border-t border-rose-100 bg-rose-50 px-6 py-2 text-sm text-rose-700">
+            笔记加载失败:{' '}
+            <span className="font-medium break-words">{notesErr}</span>
+          </div>
+        )}
       </div>
 
       <div
@@ -771,19 +863,25 @@ export default function Reader() {
                   highlightOn={highlightOn}
                   paragraphStyle={paragraphStyle}
                   showStudy={showStudy}
+                  note={notesByTarget.get(
+                    noteKeyFor('segment', group[0]?.id, undefined),
+                  )}
+                  onOpenNote={openNote}
                 />
               ))
             ) : paragraphs.length > 0 ? (
               paragraphs.map((p, i) => (
-                <p
+                <ParagraphBlock
                   key={i}
-                  data-paragraph={i}
-                  data-paragraph-text={p}
-                  className="mb-5 text-stone-800"
-                  style={paragraphStyle}
-                >
-                  {highlightOn ? highlightText(p, vocab, m.id) : p}
-                </p>
+                  text={p}
+                  paragraphIndex={i}
+                  materialId={m.id}
+                  vocab={vocab}
+                  highlightOn={highlightOn}
+                  paragraphStyle={paragraphStyle}
+                  note={notesByTarget.get(noteKeyFor('paragraph', undefined, i))}
+                  onOpenNote={openNote}
+                />
               ))
             ) : (
               <p className="text-stone-400 italic">
@@ -852,6 +950,25 @@ export default function Reader() {
           items={vocab}
           onClose={() => setShowVocabPanel(false)}
           onChange={refreshVocab}
+        />
+      )}
+
+      {pendingNote && (
+        <NoteEditor
+          materialId={m.id}
+          target={pendingNote}
+          onClose={() => setPendingNote(null)}
+          onSaved={(note) => {
+            setPendingNote(null);
+            setNotes((items) => upsertNote(items, note));
+            setNotesErr(null);
+          }}
+          onDeleted={(id) => {
+            setPendingNote(null);
+            setNotes((items) => items.filter((item) => item.id !== id));
+            setNotesErr(null);
+          }}
+          onError={setNotesErr}
         />
       )}
     </div>
@@ -935,6 +1052,129 @@ function StudyProgress({
   );
 }
 
+function ParagraphBlock({
+  text,
+  paragraphIndex,
+  materialId,
+  vocab,
+  highlightOn,
+  paragraphStyle,
+  note,
+  onOpenNote,
+}: {
+  text: string;
+  paragraphIndex: number;
+  materialId: number;
+  vocab: VocabEntry[];
+  highlightOn: boolean;
+  paragraphStyle: CSSProperties;
+  note?: MaterialNote;
+  onOpenNote: (
+    target: Omit<PendingNote, 'note' | 'rect'>,
+    trigger: HTMLElement,
+  ) => void;
+}) {
+  return (
+    <section
+      data-paragraph={paragraphIndex}
+      data-paragraph-text={text}
+      className="mb-6 scroll-mt-6"
+    >
+      <div className="mb-1 flex justify-end">
+        <NoteButton
+          hasNote={Boolean(note?.content.trim())}
+          preview={note?.content}
+          onClick={(trigger) =>
+            onOpenNote({
+              targetType: 'paragraph',
+              paragraphIndex,
+              anchorText: text,
+              anchorHash: anchorHash(text),
+            }, trigger)
+          }
+        />
+      </div>
+      <p className="text-stone-800" style={paragraphStyle}>
+        {highlightOn ? highlightText(text, vocab, materialId) : text}
+      </p>
+    </section>
+  );
+}
+
+function NoteButton({
+  hasNote,
+  preview,
+  onClick,
+}: {
+  hasNote: boolean;
+  preview?: string;
+  onClick: (trigger: HTMLElement) => void;
+}) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const previewText = preview?.trim();
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
+
+  function openPreview() {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    setPreviewOpen(true);
+  }
+
+  function scheduleClosePreview() {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current);
+    }
+    closeTimerRef.current = window.setTimeout(() => {
+      setPreviewOpen(false);
+      closeTimerRef.current = null;
+    }, 180);
+  }
+
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={openPreview}
+      onMouseLeave={scheduleClosePreview}
+      onFocus={openPreview}
+      onBlur={scheduleClosePreview}
+    >
+      <button
+        type="button"
+        onClick={(e) => onClick(e.currentTarget)}
+        title={hasNote ? '编辑段落笔记' : '添加段落笔记'}
+        className={`inline-flex h-7 items-center rounded-md border px-2 text-[11px] font-medium transition ${
+          hasNote
+            ? 'border-lime-200 bg-lime-50 text-lime-800 hover:bg-lime-100'
+            : 'border-stone-200 bg-white text-stone-500 hover:border-stone-300 hover:bg-stone-50 hover:text-stone-800'
+        } select-none`}
+      >
+        {hasNote ? '笔记' : '+ 笔记'}
+      </button>
+      {previewOpen && previewText && (
+        <span
+          className="absolute right-0 top-8 z-40 w-96 rounded-lg border border-stone-200 bg-white px-4 py-3 text-left text-sm font-normal leading-6 text-stone-800 shadow-xl shadow-stone-900/10"
+          onMouseEnter={openPreview}
+          onMouseLeave={scheduleClosePreview}
+        >
+          <span className="block max-h-56 overflow-y-auto whitespace-pre-wrap break-words">
+            {previewText}
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 function TranscriptSegmentBlock({
   group,
   paragraphIndex,
@@ -943,6 +1183,8 @@ function TranscriptSegmentBlock({
   highlightOn,
   paragraphStyle,
   showStudy,
+  note,
+  onOpenNote,
 }: {
   group: TranscriptSegment[];
   paragraphIndex: number;
@@ -951,11 +1193,17 @@ function TranscriptSegmentBlock({
   highlightOn: boolean;
   paragraphStyle: CSSProperties;
   showStudy: boolean;
+  note?: MaterialNote;
+  onOpenNote: (
+    target: Omit<PendingNote, 'note' | 'rect'>,
+    trigger: HTMLElement,
+  ) => void;
 }) {
   const text = group.map((segment) => segment.text).join(' ');
   const start = group[0]?.start_ms ?? 0;
   const end = group[group.length - 1]?.end_ms ?? start;
   const studies = group.map((segment) => segment.study).filter(isSegmentStudy);
+  const targetId = group[0]?.id;
 
   return (
     <section
@@ -963,8 +1211,22 @@ function TranscriptSegmentBlock({
       data-paragraph-text={text}
       className="mb-7 scroll-mt-6"
     >
-      <div className="mb-2 text-[11px] font-medium text-stone-400">
-        {formatTimestamp(start)} - {formatTimestamp(end)}
+      <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-medium text-stone-400">
+        <span>{formatTimestamp(start)} - {formatTimestamp(end)}</span>
+        <NoteButton
+          hasNote={Boolean(note?.content.trim())}
+          preview={note?.content}
+          onClick={(trigger) => {
+            if (targetId == null) return;
+            onOpenNote({
+              targetType: 'segment',
+              targetId,
+              paragraphIndex,
+              anchorText: text,
+              anchorHash: anchorHash(text),
+            }, trigger);
+          }}
+        />
       </div>
       <p className="text-stone-800" style={paragraphStyle}>
         {highlightOn ? highlightText(text, vocab, materialId) : text}
@@ -1048,6 +1310,257 @@ function UsagePointItem({ point }: { point: UsagePoint }) {
       )}
     </div>
   );
+}
+
+function NoteEditor({
+  materialId,
+  target,
+  onClose,
+  onSaved,
+  onDeleted,
+  onError,
+}: {
+  materialId: number;
+  target: PendingNote;
+  onClose: () => void;
+  onSaved: (note: MaterialNote) => void;
+  onDeleted: (id: number) => void;
+  onError: (error: string | null) => void;
+}) {
+  const [content, setContent] = useState(target.note?.content ?? '');
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const label = target.targetType === 'segment' ? '转写分段笔记' : '段落笔记';
+  const isMobile = window.innerWidth < 720;
+  const [popoverPos, setPopoverPos] = useState(() =>
+    notePopoverPosition(target.rect),
+  );
+  const draggingNoteRef = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+  const popoverStyle: CSSProperties = {
+    top: popoverPos.top,
+    left: popoverPos.left,
+  };
+
+  useEffect(() => {
+    if (isMobile) return;
+
+    function onPointerMove(e: PointerEvent) {
+      const drag = draggingNoteRef.current;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+      setPopoverPos(
+        clampNotePopoverPosition(e.clientX - drag.offsetX, e.clientY - drag.offsetY),
+      );
+    }
+
+    function onPointerUp(e: PointerEvent) {
+      const drag = draggingNoteRef.current;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+      draggingNoteRef.current = null;
+    }
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
+  }, [isMobile]);
+
+  function startDrag(e: React.PointerEvent<HTMLDivElement>) {
+    if (isMobile) return;
+    if ((e.target as HTMLElement).closest('button')) return;
+    draggingNoteRef.current = {
+      pointerId: e.pointerId,
+      offsetX: e.clientX - popoverPos.left,
+      offsetY: e.clientY - popoverPos.top,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const trimmed = content.trim();
+      if (!trimmed && target.note) {
+        await deleteNote(target.note.id);
+        onDeleted(target.note.id);
+        return;
+      }
+      if (!trimmed) {
+        onClose();
+        return;
+      }
+      const saved = target.note
+        ? await updateNote(target.note.id, {
+            anchor_text: target.anchorText,
+            anchor_hash: target.anchorHash,
+            content: trimmed,
+          })
+        : await createNote({
+            material_id: materialId,
+            target_type: target.targetType,
+            target_id: target.targetId,
+            paragraph_index: target.paragraphIndex,
+            anchor_text: target.anchorText,
+            anchor_hash: target.anchorHash,
+            content: trimmed,
+          });
+      onSaved(saved);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteCurrent() {
+    if (!target.note) return;
+    setDeleting(true);
+    try {
+      await deleteNote(target.note.id);
+      onDeleted(target.note.id);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/20">
+      <button
+        type="button"
+        aria-label="关闭笔记"
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
+      <aside
+        style={isMobile ? undefined : popoverStyle}
+        className={`absolute flex flex-col bg-white shadow-2xl shadow-stone-950/20 ${
+          isMobile
+            ? 'inset-x-0 bottom-0 max-h-[86vh] rounded-t-xl'
+            : 'max-h-[min(620px,calc(100vh-24px))] w-[24rem] rounded-lg border border-stone-200'
+        }`}
+      >
+        <div
+          className={`flex shrink-0 items-center justify-between border-b border-stone-200 px-4 py-3 ${
+            isMobile ? '' : 'cursor-move select-none'
+          }`}
+          onPointerDown={startDrag}
+        >
+          <div>
+            <div className="text-sm font-semibold text-stone-900">{label}</div>
+            <div className="text-[11px] text-stone-500">
+              {target.note ? '已保存' : '新笔记'}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+          >
+            ×
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div className="mb-4 rounded-md border border-stone-200 bg-stone-50 px-3 py-2">
+            <div className="mb-1 text-[11px] font-medium text-stone-500">
+              原文
+            </div>
+            <p className="max-h-28 overflow-y-auto text-sm leading-6 text-stone-700">
+              {target.anchorText}
+            </p>
+          </div>
+          <label className="block">
+            <span className="mb-2 block text-xs font-medium text-stone-500">
+              笔记
+            </span>
+            <textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={isMobile ? 8 : 10}
+              autoFocus
+              className="w-full resize-none rounded-md border border-stone-200 bg-white px-3 py-2 text-sm leading-6 text-stone-800 outline-none focus:border-lime-500"
+              placeholder="写下这里的理解、语法、疑问或补充例句..."
+            />
+          </label>
+        </div>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-stone-200 px-4 py-3">
+          <button
+            type="button"
+            onClick={deleteCurrent}
+            disabled={!target.note || deleting || saving}
+            className="inline-flex h-8 items-center rounded-md border border-rose-200 bg-white px-3 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-300"
+          >
+            {deleting ? '删除中...' : '删除'}
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-8 items-center rounded-md border border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 hover:bg-stone-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving || deleting}
+              className="inline-flex h-8 items-center rounded-md border border-lime-200 bg-lime-50 px-3 text-xs font-medium text-lime-800 hover:bg-lime-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+            >
+              {saving ? '保存中...' : '保存'}
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function upsertNote(items: MaterialNote[], note: MaterialNote): MaterialNote[] {
+  const index = items.findIndex((item) => item.id === note.id);
+  if (index < 0) return [note, ...items];
+  const next = [...items];
+  next[index] = note;
+  return next;
+}
+
+interface NotePopoverPosition {
+  top: number;
+  left: number;
+}
+
+function notePopoverPosition(rect: DOMRectReadOnly): NotePopoverPosition {
+  const width = 384;
+  const margin = 12;
+  const estimatedHeight = Math.min(620, window.innerHeight - margin * 2);
+  const top = Math.min(
+    Math.max(margin, rect.bottom + 8),
+    Math.max(margin, window.innerHeight - estimatedHeight - margin),
+  );
+  const preferredLeft = rect.right - width;
+  const left = Math.max(
+    margin,
+    Math.min(window.innerWidth - width - margin, preferredLeft),
+  );
+  return { top, left };
+}
+
+function clampNotePopoverPosition(left: number, top: number): NotePopoverPosition {
+  const width = 384;
+  const estimatedHeight = Math.min(620, window.innerHeight - 24);
+  const margin = 12;
+  return {
+    left: Math.max(margin, Math.min(window.innerWidth - width - margin, left)),
+    top: Math.max(margin, Math.min(window.innerHeight - estimatedHeight - margin, top)),
+  };
 }
 
 function TypographySlider({

@@ -4,6 +4,7 @@ import { useAuth } from '../lib/auth-context';
 const NAV_ITEMS = [
   { to: '/', label: '书架', end: true },
   { to: '/vocab', label: '生词本', end: false },
+  { to: '/notes', label: '笔记', end: false },
   { to: '/review', label: '复习', end: false },
 ];
 
