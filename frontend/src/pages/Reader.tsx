@@ -84,6 +84,7 @@ const DEFAULT_TYPOGRAPHY: ReaderTypography = {
   lineHeight: 1.85,
   letterSpacing: 0,
 };
+const MOBILE_READER_QUERY = '(max-width: 767px)';
 
 const FONT_OPTIONS: Array<{
   value: ReaderFont;
@@ -232,6 +233,23 @@ function saveArticleScroll(materialId: number, top: number) {
   );
 }
 
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(query);
+    const onChange = () => setMatches(mediaQuery.matches);
+    onChange();
+    mediaQuery.addEventListener('change', onChange);
+    return () => mediaQuery.removeEventListener('change', onChange);
+  }, [query]);
+
+  return matches;
+}
+
 function formatTimestamp(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '00:00';
   const totalSeconds = Math.round(ms / 1000);
@@ -332,7 +350,9 @@ export default function Reader() {
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptionErr, setTranscriptionErr] = useState<string | null>(null);
   const [showTypography, setShowTypography] = useState(false);
+  const [showMobileMedia, setShowMobileMedia] = useState(false);
   const [typography, setTypography] = useState<ReaderTypography>(loadTypography);
+  const isMobileReader = useMediaQuery(MOBILE_READER_QUERY);
   const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
@@ -531,6 +551,13 @@ export default function Reader() {
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [showTypography]);
 
+  const restoreArticleScroll = useCallback((savedTop: number) => {
+    const el = articleScrollRef.current;
+    if (!el) return;
+    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.max(0, Math.min(savedTop, maxTop));
+  }, []);
+
   useEffect(() => {
     if (!m) return;
     if (restoredScrollForRef.current === m.id) return;
@@ -548,7 +575,7 @@ export default function Reader() {
       window.cancelAnimationFrame(firstFrame);
       if (nextFrame) window.cancelAnimationFrame(nextFrame);
     };
-  }, [m]);
+  }, [m, restoreArticleScroll]);
 
   useEffect(() => {
     if (!m) return;
@@ -568,13 +595,6 @@ export default function Reader() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [m]);
-
-  function restoreArticleScroll(savedTop: number) {
-    const el = articleScrollRef.current;
-    if (!el) return;
-    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
-    el.scrollTop = Math.max(0, Math.min(savedTop, maxTop));
-  }
 
   function handleArticleScroll(e: React.UIEvent<HTMLDivElement>) {
     if (!m) return;
@@ -650,7 +670,7 @@ export default function Reader() {
     FONT_OPTIONS[0].family;
   const paragraphStyle: CSSProperties = {
     fontFamily,
-    fontSize: `${typography.fontSize}px`,
+    fontSize: `${isMobileReader ? Math.max(20, typography.fontSize) : typography.fontSize}px`,
     lineHeight: typography.lineHeight,
     letterSpacing: `${typography.letterSpacing}em`,
   };
@@ -658,7 +678,7 @@ export default function Reader() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="border-b border-stone-200 bg-white">
-        <div className="w-full px-8 h-14 flex items-center justify-between gap-5">
+        <div className="w-full px-4 py-2 md:px-8 md:py-0 md:h-14 flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-5">
           <div className="min-w-0 flex items-center gap-2">
             <Link
               to="/"
@@ -675,11 +695,18 @@ export default function Reader() {
               {languageLabel(m.language)}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="-mx-4 flex max-w-[calc(100vw-2rem)] items-center gap-1.5 overflow-x-auto px-4 pb-1 md:mx-0 md:max-w-none md:shrink-0 md:overflow-visible md:px-0 md:pb-0">
+            <button
+              type="button"
+              onClick={() => setShowMobileMedia(true)}
+              className="inline-flex h-8 shrink-0 items-center rounded-md border border-stone-800 bg-stone-900 px-3 text-xs font-medium text-white hover:bg-stone-800 md:hidden"
+            >
+              播放
+            </button>
             <button
               onClick={() => setHighlightOn((v) => !v)}
               title={highlightOn ? '关闭生词高亮' : '开启生词高亮'}
-              className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition ${
+              className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition ${
                 highlightOn
                   ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
                   : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
@@ -690,20 +717,20 @@ export default function Reader() {
             <button
               onClick={() => setLeftPct(50)}
               title="重置分栏比例 50:50"
-              className="inline-flex h-8 items-center rounded-md border border-stone-200 bg-stone-50 px-3 text-xs font-medium text-stone-700 hover:bg-stone-100"
+              className="hidden h-8 shrink-0 items-center rounded-md border border-stone-200 bg-stone-50 px-3 text-xs font-medium text-stone-700 hover:bg-stone-100 md:inline-flex"
             >
               50:50
             </button>
-            <div ref={typographyRef} className="relative">
+            <div ref={typographyRef} className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setShowTypography((v) => !v)}
-                className="inline-flex h-8 items-center rounded-md border border-teal-200 bg-teal-50 px-3 text-xs font-medium text-teal-800 hover:bg-teal-100"
+                className="inline-flex h-8 shrink-0 items-center rounded-md border border-teal-200 bg-teal-50 px-3 text-xs font-medium text-teal-800 hover:bg-teal-100"
               >
                 排版
               </button>
               {showTypography && (
-                <div className="absolute right-0 top-9 z-40 w-72 rounded-lg border border-stone-200 bg-white p-4 text-sm shadow-xl shadow-stone-900/10">
+                <div className="fixed inset-x-4 top-28 z-40 rounded-lg border border-stone-200 bg-white p-4 text-sm shadow-xl shadow-stone-900/10 md:absolute md:inset-auto md:right-0 md:top-9 md:w-72">
                   <div className="mb-3 flex items-center justify-between">
                     <span className="font-medium text-stone-900">阅读排版</span>
                     <button
@@ -772,11 +799,11 @@ export default function Reader() {
             </div>
             <button
               onClick={() => setShowVocabPanel(true)}
-              className="inline-flex h-8 items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+              className="inline-flex h-8 shrink-0 items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
             >
               生词 ({vocab.length})
             </button>
-            <span aria-hidden="true" className="mx-1 h-4 w-px bg-stone-200" />
+            <span aria-hidden="true" className="mx-1 hidden h-4 w-px bg-stone-200 md:block" />
             <button
               onClick={startTranscription}
               disabled={
@@ -784,7 +811,7 @@ export default function Reader() {
                 job?.status === 'queued' ||
                 job?.status === 'running'
               }
-              className="inline-flex h-8 items-center rounded-md border border-sky-200 bg-sky-50 px-3 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+              className="inline-flex h-8 shrink-0 items-center rounded-md border border-sky-200 bg-sky-50 px-3 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
               title="调用局域网 GPU ASR worker 生成原文"
             >
               {transcriptionButtonLabel(job, transcribing)}
@@ -794,7 +821,7 @@ export default function Reader() {
                 type="button"
                 onClick={toggleStudy}
                 disabled={studySubmitting}
-                className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400 ${
+                className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400 ${
                   showStudy
                     ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
                     : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
@@ -806,7 +833,7 @@ export default function Reader() {
             )}
             <Link
               to={`/m/${m.id}/edit`}
-              className="inline-flex h-8 items-center rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-800 hover:bg-violet-100"
+              className="inline-flex h-8 shrink-0 items-center rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-800 hover:bg-violet-100"
             >
               编辑
             </Link>
@@ -839,16 +866,17 @@ export default function Reader() {
         <div
           ref={articleScrollRef}
           onScroll={handleArticleScroll}
-          className="overflow-y-auto bg-white"
+          className="overflow-y-auto bg-white touch-pan-y"
           style={{
-            width: `${leftPct}%`,
+            width: isMobileReader ? '100%' : `${leftPct}%`,
+            touchAction: isMobileReader ? 'pan-y' : undefined,
             WebkitUserSelect: 'text',
             userSelect: 'text',
           }}
         >
           <article
             ref={articleRef}
-            className="px-10 py-10 max-w-2xl mx-auto"
+            className="max-w-2xl mx-auto px-5 pb-28 pt-7 md:px-10 md:py-10"
           >
             {(job || transcriptionErr) && (
               <div className="mb-6 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
@@ -936,29 +964,99 @@ export default function Reader() {
           </article>
         </div>
 
-        <div
-          onPointerDown={onResizePointerDown}
-          className="group relative w-3 shrink-0 cursor-col-resize touch-none select-none"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="调整左右分栏宽度"
-          title="拖动调整左右分栏"
-        >
-          <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-stone-200 transition group-hover:bg-stone-400 group-active:bg-stone-500" />
-        </div>
+        {!isMobileReader && (
+          <>
+            <div
+              onPointerDown={onResizePointerDown}
+              className="group relative w-3 shrink-0 cursor-col-resize touch-none select-none"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整左右分栏宽度"
+              title="拖动调整左右分栏"
+            >
+              <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-stone-200 transition group-hover:bg-stone-400 group-active:bg-stone-500" />
+            </div>
 
-        <div
-          className="bg-stone-900 flex flex-col"
-          style={{ width: `${100 - leftPct}%` }}
-        >
-          <div className="flex-1 min-h-0">
-            <VideoPlayer
-              materialId={m.id}
-              sourceType={m.source_type}
-              sourceRef={m.source_ref}
-            />
+            <div
+              className="bg-stone-900 flex flex-col"
+              style={{ width: `${100 - leftPct}%` }}
+            >
+              <div className="flex-1 min-h-0">
+                <VideoPlayer
+                  materialId={m.id}
+                  sourceType={m.source_type}
+                  sourceRef={m.source_ref}
+                />
+              </div>
+            </div>
+          </>
+        )}
+        {isMobileReader && (
+          <div
+            className={`fixed md:hidden ${
+              showMobileMedia
+                ? 'inset-0 z-50 bg-black/45'
+                : 'inset-x-4 bottom-4 z-30 pointer-events-none'
+            }`}
+          >
+            {showMobileMedia && (
+              <button
+                type="button"
+                aria-label="收起播放面板"
+                className="absolute inset-0 cursor-default"
+                onClick={() => setShowMobileMedia(false)}
+              />
+            )}
+            <aside
+              className={`${
+                showMobileMedia
+                  ? 'absolute inset-x-0 bottom-0 flex max-h-[86vh] flex-col rounded-t-xl'
+                  : 'pointer-events-auto relative rounded-lg'
+              } bg-stone-950 shadow-2xl shadow-stone-950/40`}
+            >
+              <div
+                className={`flex shrink-0 items-center justify-between px-4 py-3 ${
+                  showMobileMedia ? 'border-b border-white/10' : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowMobileMedia(true)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="block truncate text-sm font-medium text-white">
+                    {m.title}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-stone-400">
+                    {showMobileMedia ? '播放面板' : '点击展开播放面板'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowMobileMedia((v) => !v)}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-stone-300 hover:bg-white/10 hover:text-white"
+                  aria-label={showMobileMedia ? '收起播放面板' : '展开播放面板'}
+                >
+                  {showMobileMedia ? '×' : '⌃'}
+                </button>
+              </div>
+              <div
+                className={
+                  showMobileMedia
+                    ? 'min-h-[240px] flex-1'
+                    : 'fixed -left-[9999px] -top-[9999px] h-px w-px overflow-hidden opacity-0 pointer-events-none'
+                }
+                aria-hidden={!showMobileMedia}
+              >
+                <VideoPlayer
+                  materialId={m.id}
+                  sourceType={m.source_type}
+                  sourceRef={m.source_ref}
+                />
+              </div>
+            </aside>
           </div>
-        </div>
+        )}
         {resizing && (
           <div
             className="fixed inset-0 z-50 cursor-col-resize select-none"

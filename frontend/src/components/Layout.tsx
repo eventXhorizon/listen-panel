@@ -14,21 +14,21 @@ export default function Layout() {
   return (
     <div className="h-screen flex flex-col bg-stone-50 overflow-hidden">
       <header className="border-b border-stone-100 bg-white shrink-0">
-        <div className="w-full px-8 h-14 flex items-center justify-between">
+        <div className="w-full px-4 py-2 md:px-8 md:py-0 md:h-14 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <Link
             to="/"
-            className="text-stone-900 font-medium tracking-tight text-[15px]"
+            className="text-stone-900 font-medium tracking-tight text-[15px] shrink-0"
           >
             Listen Panel
           </Link>
-          <nav className="flex items-center gap-1 text-sm">
+          <nav className="-mx-4 flex items-center gap-1 overflow-x-auto px-4 pb-1 text-sm md:mx-0 md:overflow-visible md:px-0 md:pb-0">
             {NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.end}
                 className={({ isActive }) =>
-                  `px-3 py-1.5 rounded-md transition ${
+                  `shrink-0 px-3 py-1.5 rounded-md transition ${
                     isActive
                       ? 'text-stone-900 bg-stone-100'
                       : 'text-stone-600 hover:bg-stone-100'
@@ -41,7 +41,7 @@ export default function Layout() {
             <NavLink
               to="/settings"
               className={({ isActive }) =>
-                `ml-1 px-2.5 py-1.5 rounded-md transition text-stone-500 ${
+                `ml-1 shrink-0 px-2.5 py-1.5 rounded-md transition text-stone-500 ${
                   isActive ? 'bg-stone-100 text-stone-900' : 'hover:bg-stone-100'
                 }`
               }
@@ -51,14 +51,14 @@ export default function Layout() {
             </NavLink>
             <button
               onClick={() => auth.logout()}
-              className="ml-1 px-2.5 py-1.5 rounded-md transition text-stone-500 hover:bg-stone-100"
+              className="ml-1 shrink-0 px-2.5 py-1.5 rounded-md transition text-stone-500 hover:bg-stone-100"
               title={`当前用户:${auth.user?.display_name ?? ''}`}
             >
               {auth.user?.display_name ?? auth.user?.username} · 退出
             </button>
             <Link
               to="/new"
-              className="ml-2 px-3 py-1.5 rounded-md border border-sky-200 bg-sky-50 text-sky-800 font-medium hover:bg-sky-100 transition"
+              className="ml-2 shrink-0 px-3 py-1.5 rounded-md border border-sky-200 bg-sky-50 text-sky-800 font-medium hover:bg-sky-100 transition"
             >
               + 新建
             </Link>
