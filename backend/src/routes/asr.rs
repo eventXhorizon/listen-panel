@@ -36,6 +36,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/transcriptions/:id", get(get_one))
         .route("/transcriptions/:id/segments", get(segments))
         .route("/transcriptions/:id/study", post(create_study))
+        .route("/transcriptions/:id/study/pause", post(pause_study))
         .route("/asr/media/:job_id", get(stream_job_media))
         .route("/asr/progress/:job_id", post(update_progress))
 }
@@ -266,6 +267,18 @@ async fn create_study(
 
     let updated = job_for_user(&state.pool, id, user.id).await?;
     Ok(Json(updated))
+}
+
+async fn pause_study(
+    State(pool): State<sqlx::SqlitePool>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<TranscriptionJob>> {
+    let job = job_for_user(&pool, id, user.id).await?;
+    if job.study_status == "running" {
+        crate::study::request_study_pause(&pool, id).await?;
+    }
+    Ok(Json(job_for_user(&pool, id, user.id).await?))
 }
 
 async fn stream_job_media(

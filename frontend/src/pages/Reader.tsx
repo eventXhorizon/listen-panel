@@ -19,6 +19,7 @@ import {
   listNotes,
   listTranscriptionJobs,
   listVocab,
+  pauseTranscriptionStudy,
   updateNote,
 } from '../api';
 import type {
@@ -66,6 +67,11 @@ type ReaderFont =
   | 'georgia'
   | 'times'
   | 'mono';
+
+interface ParagraphSegmentGroup {
+  text: string;
+  segments: TranscriptSegment[];
+}
 
 interface ReaderTypography {
   font: ReaderFont;
@@ -287,6 +293,75 @@ function groupPlainSegments(
   return groups;
 }
 
+function groupSegmentsForParagraphs(
+  segments: TranscriptSegment[],
+  paragraphs: string[],
+): ParagraphSegmentGroup[] {
+  if (segments.length === 0) return [];
+  if (paragraphs.length <= 1) {
+    return groupPlainSegments(segments).map((group) => ({
+      text: group.map((segment) => segment.text).join(' '),
+      segments: group,
+    }));
+  }
+
+  const groups: ParagraphSegmentGroup[] = [];
+  let cursor = 0;
+  for (const paragraph of paragraphs) {
+    const group: TranscriptSegment[] = [];
+    let collected = '';
+    while (cursor < segments.length) {
+      const segment = segments[cursor];
+      group.push(segment);
+      collected = appendNormalizedText(collected, segment.text);
+      cursor += 1;
+      if (paragraphContainsSegments(paragraph, collected)) break;
+    }
+    groups.push({ text: paragraph, segments: group });
+  }
+  if (cursor < segments.length) {
+    const remaining = segments.slice(cursor);
+    const last = groups.at(-1);
+    if (last) {
+      last.segments.push(...remaining);
+    } else {
+      groups.push({
+        text: remaining.map((segment) => segment.text).join(' '),
+        segments: remaining,
+      });
+    }
+  }
+  return groups.length > 0
+    ? groups
+    : groupPlainSegments(segments).map((group) => ({
+        text: group.map((segment) => segment.text).join(' '),
+        segments: group,
+      }));
+}
+
+function appendNormalizedText(left: string, right: string): string {
+  const text = right.trim();
+  if (!text) return left;
+  return left ? `${left} ${text}` : text;
+}
+
+function paragraphContainsSegments(paragraph: string, collected: string): boolean {
+  const paragraphText = normalizeStudyText(paragraph);
+  const collectedText = normalizeStudyText(collected);
+  if (!collectedText) return false;
+  if (collectedText.length < paragraphText.length * 0.92) return false;
+  return paragraphText.includes(collectedText) || collectedText.includes(paragraphText);
+}
+
+function normalizeStudyText(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .trim()
+    .toLocaleLowerCase();
+}
+
 function paragraphText(el: HTMLElement): string {
   return el.dataset.paragraphText || el.textContent || '';
 }
@@ -347,6 +422,7 @@ export default function Reader() {
   const [showStudy, setShowStudy] = useState(false);
   const [studyErr, setStudyErr] = useState<string | null>(null);
   const [studySubmitting, setStudySubmitting] = useState(false);
+  const [studyPausing, setStudyPausing] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptionErr, setTranscriptionErr] = useState<string | null>(null);
   const [showTypography, setShowTypography] = useState(false);
@@ -490,6 +566,38 @@ export default function Reader() {
       setStudyErr((e as Error).message);
     } finally {
       setStudySubmitting(false);
+    }
+  }
+
+  async function resumeStudy() {
+    if (!job || job.status !== 'succeeded' || job.study_status !== 'pending') return;
+    setStudySubmitting(true);
+    setStudyErr(null);
+    try {
+      const updated = await createTranscriptionStudy(job.id);
+      setJob(updated);
+      if (m) {
+        setShowStudy(true);
+        saveStudyVisible(m.id, true);
+      }
+    } catch (e) {
+      setStudyErr((e as Error).message);
+    } finally {
+      setStudySubmitting(false);
+    }
+  }
+
+  async function pauseStudy() {
+    if (!job || job.study_status !== 'running' || studyPausing) return;
+    setStudyPausing(true);
+    setStudyErr(null);
+    try {
+      const updated = await pauseTranscriptionStudy(job.id);
+      setJob(updated);
+    } catch (e) {
+      setStudyErr((e as Error).message);
+    } finally {
+      setStudyPausing(false);
     }
   }
 
@@ -662,9 +770,15 @@ export default function Reader() {
         .map((p) => p.trim())
         .filter(Boolean)
     : [];
+  const paragraphSegmentGroups = groupSegmentsForParagraphs(segments, paragraphs);
+  const hasStudy = segments.some((segment) => segment.study);
+  const isStudyPaused = job?.study_status === 'pending' && job.study_stage === '已暂停';
   const shouldUseTextParagraphs = paragraphs.length > 1 && !showStudy;
-  const segmentGroups =
-    !shouldUseTextParagraphs && segments.length > 0 ? groupPlainSegments(segments) : [];
+  const studyGroups = segments.length === 0 || shouldUseTextParagraphs
+    ? []
+    : paragraphs.length > 1 && showStudy
+      ? paragraphSegmentGroups
+      : groupSegmentsForParagraphs(segments, paragraphs);
   const fontFamily =
     FONT_OPTIONS.find((x) => x.value === typography.font)?.family ??
     FONT_OPTIONS[0].family;
@@ -817,19 +931,45 @@ export default function Reader() {
               {transcriptionButtonLabel(job, transcribing)}
             </button>
             {job?.status === 'succeeded' && (
-              <button
-                type="button"
-                onClick={toggleStudy}
-                disabled={studySubmitting}
-                className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400 ${
-                  showStudy
-                    ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
-                    : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
-                }`}
-                title="按需生成并显示分段翻译、语法和固定搭配"
-              >
-                {studyButtonLabel(job, showStudy, studySubmitting)}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={toggleStudy}
+                  disabled={studySubmitting}
+                  className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400 ${
+                    showStudy
+                      ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                      : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
+                  }`}
+                  title="按需生成并显示分段翻译、语法和固定搭配"
+                >
+                  {studyButtonLabel(job, showStudy, studySubmitting, hasStudy || isStudyPaused)}
+                </button>
+                {showStudy && job.study_status === 'running' && (
+                  <button
+                    type="button"
+                    onClick={pauseStudy}
+                    disabled={studyPausing || job.study_stage === '暂停中'}
+                    className="inline-flex h-8 shrink-0 items-center rounded-md border border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-stone-50 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
+                  >
+                    {studyPausing || job.study_stage === '暂停中' ? '暂停中...' : '暂停分析'}
+                  </button>
+                )}
+                {showStudy && job.study_status === 'pending' && (
+                  <button
+                    type="button"
+                    onClick={resumeStudy}
+                    disabled={studySubmitting}
+                    className="inline-flex h-8 shrink-0 items-center rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-medium text-indigo-800 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+                  >
+                    {studySubmitting
+                      ? '继续中...'
+                      : hasStudy || isStudyPaused
+                        ? '继续分析'
+                        : '开始分析'}
+                  </button>
+                )}
+              </>
             )}
             <Link
               to={`/m/${m.id}/edit`}
@@ -907,23 +1047,39 @@ export default function Reader() {
                 )}
               </div>
             )}
-            {segmentGroups.length > 0 ? (
-              segmentGroups.map((group, i) => (
-                <TranscriptSegmentBlock
-                  key={group.map((s) => s.id).join('-')}
-                  group={group}
-                  paragraphIndex={i}
-                  materialId={m.id}
-                  language={m.language}
-                  vocab={vocab}
-                  highlightOn={highlightOn}
-                  paragraphStyle={paragraphStyle}
-                  showStudy={showStudy}
-                  note={notesByTarget.get(
-                    noteKeyFor('segment', group[0]?.id, undefined),
-                  )}
-                  onOpenNote={openNote}
-                />
+            {studyGroups.length > 0 ? (
+              studyGroups.map((group, i) => (
+                group.segments.length > 0 ? (
+                  <TranscriptSegmentBlock
+                    key={group.segments.map((s) => s.id).join('-')}
+                    text={group.text}
+                    segments={group.segments}
+                    paragraphIndex={i}
+                    materialId={m.id}
+                    language={m.language}
+                    vocab={vocab}
+                    highlightOn={highlightOn}
+                    paragraphStyle={paragraphStyle}
+                    showStudy={showStudy}
+                    note={notesByTarget.get(
+                      noteKeyFor('segment', group.segments[0]?.id, undefined),
+                    )}
+                    onOpenNote={openNote}
+                  />
+                ) : (
+                  <ParagraphBlock
+                    key={`paragraph-${i}`}
+                    text={group.text}
+                    paragraphIndex={i}
+                    materialId={m.id}
+                    language={m.language}
+                    vocab={vocab}
+                    highlightOn={highlightOn}
+                    paragraphStyle={paragraphStyle}
+                    note={notesByTarget.get(noteKeyFor('paragraph', undefined, i))}
+                    onOpenNote={openNote}
+                  />
+                )
               ))
             ) : paragraphs.length > 0 ? (
               paragraphs.map((p, i) => (
@@ -1131,10 +1287,12 @@ function studyButtonLabel(
   job: TranscriptionJob | null,
   showStudy: boolean,
   submitting: boolean,
+  hasStudy: boolean,
 ): string {
   if (submitting) return '提交分析...';
-  if (job?.study_status === 'running') return '分析中';
   if (showStudy) return '隐藏分析';
+  if (job?.study_status === 'running') return '显示分析';
+  if (job?.study_status === 'pending' && hasStudy) return '继续分析';
   if (job?.study_status === 'succeeded') return '显示分析';
   return '翻译分析';
 }
@@ -1319,7 +1477,8 @@ function NoteButton({
 }
 
 function TranscriptSegmentBlock({
-  group,
+  text,
+  segments,
   paragraphIndex,
   materialId,
   language,
@@ -1330,7 +1489,8 @@ function TranscriptSegmentBlock({
   note,
   onOpenNote,
 }: {
-  group: TranscriptSegment[];
+  text: string;
+  segments: TranscriptSegment[];
   paragraphIndex: number;
   materialId: number;
   language: MaterialLanguage;
@@ -1344,11 +1504,14 @@ function TranscriptSegmentBlock({
     trigger: HTMLElement,
   ) => void;
 }) {
-  const text = group.map((segment) => segment.text).join(' ');
-  const start = group[0]?.start_ms ?? 0;
-  const end = group[group.length - 1]?.end_ms ?? start;
-  const studies = group.map((segment) => segment.study).filter(isSegmentStudy);
-  const targetId = group[0]?.id;
+  const start = segments[0]?.start_ms ?? 0;
+  const end = segments[segments.length - 1]?.end_ms ?? start;
+  const targetId = segments[0]?.id;
+  const studyItems = segments
+    .map((segment) => ({ segment, study: segment.study }))
+    .filter((item): item is { segment: TranscriptSegment; study: SegmentStudy } =>
+      isSegmentStudy(item.study),
+    );
 
   return (
     <section
@@ -1376,11 +1539,16 @@ function TranscriptSegmentBlock({
       <p className="text-stone-800" style={paragraphStyle}>
         {highlightOn ? highlightText(text, vocab, materialId, language) : text}
       </p>
-      {showStudy && studies.map((study, index) => (
+      {showStudy && studyItems.map(({ segment, study }) => (
         <div
-          key={group[index]?.id ?? index}
-          className="mt-3 rounded-md border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-700"
+          key={segment.id}
+          className="mt-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-stone-700"
         >
+          {segments.length > 1 && (
+            <div className="mb-2 text-[11px] font-medium text-indigo-500">
+              {formatTimestamp(segment.start_ms)} - {formatTimestamp(segment.end_ms)}
+            </div>
+          )}
           {study.translation_zh && (
             <p className="leading-7 text-stone-800">{study.translation_zh}</p>
           )}

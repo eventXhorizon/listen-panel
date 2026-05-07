@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -73,8 +74,19 @@ pub async fn generate_segment_studies_for_job(
         return Ok(());
     }
     let material_id = segments[0].material_id;
-    let chunks = segment_chunks(&segments);
+    let total_segments = segments.len();
+    let existing_studies = load_existing_study_segment_ids(pool, job_id).await?;
+    let pending_segments = segments
+        .into_iter()
+        .filter(|segment| !existing_studies.contains(&segment.id))
+        .collect::<Vec<_>>();
+    let completed_segments = total_segments.saturating_sub(pending_segments.len());
+    let chunks = segment_chunks(&pending_segments);
     let total_chunks = chunks.len();
+    if total_chunks == 0 {
+        mark_study_succeeded(pool, job_id).await?;
+        return Ok(());
+    }
 
     let cfg = llm.read().await.clone();
     if !cfg.configured() {
@@ -87,11 +99,18 @@ pub async fn generate_segment_studies_for_job(
         return Ok(());
     }
 
-    sqlx::query("DELETE FROM transcript_segment_studies WHERE job_id = ?")
-        .bind(job_id)
-        .execute(pool)
-        .await?;
-    update_study_progress(pool, job_id, 1, "准备分析分段").await?;
+    let initial_stage = if completed_segments > 0 {
+        "准备继续分析剩余分段"
+    } else {
+        "准备分析分段"
+    };
+    update_study_progress(
+        pool,
+        job_id,
+        chunk_progress(completed_segments, total_segments),
+        initial_stage,
+    )
+    .await?;
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(STUDY_TIMEOUT_SECONDS))
@@ -100,18 +119,74 @@ pub async fn generate_segment_studies_for_job(
     let language = load_job_language(pool, job_id).await?;
 
     for (index, chunk) in chunks.into_iter().enumerate() {
-        let current = index + 1;
-        let stage = format!("分析第 {current}/{total_chunks} 段");
-        update_study_progress(pool, job_id, chunk_progress(index, total_chunks), &stage).await?;
+        let completed_before = completed_segments + index;
+        if pause_requested(pool, job_id).await? {
+            mark_study_paused(
+                pool,
+                job_id,
+                chunk_progress(completed_before, total_segments),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let current = completed_before + 1;
+        let stage = format!("分析第 {current}/{total_segments} 段");
+        update_study_progress(
+            pool,
+            job_id,
+            chunk_progress(completed_before, total_segments),
+            &stage,
+        )
+        .await?;
+        if pause_requested(pool, job_id).await? {
+            mark_study_paused(
+                pool,
+                job_id,
+                chunk_progress(completed_before, total_segments),
+            )
+            .await?;
+            return Ok(());
+        }
         let response =
             call_study_llm(&client, &url, &cfg.api_key, &cfg.model, language, chunk).await?;
         persist_study_batch(pool, job_id, material_id, chunk, response).await?;
-        let stage = format!("已完成第 {current}/{total_chunks} 段");
-        update_study_progress(pool, job_id, chunk_progress(current, total_chunks), &stage).await?;
+        let completed_after = completed_before + chunk.len();
+        if pause_requested(pool, job_id).await? {
+            mark_study_paused(
+                pool,
+                job_id,
+                chunk_progress(completed_after, total_segments),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let stage = format!("已完成第 {completed_after}/{total_segments} 段");
+        update_study_progress(
+            pool,
+            job_id,
+            chunk_progress(completed_after, total_segments),
+            &stage,
+        )
+        .await?;
     }
 
     mark_study_succeeded(pool, job_id).await?;
     Ok(())
+}
+
+async fn load_existing_study_segment_ids(
+    pool: &sqlx::SqlitePool,
+    job_id: i64,
+) -> Result<HashSet<i64>> {
+    let ids = sqlx::query_scalar::<_, i64>(
+        "SELECT segment_id FROM transcript_segment_studies WHERE job_id = ?",
+    )
+    .bind(job_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids.into_iter().collect())
 }
 
 async fn load_job_segments(pool: &sqlx::SqlitePool, job_id: i64) -> Result<Vec<TranscriptSegment>> {
@@ -287,9 +362,23 @@ async fn persist_study_batch(
 pub async fn mark_study_running(pool: &sqlx::SqlitePool, job_id: i64) -> Result<()> {
     sqlx::query(
         "UPDATE transcription_jobs \
-         SET study_status = 'running', study_error = NULL, study_progress = 0, \
+         SET study_status = 'running', study_error = NULL, \
+             study_progress = CASE WHEN study_status = 'pending' THEN study_progress ELSE 0 END, \
              study_stage = '等待开始', updated_at = ? \
          WHERE id = ?",
+    )
+    .bind(Utc::now())
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn request_study_pause(pool: &sqlx::SqlitePool, job_id: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE transcription_jobs \
+         SET study_stage = '暂停中', updated_at = ? \
+         WHERE id = ? AND study_status = 'running'",
     )
     .bind(Utc::now())
     .bind(job_id)
@@ -327,6 +416,30 @@ async fn mark_study_skipped(pool: &sqlx::SqlitePool, job_id: i64, reason: &str) 
     Ok(())
 }
 
+async fn mark_study_paused(pool: &sqlx::SqlitePool, job_id: i64, progress: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE transcription_jobs \
+         SET study_status = 'pending', study_progress = ?, study_stage = '已暂停', updated_at = ? \
+         WHERE id = ? AND study_status = 'running'",
+    )
+    .bind(progress.clamp(0, 99))
+    .bind(Utc::now())
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn pause_requested(pool: &sqlx::SqlitePool, job_id: i64) -> Result<bool> {
+    let stage: Option<String> = sqlx::query_scalar(
+        "SELECT study_stage FROM transcription_jobs WHERE id = ? AND study_status = 'running'",
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(stage.as_deref() == Some("暂停中"))
+}
+
 async fn update_study_progress(
     pool: &sqlx::SqlitePool,
     job_id: i64,
@@ -336,7 +449,7 @@ async fn update_study_progress(
     sqlx::query(
         "UPDATE transcription_jobs \
          SET study_progress = ?, study_stage = ?, updated_at = ? \
-         WHERE id = ? AND study_status = 'running'",
+         WHERE id = ? AND study_status = 'running' AND study_stage != '暂停中'",
     )
     .bind(progress.clamp(0, 99))
     .bind(stage.chars().take(200).collect::<String>())
@@ -347,11 +460,11 @@ async fn update_study_progress(
     Ok(())
 }
 
-fn chunk_progress(completed_chunks: usize, total_chunks: usize) -> i64 {
-    if total_chunks == 0 {
+fn chunk_progress(completed_segments: usize, total_segments: usize) -> i64 {
+    if total_segments == 0 {
         return 0;
     }
-    let progress = ((completed_chunks as f64 / total_chunks as f64) * 96.0).round() as i64;
+    let progress = ((completed_segments as f64 / total_segments as f64) * 96.0).round() as i64;
     progress.clamp(1, 96)
 }
 
