@@ -61,7 +61,62 @@ MAX_CJK_SUBTITLE_OVERLAP_CHARS = 48
 MIN_CJK_SUBTITLE_OVERLAP_CHARS = 4
 MAX_CJK_SUBTITLE_PREFIX_SCAN_CHARS = 8
 _CJK_CHAR = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+_KANJI_OR_KATAKANA_CHAR = re.compile(r"[一-龯ァ-ヺ]")
 _CJK_SPACE = re.compile(r"(?<=[\u3040-\u30ff\u3400-\u9fff])\s+(?=[\u3040-\u30ff\u3400-\u9fff])")
+_JAPANESE_SPEAKER_PUNCT_PREFIX = re.compile(
+    r"(?<![\w一-龯ぁ-ゖァ-ヺ々ー])"
+    r"([一-龯ぁ-ゖァ-ヺ々ーA-Za-z][一-龯ぁ-ゖァ-ヺ々ーA-Za-z0-9・ー]{1,12})"
+    r"(?:さん|氏)?[、,:：]\s*"
+)
+_JAPANESE_SPEAKER_SPACE_PREFIX = re.compile(
+    r"(?<![\w一-龯ぁ-ゖァ-ヺ々ー])"
+    r"([一-龯ぁ-ゖァ-ヺ々ーA-Za-z][一-龯ぁ-ゖァ-ヺ々ーA-Za-z0-9・ー]{1,12})"
+    r"(?:さん|氏)?\s+"
+)
+_COMMON_JAPANESE_SPEAKER_LABELS = {
+    "アナウンサー",
+    "インタビュアー",
+    "キャスター",
+    "タイトル",
+    "ナレーション",
+    "リポーター",
+    "司会",
+    "女性",
+    "男性",
+}
+_JAPANESE_SPEAKER_EXCLUDED_SUFFIXES = (
+    "が",
+    "か",
+    "から",
+    "けど",
+    "で",
+    "です",
+    "と",
+    "とか",
+    "に",
+    "の",
+    "は",
+    "へ",
+    "まで",
+    "も",
+    "を",
+)
+_JAPANESE_SPEAKER_EXCLUDED_LABELS = {
+    "あれ",
+    "ここ",
+    "こちら",
+    "これ",
+    "それ",
+    "はい",
+    "もう",
+    "今日",
+    "今年",
+    "今回",
+    "後半",
+    "昨日",
+    "前半",
+    "明日",
+}
 
 
 def utc_now() -> str:
@@ -781,6 +836,7 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
         elif len(segments) % 20 == 0:
             log_job(req, "asr-progress", segments=len(segments))
             report_progress(req, min(95, 40 + len(segments)), "asr-progress")
+    segments = normalize_dialogue_segments(segments, req.language)
     log_segments_summary(req, "asr-done", segments)
     report_progress(req, 95, "asr-done")
     return response_from_segments(segments, "asr")
@@ -795,6 +851,7 @@ def transcription_initial_prompt(req: TranscribeRequest) -> str | None:
         parts.append(
             "これは日本語音声の正確な書き起こしです。"
             "固有名詞、助詞、語尾、句読点を正確に保ちます。"
+            "複数人の会話では、話者名が分かる場合は「話者: 発話」の形で書きます。"
         )
         return "\n".join(parts)
     return title or None
@@ -827,16 +884,19 @@ def parse_subtitle(path: Path, language: str = "") -> list[Segment]:
 def parse_json_subtitle(path: Path, language: str = "") -> list[Segment]:
     data = json.loads(path.read_text(encoding="utf-8"))
     raw_segments: list[dict[str, Any]] = data.get("segments", [])
-    return dedupe_subtitle_segments(
-        [
-            Segment(
-                start=float(x.get("start", 0.0)),
-                end=float(x.get("end", 0.0)),
-                text=normalize_subtitle_spacing(str(x.get("text", "")).strip()),
-            )
-            for x in raw_segments
-            if str(x.get("text", "")).strip()
-        ],
+    return normalize_dialogue_segments(
+        dedupe_subtitle_segments(
+            [
+                Segment(
+                    start=float(x.get("start", 0.0)),
+                    end=float(x.get("end", 0.0)),
+                    text=normalize_subtitle_spacing(str(x.get("text", "")).strip()),
+                )
+                for x in raw_segments
+                if str(x.get("text", "")).strip()
+            ],
+            language,
+        ),
         language,
     )
 
@@ -864,7 +924,7 @@ def parse_vtt_or_srt(path: Path, language: str = "") -> list[Segment]:
         if text:
             segments.append(Segment(start=start, end=end, text=text))
         i += 1
-    return dedupe_subtitle_segments(segments, language)
+    return normalize_dialogue_segments(dedupe_subtitle_segments(segments, language), language)
 
 
 def parse_timestamp(value: str) -> float:
@@ -899,7 +959,13 @@ def join_subtitle_lines(lines: list[str]) -> str:
 
 
 def normalize_subtitle_spacing(text: str) -> str:
-    text = _CJK_SPACE.sub("", text.strip())
+    text = normalize_plain_spacing(text)
+    text = _CJK_SPACE.sub("", text)
+    return text
+
+
+def normalize_plain_spacing(text: str) -> str:
+    text = text.strip()
     return " ".join(text.split())
 
 
@@ -929,6 +995,111 @@ def dedupe_subtitle_segments(segments: list[Segment], language: str = "") -> lis
         deduped.append(Segment(start=segment.start, end=segment.end, text=text))
         emitted_text = append_text_for_overlap(emitted_text, text, cjk_mode)
     return deduped
+
+
+def normalize_dialogue_segments(
+    segments: list[Segment],
+    language: str = "",
+) -> list[Segment]:
+    if not is_japanese_language(language) and not any(contains_cjk(s.text) for s in segments):
+        return segments
+
+    normalized: list[Segment] = []
+    known_speakers = set(_COMMON_JAPANESE_SPEAKER_LABELS)
+    for segment in segments:
+        turns = split_japanese_dialogue_turns(segment.text, known_speakers)
+        if len(turns) <= 1 and (not turns or turns[0] == segment.text.strip()):
+            normalized.append(segment)
+            continue
+
+        for text in turns:
+            if text:
+                normalized.append(Segment(start=segment.start, end=segment.end, text=text))
+    return normalized
+
+
+def split_japanese_dialogue_turns(text: str, known_speakers: set[str]) -> list[str]:
+    text = normalize_plain_spacing(text)
+    if not text:
+        return []
+
+    matches = japanese_speaker_matches(text, known_speakers)
+    if not matches:
+        return [text]
+
+    turns: list[str] = []
+    leading = normalize_subtitle_spacing(text[: matches[0].start()])
+    if leading:
+        turns.append(leading)
+
+    for index, match in enumerate(matches):
+        speaker = match.group(1)
+        known_speakers.add(speaker)
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        body = normalize_subtitle_spacing(text[match.end() : end])
+        if body:
+            turns.append(f"{speaker}: {body}")
+
+    return turns or [text]
+
+
+def japanese_speaker_matches(text: str, known_speakers: set[str]) -> list[re.Match[str]]:
+    matches: list[re.Match[str]] = []
+    for match in _JAPANESE_SPEAKER_PUNCT_PREFIX.finditer(text):
+        if is_probable_japanese_speaker(match.group(1), known_speakers):
+            matches.append(match)
+
+    for match in _JAPANESE_SPEAKER_SPACE_PREFIX.finditer(text):
+        if is_probable_japanese_space_speaker(match.group(1), text, known_speakers):
+            matches.append(match)
+
+    matches.sort(key=lambda match: match.start())
+    filtered: list[re.Match[str]] = []
+    for match in matches:
+        if filtered and match.start() < filtered[-1].end():
+            continue
+        filtered.append(match)
+    return filtered
+
+
+def is_probable_japanese_speaker(label: str, known_speakers: set[str]) -> bool:
+    if label in known_speakers:
+        return True
+    if not contains_cjk(label):
+        return False
+    if label in _JAPANESE_SPEAKER_EXCLUDED_LABELS:
+        return False
+    if label.endswith(_JAPANESE_SPEAKER_EXCLUDED_SUFFIXES):
+        return False
+    if label.endswith(("さん", "氏")):
+        return True
+    if (
+        len(label) <= 4
+        and re.fullmatch(r"[一-龯ぁ-ゖァ-ヺ々ー]+", label)
+        and _KANJI_OR_KATAKANA_CHAR.search(label)
+    ):
+        return True
+    return False
+
+
+def is_probable_japanese_space_speaker(
+    label: str,
+    text: str,
+    known_speakers: set[str],
+) -> bool:
+    if label in known_speakers or label in _COMMON_JAPANESE_SPEAKER_LABELS:
+        return True
+    if not is_probable_japanese_speaker(label, known_speakers):
+        return False
+    return len(speaker_space_occurrences(label, text)) >= 2
+
+
+def speaker_space_occurrences(label: str, text: str) -> list[re.Match[str]]:
+    escaped = re.escape(label)
+    pattern = re.compile(
+        rf"(?<![\w一-龯ぁ-ゖァ-ヺ々ー]){escaped}(?:さん|氏)?\s+"
+    )
+    return list(pattern.finditer(text))
 
 
 def append_text_for_overlap(previous: str, current: str, cjk_mode: bool = False) -> str:

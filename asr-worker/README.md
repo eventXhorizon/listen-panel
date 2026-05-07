@@ -204,6 +204,7 @@ curl -X POST http://127.0.0.1:8765/v1/transcribe \
 - 长视频优先使用已有字幕,worker 会先试人工字幕,再试自动字幕,最后才下载音频走 faster-whisper。响应里的 `source` 会标明 `manual_subtitle`、`auto_subtitle` 或 `asr`。
 - 英文字幕会匹配 `en.*`、`en` 等变体,避免 YouTube 只提供 `en-US` / `en-orig` 时误落到 ASR。
 - 日语字幕会匹配 `ja.*`、`ja`、`jp`、`jpn`、`japanese` 等变体,并用 CJK 字符级去重处理没有空格的重复字幕前缀。
+- 日语多人对话里,如果字幕/ASR 文本已经出现 `タイトル 今日...`、`斉藤: ...` 这类说话人标签,worker 会整理成 `タイトル: ...`、`斉藤: ...` 的对话 turn;没有显式标签的街访/旁白不会强行猜测说话人。
 - 日语 ASR fallback 在高精度慢速模式下会使用日语专用 initial prompt 和更耐心的解码参数。优先看前端来源标签:如果来源是 `自动字幕`,错误可能来自平台字幕;如果来源是 `ASR`,才是 Whisper fallback 的结果。
 - 如果主要学英语,listen-panel 设置里固定 `language=en`,减少模型语言误判。多语种 V1 中,具体材料的语言会覆盖这个全局 fallback;日语材料会向 worker 发送 `language=ja`。
 - `condition_on_previous_text=false` 适合长视频,更不容易重复和跑偏。

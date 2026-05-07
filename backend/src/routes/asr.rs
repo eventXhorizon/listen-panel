@@ -29,6 +29,7 @@ const PARAGRAPH_TARGET_CHARS: usize = 700;
 const PARAGRAPH_MAX_CHARS: usize = 900;
 const PARAGRAPH_TARGET_SENTENCES: usize = 4;
 const PARAGRAPH_MAX_SENTENCES: usize = 6;
+const MAX_SPEAKER_LABEL_CHARS: usize = 16;
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -664,6 +665,13 @@ fn paragraphize_segments(segments: &[WorkerSegment]) -> String {
         if text.is_empty() {
             continue;
         }
+        if is_dialogue_turn(text) {
+            push_paragraph(&mut paragraphs, &mut current);
+            paragraphs.push(text.to_string());
+            sentence_count = 0;
+            last_end = Some(segment.end);
+            continue;
+        }
 
         let gap = last_end
             .filter(|end| segment.start.is_finite() && end.is_finite())
@@ -728,6 +736,20 @@ fn sentence_chunks(text: &str) -> Vec<&str> {
     }
     push_sentence_chunk(&mut chunks, text, start, text.len());
     chunks
+}
+
+fn is_dialogue_turn(text: &str) -> bool {
+    let Some((label, body)) = text.split_once(':') else {
+        return false;
+    };
+    let label = label.trim();
+    let body = body.trim();
+    !label.is_empty()
+        && !body.is_empty()
+        && label.chars().count() <= MAX_SPEAKER_LABEL_CHARS
+        && label
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '-' | '・' | 'ー' | '々'))
 }
 
 fn push_sentence_chunk<'a>(chunks: &mut Vec<&'a str>, text: &'a str, start: usize, end: usize) {
@@ -811,5 +833,35 @@ mod tests {
         let paragraphs = output.split("\n\n").collect::<Vec<_>>();
         assert!(paragraphs.len() > 1);
         assert!(paragraphs.iter().all(|p| p.ends_with(['.', '?', '!'])));
+    }
+
+    #[test]
+    fn paragraphizes_explicit_dialogue_turns() {
+        let output = paragraphize_segments(&[
+            WorkerSegment {
+                start: 0.0,
+                end: 2.0,
+                text: "タイトル: 今日のテーマはこちら。".to_string(),
+            },
+            WorkerSegment {
+                start: 2.0,
+                end: 4.0,
+                text: "斉藤: もうゴールデンウィークです。".to_string(),
+            },
+            WorkerSegment {
+                start: 4.0,
+                end: 6.0,
+                text: "斉藤: もうあっという間ですね。".to_string(),
+            },
+        ]);
+        let paragraphs = output.split("\n\n").collect::<Vec<_>>();
+        assert_eq!(
+            paragraphs,
+            vec![
+                "タイトル: 今日のテーマはこちら。",
+                "斉藤: もうゴールデンウィークです。",
+                "斉藤: もうあっという間ですね。",
+            ]
+        );
     }
 }
