@@ -53,6 +53,9 @@ _YOUTUBE_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _BILIBILI_BVID = re.compile(r"^BV[A-Za-z0-9]+$")
 _VTT_TIMESTAMP_TAG = re.compile(r"<\d{2}:\d{2}:\d{2}\.\d{3}>")
 _HTML_TAG = re.compile(r"</?[^>]+>")
+MAX_SUBTITLE_OVERLAP_WORDS = 18
+MIN_SUBTITLE_OVERLAP_WORDS = 3
+MAX_SUBTITLE_PREFIX_SCAN_WORDS = 4
 
 
 def utc_now() -> str:
@@ -717,7 +720,7 @@ def parse_subtitle(path: Path) -> list[Segment]:
 def parse_json_subtitle(path: Path) -> list[Segment]:
     data = json.loads(path.read_text(encoding="utf-8"))
     raw_segments: list[dict[str, Any]] = data.get("segments", [])
-    return [
+    return dedupe_subtitle_segments([
         Segment(
             start=float(x.get("start", 0.0)),
             end=float(x.get("end", 0.0)),
@@ -725,7 +728,7 @@ def parse_json_subtitle(path: Path) -> list[Segment]:
         )
         for x in raw_segments
         if str(x.get("text", "")).strip()
-    ]
+    ])
 
 
 def parse_vtt_or_srt(path: Path) -> list[Segment]:
@@ -747,11 +750,11 @@ def parse_vtt_or_srt(path: Path) -> list[Segment]:
             if not lines[i].isdigit() and not lines[i].startswith("WEBVTT"):
                 body.append(lines[i])
             i += 1
-        text = clean_subtitle_text(" ".join(body))
+        text = clean_subtitle_text(body)
         if text:
             segments.append(Segment(start=start, end=end, text=text))
         i += 1
-    return segments
+    return dedupe_subtitle_segments(segments)
 
 
 def parse_timestamp(value: str) -> float:
@@ -766,11 +769,74 @@ def parse_timestamp(value: str) -> float:
     return float(parts[0])
 
 
-def clean_subtitle_text(text: str) -> str:
-    text = _VTT_TIMESTAMP_TAG.sub("", text)
+def clean_subtitle_text(lines: list[str] | str) -> str:
+    if isinstance(lines, str):
+        raw_lines = [lines]
+    else:
+        raw_lines = lines
+
+    text = " ".join(cue_incremental_lines(raw_lines))
     text = _HTML_TAG.sub("", text)
     text = html.unescape(text)
     return " ".join(text.split())
+
+
+def cue_incremental_lines(lines: list[str]) -> list[str]:
+    incremental = [
+        _VTT_TIMESTAMP_TAG.sub("", line).strip()
+        for line in lines
+        if _VTT_TIMESTAMP_TAG.search(line)
+    ]
+    if incremental:
+        return [line for line in incremental if line]
+    return [_VTT_TIMESTAMP_TAG.sub("", line).strip() for line in lines]
+
+
+def dedupe_subtitle_segments(segments: list[Segment]) -> list[Segment]:
+    deduped: list[Segment] = []
+    emitted_text = ""
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+        if emitted_text:
+            text = remove_repeated_prefix(emitted_text, text)
+        if not text:
+            continue
+        deduped.append(Segment(start=segment.start, end=segment.end, text=text))
+        emitted_text = append_text_for_overlap(emitted_text, text)
+    return deduped
+
+
+def append_text_for_overlap(previous: str, current: str) -> str:
+    joined = f"{previous} {current}".strip()
+    words = joined.split()
+    if len(words) > MAX_SUBTITLE_OVERLAP_WORDS:
+        return " ".join(words[-MAX_SUBTITLE_OVERLAP_WORDS:])
+    return joined
+
+
+def remove_repeated_prefix(previous_context: str, current: str) -> str:
+    previous_words = previous_context.split()
+    current_words = current.split()
+    max_overlap = min(MAX_SUBTITLE_OVERLAP_WORDS, len(previous_words), len(current_words))
+    max_offset = min(MAX_SUBTITLE_PREFIX_SCAN_WORDS, len(current_words) - 1)
+    for size in range(max_overlap, 0, -1):
+        if size < MIN_SUBTITLE_OVERLAP_WORDS:
+            break
+        needle = normalized_words(previous_words[-size:])
+        for offset in range(0, min(max_offset, len(current_words) - size) + 1):
+            if needle == normalized_words(current_words[offset : offset + size]):
+                return " ".join(current_words[offset + size :])
+    return current
+
+
+def normalized_words(words: list[str]) -> list[str]:
+    return [normalize_word(word) for word in words]
+
+
+def normalize_word(word: str) -> str:
+    return re.sub(r"^\W+|\W+$", "", word).casefold()
 
 
 def response_from_segments(segments: list[Segment]) -> TranscribeResponse:
