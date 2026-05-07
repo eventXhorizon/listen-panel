@@ -1,5 +1,6 @@
 export type SourceType = 'local' | 'youtube' | 'bilibili';
 export type MaterialLanguage = 'en' | 'ja';
+export type MaterialTextSource = 'manual' | 'manual_subtitle' | 'auto_subtitle' | 'asr';
 
 export interface Material {
   id: number;
@@ -9,7 +10,7 @@ export interface Material {
   source_type: SourceType;
   source_ref: string;
   text: string;
-  text_source: 'manual' | 'manual_subtitle' | 'auto_subtitle' | 'asr';
+  text_source: MaterialTextSource;
   notes: string;
   created_at: string;
   updated_at: string;

@@ -40,6 +40,7 @@ import AddVocabDialog from '../components/AddVocabDialog';
 import VocabPanel from '../components/VocabPanel';
 import { highlightText } from '../lib/highlight';
 import { languageAdapter, languageLabel } from '../lib/languages';
+import { textSourceLabel } from '../lib/textSources';
 
 interface PendingAdd {
   word: string;
@@ -764,8 +765,10 @@ export default function Reader() {
     );
   }
 
-  const paragraphs = m.text
-    ? m.text
+  const materialText = m.text.trim();
+  const hasMaterialText = materialText.length > 0;
+  const paragraphs = hasMaterialText
+    ? materialText
         .split(/\n{2,}/)
         .map((p) => p.trim())
         .filter(Boolean)
@@ -1018,10 +1021,15 @@ export default function Reader() {
             ref={articleRef}
             className="max-w-2xl mx-auto px-5 pb-28 pt-7 md:px-10 md:py-10"
           >
-            {(job || transcriptionErr) && (
+            {(hasMaterialText || job || transcriptionErr) && (
               <div className="mb-6 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
-                {job && (
+                {hasMaterialText && (
                   <span>
+                    来源: {textSourceLabel(m.text_source)}
+                  </span>
+                )}
+                {job && (
+                  <span className={hasMaterialText ? 'ml-3' : undefined}>
                     转写:{' '}
                     {job.status === 'queued'
                       ? '排队中'

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { listMaterials, deleteMaterial } from '../api';
 import type { Material, SourceType } from '../types';
 import { languageLabel } from '../lib/languages';
+import { textSourceLabel } from '../lib/textSources';
 
 const SOURCE_LABEL: Record<SourceType, string> = {
   local: '本地',
@@ -21,7 +22,17 @@ export default function Library() {
   }
 
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+    listMaterials()
+      .then((next) => {
+        if (!cancelled) setItems(next);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function onDelete(e: React.MouseEvent, id: number) {
@@ -63,8 +74,13 @@ export default function Library() {
               className="group relative block border border-stone-200 rounded-lg bg-white p-5 hover:shadow-sm hover:border-stone-300 transition"
             >
               <div className="flex items-start justify-between mb-2">
-                <span className="text-[11px] text-stone-500 uppercase tracking-wider">
+                <span className="min-w-0 flex-1 text-[11px] text-stone-500 uppercase tracking-wider">
                   {SOURCE_LABEL[m.source_type]} · {languageLabel(m.language)}
+                  {m.text.trim() && (
+                    <>
+                      {' '}· 来源: {textSourceLabel(m.text_source)}
+                    </>
+                  )}
                 </span>
                 <button
                   onClick={(e) => onDelete(e, m.id)}
