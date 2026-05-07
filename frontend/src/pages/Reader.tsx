@@ -662,7 +662,7 @@ export default function Reader() {
         .map((p) => p.trim())
         .filter(Boolean)
     : [];
-  const shouldUseTextParagraphs = paragraphs.length > 1;
+  const shouldUseTextParagraphs = paragraphs.length > 1 && !showStudy;
   const segmentGroups =
     !shouldUseTextParagraphs && segments.length > 0 ? groupPlainSegments(segments) : [];
   const fontFamily =
