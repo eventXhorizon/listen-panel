@@ -9,8 +9,6 @@ use crate::config::SharedLlm;
 use crate::language::Language;
 use crate::models::TranscriptSegment;
 
-const STUDY_BATCH_SIZE: usize = 8;
-const STUDY_BATCH_CHAR_LIMIT: usize = 5_000;
 const STUDY_TIMEOUT_SECONDS: u64 = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,12 +101,12 @@ pub async fn generate_segment_studies_for_job(
 
     for (index, chunk) in chunks.into_iter().enumerate() {
         let current = index + 1;
-        let stage = format!("分析第 {current}/{total_chunks} 批");
+        let stage = format!("分析第 {current}/{total_chunks} 段");
         update_study_progress(pool, job_id, chunk_progress(index, total_chunks), &stage).await?;
         let response =
             call_study_llm(&client, &url, &cfg.api_key, &cfg.model, language, chunk).await?;
         persist_study_batch(pool, job_id, material_id, chunk, response).await?;
-        let stage = format!("已完成第 {current}/{total_chunks} 批");
+        let stage = format!("已完成第 {current}/{total_chunks} 段");
         update_study_progress(pool, job_id, chunk_progress(current, total_chunks), &stage).await?;
     }
 
@@ -358,24 +356,9 @@ fn chunk_progress(completed_chunks: usize, total_chunks: usize) -> i64 {
 }
 
 fn segment_chunks(segments: &[TranscriptSegment]) -> Vec<&[TranscriptSegment]> {
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    let mut chars = 0;
-    for (index, segment) in segments.iter().enumerate() {
-        let segment_chars = segment.text.chars().count();
-        let would_exceed_size = index > start && index - start >= STUDY_BATCH_SIZE;
-        let would_exceed_chars = index > start && chars + segment_chars > STUDY_BATCH_CHAR_LIMIT;
-        if would_exceed_size || would_exceed_chars {
-            chunks.push(&segments[start..index]);
-            start = index;
-            chars = 0;
-        }
-        chars += segment_chars;
-    }
-    if start < segments.len() {
-        chunks.push(&segments[start..]);
-    }
-    chunks
+    (0..segments.len())
+        .map(|index| &segments[index..index + 1])
+        .collect()
 }
 
 fn parse_batch_response(content: &str) -> Result<StudyBatchResponse> {
@@ -453,4 +436,37 @@ fn clean_usage_points(points: Vec<UsagePoint>) -> Vec<UsagePoint> {
 
 fn trim_to(value: String, max_chars: usize) -> String {
     value.trim().chars().take(max_chars).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn study_chunks_are_single_segments() {
+        let segments = vec![
+            test_segment(1, "first"),
+            test_segment(2, "second"),
+            test_segment(3, "third"),
+        ];
+
+        let chunks = segment_chunks(&segments);
+
+        assert_eq!(chunks.len(), segments.len());
+        assert!(chunks.iter().all(|chunk| chunk.len() == 1));
+        assert_eq!(chunks[0][0].text, "first");
+        assert_eq!(chunks[1][0].text, "second");
+        assert_eq!(chunks[2][0].text, "third");
+    }
+
+    fn test_segment(id: i64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            id,
+            job_id: 10,
+            material_id: 20,
+            start_ms: id * 1000,
+            end_ms: id * 1000 + 500,
+            text: text.to_string(),
+        }
+    }
 }
