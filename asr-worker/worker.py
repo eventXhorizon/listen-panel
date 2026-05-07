@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import threading
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -56,6 +57,11 @@ _HTML_TAG = re.compile(r"</?[^>]+>")
 MAX_SUBTITLE_OVERLAP_WORDS = 18
 MIN_SUBTITLE_OVERLAP_WORDS = 3
 MAX_SUBTITLE_PREFIX_SCAN_WORDS = 4
+MAX_CJK_SUBTITLE_OVERLAP_CHARS = 48
+MIN_CJK_SUBTITLE_OVERLAP_CHARS = 4
+MAX_CJK_SUBTITLE_PREFIX_SCAN_CHARS = 8
+_CJK_CHAR = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+_CJK_SPACE = re.compile(r"(?<=[\u3040-\u30ff\u3400-\u9fff])\s+(?=[\u3040-\u30ff\u3400-\u9fff])")
 
 
 def utc_now() -> str:
@@ -554,7 +560,7 @@ def fetch_subtitle_kind(
     report_progress(req, 12, f"{kind}-done")
     for candidate in candidates:
         try:
-            segments = parse_subtitle(candidate)
+            segments = parse_subtitle(candidate, req.language)
         except Exception as exc:
             log_job(
                 req,
@@ -570,8 +576,10 @@ def fetch_subtitle_kind(
 
 
 def subtitle_language_pattern(language: str) -> str:
-    lang = language.strip() or "en"
+    lang = (language.strip() or "en").lower()
     base = lang.split("-", 1)[0].split("_", 1)[0]
+    if base in {"ja", "jp", "jpn", "japanese"}:
+        return "ja.*,ja,jp,jpn,japanese"
     if not base:
         return lang
     if lang == base:
@@ -717,26 +725,37 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
     report_progress(req, 40, "model-ready")
     beam_size = max(req.beam_size, 10) if req.high_accuracy else req.beam_size
     patience = max(req.patience, 2.0) if req.high_accuracy else req.patience
+    best_of = req.best_of
+    if req.high_accuracy and is_japanese_language(req.language):
+        patience = max(patience, 3.0)
+        best_of = max(best_of, 8)
+    condition_on_previous_text = (
+        False if is_japanese_language(req.language) else req.condition_on_previous_text
+    )
+    initial_prompt = transcription_initial_prompt(req)
     log_job(
         req,
         "asr-options",
+        language=req.language,
         high_accuracy=req.high_accuracy,
         beam_size=beam_size,
-        best_of=req.best_of,
+        best_of=best_of,
         patience=patience,
         temperature=req.temperature,
-        initial_prompt=bool(req.initial_prompt and req.initial_prompt.strip()),
+        vad_filter=req.vad_filter,
+        condition_on_previous_text=condition_on_previous_text,
+        initial_prompt=bool(initial_prompt),
     )
     segments_iter, _info = model.transcribe(
         str(audio),
         language=req.language or None,
         beam_size=beam_size,
-        best_of=req.best_of,
+        best_of=best_of,
         patience=patience,
         temperature=req.temperature,
         vad_filter=req.vad_filter,
-        condition_on_previous_text=req.condition_on_previous_text,
-        initial_prompt=req.initial_prompt.strip() if req.initial_prompt else None,
+        condition_on_previous_text=condition_on_previous_text,
+        initial_prompt=initial_prompt,
     )
     segments: list[Segment] = []
     last_progress = -1
@@ -767,6 +786,20 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
     return response_from_segments(segments, "asr")
 
 
+def transcription_initial_prompt(req: TranscribeRequest) -> str | None:
+    title = req.initial_prompt.strip() if req.initial_prompt else ""
+    if is_japanese_language(req.language):
+        parts = []
+        if title:
+            parts.append(f"タイトル: {title}")
+        parts.append(
+            "これは日本語音声の正確な書き起こしです。"
+            "固有名詞、助詞、語尾、句読点を正確に保ちます。"
+        )
+        return "\n".join(parts)
+    return title or None
+
+
 def load_model(model_name: str) -> WhisperModel:
     key = model_name or DEFAULT_MODEL
     model = _model_cache.get(key)
@@ -785,27 +818,30 @@ def load_model(model_name: str) -> WhisperModel:
     return model
 
 
-def parse_subtitle(path: Path) -> list[Segment]:
+def parse_subtitle(path: Path, language: str = "") -> list[Segment]:
     if path.suffix.lower() == ".json":
-        return parse_json_subtitle(path)
-    return parse_vtt_or_srt(path)
+        return parse_json_subtitle(path, language)
+    return parse_vtt_or_srt(path, language)
 
 
-def parse_json_subtitle(path: Path) -> list[Segment]:
+def parse_json_subtitle(path: Path, language: str = "") -> list[Segment]:
     data = json.loads(path.read_text(encoding="utf-8"))
     raw_segments: list[dict[str, Any]] = data.get("segments", [])
-    return dedupe_subtitle_segments([
-        Segment(
-            start=float(x.get("start", 0.0)),
-            end=float(x.get("end", 0.0)),
-            text=str(x.get("text", "")).strip(),
-        )
-        for x in raw_segments
-        if str(x.get("text", "")).strip()
-    ])
+    return dedupe_subtitle_segments(
+        [
+            Segment(
+                start=float(x.get("start", 0.0)),
+                end=float(x.get("end", 0.0)),
+                text=normalize_subtitle_spacing(str(x.get("text", "")).strip()),
+            )
+            for x in raw_segments
+            if str(x.get("text", "")).strip()
+        ],
+        language,
+    )
 
 
-def parse_vtt_or_srt(path: Path) -> list[Segment]:
+def parse_vtt_or_srt(path: Path, language: str = "") -> list[Segment]:
     text = path.read_text(encoding="utf-8", errors="ignore")
     lines = [line.strip() for line in text.splitlines()]
     segments: list[Segment] = []
@@ -828,7 +864,7 @@ def parse_vtt_or_srt(path: Path) -> list[Segment]:
         if text:
             segments.append(Segment(start=start, end=end, text=text))
         i += 1
-    return dedupe_subtitle_segments(segments)
+    return dedupe_subtitle_segments(segments, language)
 
 
 def parse_timestamp(value: str) -> float:
@@ -849,9 +885,21 @@ def clean_subtitle_text(lines: list[str] | str) -> str:
     else:
         raw_lines = lines
 
-    text = " ".join(cue_incremental_lines(raw_lines))
+    cue_lines = cue_incremental_lines(raw_lines)
+    text = join_subtitle_lines(cue_lines)
     text = _HTML_TAG.sub("", text)
     text = html.unescape(text)
+    return normalize_subtitle_spacing(text)
+
+
+def join_subtitle_lines(lines: list[str]) -> str:
+    if contains_cjk("".join(lines)):
+        return "".join(lines)
+    return " ".join(lines)
+
+
+def normalize_subtitle_spacing(text: str) -> str:
+    text = _CJK_SPACE.sub("", text.strip())
     return " ".join(text.split())
 
 
@@ -866,23 +914,27 @@ def cue_incremental_lines(lines: list[str]) -> list[str]:
     return [_VTT_TIMESTAMP_TAG.sub("", line).strip() for line in lines]
 
 
-def dedupe_subtitle_segments(segments: list[Segment]) -> list[Segment]:
+def dedupe_subtitle_segments(segments: list[Segment], language: str = "") -> list[Segment]:
     deduped: list[Segment] = []
     emitted_text = ""
+    cjk_mode = is_japanese_language(language) or any(contains_cjk(s.text) for s in segments)
     for segment in segments:
         text = segment.text.strip()
         if not text:
             continue
         if emitted_text:
-            text = remove_repeated_prefix(emitted_text, text)
+            text = remove_repeated_prefix(emitted_text, text, cjk_mode)
         if not text:
             continue
         deduped.append(Segment(start=segment.start, end=segment.end, text=text))
-        emitted_text = append_text_for_overlap(emitted_text, text)
+        emitted_text = append_text_for_overlap(emitted_text, text, cjk_mode)
     return deduped
 
 
-def append_text_for_overlap(previous: str, current: str) -> str:
+def append_text_for_overlap(previous: str, current: str, cjk_mode: bool = False) -> str:
+    if cjk_mode:
+        joined = f"{previous}{current}"
+        return joined[-MAX_CJK_SUBTITLE_OVERLAP_CHARS * 2 :]
     joined = f"{previous} {current}".strip()
     words = joined.split()
     if len(words) > MAX_SUBTITLE_OVERLAP_WORDS:
@@ -890,7 +942,13 @@ def append_text_for_overlap(previous: str, current: str) -> str:
     return joined
 
 
-def remove_repeated_prefix(previous_context: str, current: str) -> str:
+def remove_repeated_prefix(
+    previous_context: str,
+    current: str,
+    cjk_mode: bool = False,
+) -> str:
+    if cjk_mode:
+        return remove_repeated_cjk_prefix(previous_context, current)
     previous_words = previous_context.split()
     current_words = current.split()
     max_overlap = min(MAX_SUBTITLE_OVERLAP_WORDS, len(previous_words), len(current_words))
@@ -905,12 +963,61 @@ def remove_repeated_prefix(previous_context: str, current: str) -> str:
     return current
 
 
+def remove_repeated_cjk_prefix(previous_context: str, current: str) -> str:
+    previous_units = cjk_overlap_units(previous_context)
+    current_units = cjk_overlap_units(current)
+    max_overlap = min(
+        MAX_CJK_SUBTITLE_OVERLAP_CHARS,
+        len(previous_units),
+        len(current_units),
+    )
+    max_offset = min(MAX_CJK_SUBTITLE_PREFIX_SCAN_CHARS, len(current_units) - 1)
+    for size in range(max_overlap, 0, -1):
+        if size < MIN_CJK_SUBTITLE_OVERLAP_CHARS:
+            break
+        needle = "".join(unit for unit, _end in previous_units[-size:])
+        for offset in range(0, min(max_offset, len(current_units) - size) + 1):
+            candidate = "".join(
+                unit for unit, _end in current_units[offset : offset + size]
+            )
+            if needle == candidate:
+                cut_index = current_units[offset + size - 1][1]
+                return current[cut_index:].lstrip(" \t\r\n,，.。、!?！？;；:：」』）)]】")
+    return current
+
+
+def cjk_overlap_units(text: str) -> list[tuple[str, int]]:
+    units = []
+    for index, char in enumerate(text):
+        normalized = normalize_cjk_unit(char)
+        if normalized:
+            units.append((normalized, index + 1))
+    return units
+
+
+def normalize_cjk_unit(char: str) -> str | None:
+    category = unicodedata.category(char)
+    if char.isspace() or category.startswith("P") or category.startswith("Z"):
+        return None
+    return char.casefold()
+
+
 def normalized_words(words: list[str]) -> list[str]:
     return [normalize_word(word) for word in words]
 
 
 def normalize_word(word: str) -> str:
     return re.sub(r"^\W+|\W+$", "", word).casefold()
+
+
+def contains_cjk(text: str) -> bool:
+    return bool(_CJK_CHAR.search(text))
+
+
+def is_japanese_language(language: str) -> bool:
+    lang = language.strip().lower()
+    base = lang.split("-", 1)[0].split("_", 1)[0]
+    return base in {"ja", "jp", "jpn", "japanese"}
 
 
 def response_from_segments(segments: list[Segment], source: str) -> TranscribeResponse:
