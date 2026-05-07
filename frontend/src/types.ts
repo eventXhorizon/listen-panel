@@ -9,12 +9,16 @@ export interface Material {
   source_type: SourceType;
   source_ref: string;
   text: string;
+  text_source: 'manual' | 'manual_subtitle' | 'auto_subtitle' | 'asr';
   notes: string;
   created_at: string;
   updated_at: string;
 }
 
-export type CreateMaterial = Omit<Material, 'id' | 'user_id' | 'created_at' | 'updated_at'>;
+export type CreateMaterial = Pick<
+  Material,
+  'title' | 'language' | 'source_type' | 'source_ref' | 'text' | 'notes'
+>;
 
 export interface MaterialMetadata {
   source_type: Exclude<SourceType, 'local'> | null;
@@ -102,6 +106,7 @@ export interface AsrStatus {
   beam_size: number;
   vad_filter: boolean;
   condition_on_previous_text: boolean;
+  high_accuracy: boolean;
   timeout_seconds: number;
 }
 

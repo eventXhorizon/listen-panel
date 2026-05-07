@@ -37,6 +37,7 @@ export default function Settings() {
   const [asrBeamSize, setAsrBeamSize] = useState(5);
   const [asrVadFilter, setAsrVadFilter] = useState(true);
   const [asrConditionPrevious, setAsrConditionPrevious] = useState(false);
+  const [asrHighAccuracy, setAsrHighAccuracy] = useState(true);
   const [asrTimeoutSeconds, setAsrTimeoutSeconds] = useState(7200);
   const [showAsrToken, setShowAsrToken] = useState(false);
   const [dataDirStatus, setDataDirStatus] = useState<DataDirStatus | null>(null);
@@ -83,6 +84,7 @@ export default function Settings() {
         setAsrBeamSize(s.beam_size);
         setAsrVadFilter(s.vad_filter);
         setAsrConditionPrevious(s.condition_on_previous_text);
+        setAsrHighAccuracy(s.high_accuracy);
         setAsrTimeoutSeconds(s.timeout_seconds);
       } catch (e) {
         setAsrLoadErr((e as Error).message);
@@ -237,6 +239,9 @@ export default function Settings() {
         asrConditionPrevious !== asrStatus.condition_on_previous_text
       ) {
         asrPatch.condition_on_previous_text = asrConditionPrevious;
+      }
+      if (asrStatus && asrHighAccuracy !== asrStatus.high_accuracy) {
+        asrPatch.high_accuracy = asrHighAccuracy;
       }
       if (asrStatus && asrTimeoutSeconds !== asrStatus.timeout_seconds) {
         asrPatch.timeout_seconds = asrTimeoutSeconds;
@@ -641,6 +646,14 @@ export default function Settings() {
                   onChange={(e) => setAsrConditionPrevious(e.target.checked)}
                 />
                 condition_on_previous_text
+              </label>
+              <label className="flex items-center gap-2 text-sm text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={asrHighAccuracy}
+                  onChange={(e) => setAsrHighAccuracy(e.target.checked)}
+                />
+                高精度慢速模式
               </label>
             </div>
           </section>

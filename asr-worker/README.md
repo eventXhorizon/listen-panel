@@ -201,9 +201,11 @@ curl -X POST http://127.0.0.1:8765/v1/transcribe \
 
 ## 运行建议
 
-- 长视频优先使用已有字幕,worker 会先试 `yt-dlp --write-subs --write-auto-subs`。
+- 长视频优先使用已有字幕,worker 会先试人工字幕,再试自动字幕,最后才下载音频走 faster-whisper。响应里的 `source` 会标明 `manual_subtitle`、`auto_subtitle` 或 `asr`。
+- 英文字幕会匹配 `en.*`、`en` 等变体,避免 YouTube 只提供 `en-US` / `en-orig` 时误落到 ASR。
 - 如果主要学英语,listen-panel 设置里固定 `language=en`,减少模型语言误判。多语种 V1 中,具体材料的语言会覆盖这个全局 fallback;日语材料会向 worker 发送 `language=ja`。
 - `condition_on_previous_text=false` 适合长视频,更不容易重复和跑偏。
+- 高精度慢速模式会在 ASR fallback 时把 beam 提到至少 10,并启用更耐心的解码;不影响字幕优先路径。
 - 如果转写速度不够,可以把 `ASR_COMPUTE_TYPE` 改成 `int8_float16`。
 - 控制台会打印 job 阶段日志:收到任务、字幕抓取、字幕覆盖时长、媒体下载、下载文件时长、ffmpeg 音频时长、模型加载、ASR 进度、完成和清理。`asr-progress` 基于已输出 segment 的结束时间除以音频总时长估算。worker 也会把阶段进度回调到 listen-panel 后端,所以前端轮询能看到进度变化。日志级别可用 `ASR_LOG_LEVEL=INFO` 调整。
 

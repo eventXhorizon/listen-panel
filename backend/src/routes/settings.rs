@@ -53,6 +53,7 @@ pub struct AsrStatus {
     pub beam_size: i64,
     pub vad_filter: bool,
     pub condition_on_previous_text: bool,
+    pub high_accuracy: bool,
     pub timeout_seconds: u64,
 }
 
@@ -122,6 +123,7 @@ pub struct UpdateAsr {
     pub beam_size: Option<i64>,
     pub vad_filter: Option<bool>,
     pub condition_on_previous_text: Option<bool>,
+    pub high_accuracy: Option<bool>,
     pub timeout_seconds: Option<u64>,
 }
 
@@ -275,6 +277,7 @@ async fn get_asr(State(asr): State<SharedAsr>, user: CurrentUser) -> axum::respo
         beam_size: g.beam_size,
         vad_filter: g.vad_filter,
         condition_on_previous_text: g.condition_on_previous_text,
+        high_accuracy: g.high_accuracy,
         timeout_seconds: g.timeout_seconds,
     })
     .into_response()
@@ -331,6 +334,9 @@ async fn put_asr(
         if let Some(condition_on_previous_text) = patch.condition_on_previous_text {
             g.condition_on_previous_text = condition_on_previous_text;
         }
+        if let Some(high_accuracy) = patch.high_accuracy {
+            g.high_accuracy = high_accuracy;
+        }
         if let Some(timeout_seconds) = patch.timeout_seconds {
             if timeout_seconds >= 60 {
                 g.timeout_seconds = timeout_seconds;
@@ -352,6 +358,7 @@ async fn put_asr(
         beam_size: snapshot.beam_size,
         vad_filter: snapshot.vad_filter,
         condition_on_previous_text: snapshot.condition_on_previous_text,
+        high_accuracy: snapshot.high_accuracy,
         timeout_seconds: snapshot.timeout_seconds,
     }))
     .map(axum::response::IntoResponse::into_response)

@@ -296,13 +296,14 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `PUT /api/settings/llm` 写内存 → `serde_json::to_string_pretty` → 写同目录 `.tmp` → `tokio::fs::rename` 原子替换
 - API key 字段:空字符串 / 未传都视为"保留现有",只有非空字符串才覆盖。这样前端"留空提交"按钮才不会误清
 - `TtsConfig` 单独持久化到 `<数据目录>/tts.json`,默认 `provider=eleven_labs`、`base_url=https://api.elevenlabs.io`、`voice_id=JBFqnCBsd6RMkjVDRZzb`、`model=eleven_multilingual_v2`、`output_format=mp3_44100_128`。保存规则同 LLM,key 不回传前端。
-- `AsrConfig` 单独持久化到 `<数据目录>/asr.json`,默认 `provider=remote_faster_whisper`、`base_url=http://127.0.0.1:8765`、`backend_base_url=http://127.0.0.1:9527`、`model=large-v3`、`language=en`、`beam_size=5`、`vad_filter=true`、`condition_on_previous_text=false`、`timeout_seconds=7200`。`api_token` 可选,空字符串 / 未传都视为保留现有。
+- `AsrConfig` 单独持久化到 `<数据目录>/asr.json`,默认 `provider=remote_faster_whisper`、`base_url=http://127.0.0.1:8765`、`backend_base_url=http://127.0.0.1:9527`、`model=large-v3`、`language=en`、`beam_size=5`、`vad_filter=true`、`condition_on_previous_text=false`、`high_accuracy=true`、`timeout_seconds=7200`。`api_token` 可选,空字符串 / 未传都视为保留现有。
 
 ### 4.8 远程 ASR worker 协议
 - 后端创建 `transcription_jobs` 后启动后台 task。任务切到 `running`,调用 `POST <base_url>/v1/transcribe`。`language` 使用材料语言;旧材料缺语言时回退 `en`。
 - 对 local 材料,请求体包含 `media_url=http://<listen-panel后端>/api/asr/media/<job_id>` 和 `media_token`;worker 从这个 URL 拉视频时带 `Authorization: Bearer <media_token>`。该 token 只在 job `queued/running` 时有效,完成/失败后清空 hash,且不会出现在 URL 日志里。
 - 请求体也包含 `progress_url` 和 `progress_token`;worker 在字幕、下载、ffmpeg、模型加载、ASR segment 进度等阶段 POST 回调后端,前端轮询 `GET /api/transcriptions/:id` 看到实时进度。
-- 对 YouTube/Bilibili,请求体不含 `media_url`,worker 直接使用 `source_type/source_ref`;GPU 机器侧可用 `yt-dlp` 先拉字幕/音频,再走 faster-whisper。Bilibili 的 `source_ref` 可包含 `p/cid/aid`;worker 会转成 `https://www.bilibili.com/video/<BV>?...` 交给 `yt-dlp`。
+- 对 YouTube/Bilibili,请求体不含 `media_url`,worker 直接使用 `source_type/source_ref`;GPU 机器侧会先拉人工字幕,再拉自动字幕,最后才下载音频走 faster-whisper。Bilibili 的 `source_ref` 可包含 `p/cid/aid`;worker 会转成 `https://www.bilibili.com/video/<BV>?...` 交给 `yt-dlp`。
+- worker 响应包含 `source`: `manual_subtitle`、`auto_subtitle` 或 `asr`。后端会保护非空 `manual` 正文;字幕/ASR 只会更新空正文或之前由自动来源写入的正文,避免覆盖手动粘贴的官方稿。
 
 请求 JSON:
 ```json
@@ -317,6 +318,8 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   "beam_size": 5,
   "vad_filter": true,
   "condition_on_previous_text": false,
+  "high_accuracy": true,
+  "initial_prompt": "Material title",
   "progress_url": "http://192.168.0.113:9527/api/asr/progress/1",
   "progress_token": "..."
 }
@@ -429,6 +432,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   - Shared Token:可选 worker 鉴权 token;仅保存,不回传前端
   - 模型默认 `large-v3`,语言默认 `en`,Beam Size 默认 5,超时默认 7200 秒
   - VAD 默认开,`condition_on_previous_text` 默认关,减少长视频重复/跑偏
+  - 高精度慢速模式默认开;字幕路径不受影响,ASR fallback 会使用更高 beam 和更耐心解码
 - **播放**(本地 localStorage)
   - 本地视频默认音量(0-100% slider,默认 30%);Reader 起播时用,播放中调整也写回
 

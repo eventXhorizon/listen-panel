@@ -88,6 +88,11 @@ class TranscribeRequest(BaseModel):
     beam_size: int = Field(default=5, ge=1, le=10)
     vad_filter: bool = True
     condition_on_previous_text: bool = False
+    high_accuracy: bool = True
+    initial_prompt: str | None = None
+    temperature: float = 0.0
+    best_of: int = Field(default=5, ge=1, le=10)
+    patience: float = Field(default=1.0, ge=1.0, le=4.0)
     progress_url: str | None = None
     progress_token: str | None = None
 
@@ -100,6 +105,14 @@ class Segment(BaseModel):
 
 class TranscribeResponse(BaseModel):
     text: str
+    segments: list[Segment]
+    source: str = "asr"
+
+
+@dataclass(frozen=True)
+class SubtitleResult:
+    source: str
+    path: Path
     segments: list[Segment]
 
 
@@ -237,21 +250,21 @@ def run_transcribe(req: TranscribeRequest) -> TranscribeResponse:
             log_job(
                 req,
                 "subtitle-found",
-                path=str(subtitle),
-                size_kb=f"{subtitle.stat().st_size / 1024:.1f}",
+                source=subtitle.source,
+                path=str(subtitle.path),
+                size_kb=f"{subtitle.path.stat().st_size / 1024:.1f}",
             )
-            segments = parse_subtitle(subtitle)
-            log_segments_summary(req, "subtitle-parsed", segments)
-            if segments:
-                report_progress(req, 95, "subtitle-parsed")
-                response = response_from_segments(segments)
-                log_job(
-                    req,
-                    "completed-from-subtitle",
-                    segments=len(response.segments),
-                    elapsed=f"{time.monotonic() - started_at:.1f}s",
-                )
-                return response
+            log_segments_summary(req, "subtitle-parsed", subtitle.segments)
+            report_progress(req, 95, "subtitle-parsed")
+            response = response_from_segments(subtitle.segments, subtitle.source)
+            log_job(
+                req,
+                "completed-from-subtitle",
+                source=subtitle.source,
+                segments=len(response.segments),
+                elapsed=f"{time.monotonic() - started_at:.1f}s",
+            )
+            return response
 
         media = fetch_media(req, work_dir)
         audio = extract_audio(media, work_dir)
@@ -351,6 +364,11 @@ def transcribe_request_from_job(record: JobRecord) -> TranscribeRequest:
         "condition_on_previous_text": options.get(
             "condition_on_previous_text", False
         ),
+        "high_accuracy": options.get("high_accuracy", True),
+        "initial_prompt": options.get("initial_prompt"),
+        "temperature": options.get("temperature", 0.0),
+        "best_of": options.get("best_of", 5),
+        "patience": options.get("patience", 1.0),
         "progress_url": (
             callback.progress_url
             if callback and callback.progress_url
@@ -485,7 +503,7 @@ def verify_worker_token(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid worker token")
 
 
-def try_fetch_subtitle(req: TranscribeRequest, work_dir: Path) -> Path | None:
+def try_fetch_subtitle(req: TranscribeRequest, work_dir: Path) -> SubtitleResult | None:
     if req.source_type not in {"youtube", "bilibili"}:
         log_job(req, "subtitle-skip", reason="source_type")
         return None
@@ -493,16 +511,31 @@ def try_fetch_subtitle(req: TranscribeRequest, work_dir: Path) -> Path | None:
         log_job(req, "subtitle-skip", reason="yt-dlp-not-found")
         return None
     source = media_locator(req)
-    log_job(req, "subtitle-fetch-start", source=source, language=req.language)
-    report_progress(req, 8, "subtitle-fetch")
-    output = str(work_dir / "subtitle.%(ext)s")
+    langs = subtitle_language_pattern(req.language)
+    for kind, auto in (("manual_subtitle", False), ("auto_subtitle", True)):
+        result = fetch_subtitle_kind(req, work_dir, source, langs, kind, auto)
+        if result:
+            return result
+    return None
+
+
+def fetch_subtitle_kind(
+    req: TranscribeRequest,
+    work_dir: Path,
+    source: str,
+    langs: str,
+    kind: str,
+    auto: bool,
+) -> SubtitleResult | None:
+    log_job(req, "subtitle-fetch-start", source=source, kind=kind, languages=langs)
+    report_progress(req, 8, f"{kind}-fetch")
+    output = str(work_dir / f"{kind}.%(ext)s")
     cmd = [
         "yt-dlp",
         "--skip-download",
-        "--write-subs",
-        "--write-auto-subs",
+        "--write-auto-subs" if auto else "--write-subs",
         "--sub-langs",
-        req.language,
+        langs,
         "--sub-format",
         "vtt/srt/best",
         "-o",
@@ -510,15 +543,40 @@ def try_fetch_subtitle(req: TranscribeRequest, work_dir: Path) -> Path | None:
         source,
     ]
     run(cmd, check=False)
-    candidates = sorted(work_dir.glob("subtitle.*"))
+    candidates = sorted(work_dir.glob(f"{kind}.*"))
     log_job(
         req,
         "subtitle-fetch-done",
+        kind=kind,
         candidates=len(candidates),
         files=",".join(f"{p.name}:{p.stat().st_size}" for p in candidates) or "none",
     )
-    report_progress(req, 12, "subtitle-done")
-    return candidates[0] if candidates else None
+    report_progress(req, 12, f"{kind}-done")
+    for candidate in candidates:
+        try:
+            segments = parse_subtitle(candidate)
+        except Exception as exc:
+            log_job(
+                req,
+                "subtitle-parse-failed",
+                kind=kind,
+                path=str(candidate),
+                error=str(exc),
+            )
+            continue
+        if segments:
+            return SubtitleResult(source=kind, path=candidate, segments=segments)
+    return None
+
+
+def subtitle_language_pattern(language: str) -> str:
+    lang = language.strip() or "en"
+    base = lang.split("-", 1)[0].split("_", 1)[0]
+    if not base:
+        return lang
+    if lang == base:
+        return f"{base}.*,{base}"
+    return f"{lang},{base}.*,{base}"
 
 
 def fetch_media(req: TranscribeRequest, work_dir: Path) -> Path:
@@ -657,12 +715,28 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
     report_progress(req, 35, "asr-start")
     model = load_model(req.model)
     report_progress(req, 40, "model-ready")
+    beam_size = max(req.beam_size, 10) if req.high_accuracy else req.beam_size
+    patience = max(req.patience, 2.0) if req.high_accuracy else req.patience
+    log_job(
+        req,
+        "asr-options",
+        high_accuracy=req.high_accuracy,
+        beam_size=beam_size,
+        best_of=req.best_of,
+        patience=patience,
+        temperature=req.temperature,
+        initial_prompt=bool(req.initial_prompt and req.initial_prompt.strip()),
+    )
     segments_iter, _info = model.transcribe(
         str(audio),
         language=req.language or None,
-        beam_size=req.beam_size,
+        beam_size=beam_size,
+        best_of=req.best_of,
+        patience=patience,
+        temperature=req.temperature,
         vad_filter=req.vad_filter,
         condition_on_previous_text=req.condition_on_previous_text,
+        initial_prompt=req.initial_prompt.strip() if req.initial_prompt else None,
     )
     segments: list[Segment] = []
     last_progress = -1
@@ -690,7 +764,7 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
             report_progress(req, min(95, 40 + len(segments)), "asr-progress")
     log_segments_summary(req, "asr-done", segments)
     report_progress(req, 95, "asr-done")
-    return response_from_segments(segments)
+    return response_from_segments(segments, "asr")
 
 
 def load_model(model_name: str) -> WhisperModel:
@@ -839,11 +913,11 @@ def normalize_word(word: str) -> str:
     return re.sub(r"^\W+|\W+$", "", word).casefold()
 
 
-def response_from_segments(segments: list[Segment]) -> TranscribeResponse:
+def response_from_segments(segments: list[Segment], source: str) -> TranscribeResponse:
     text = "\n\n".join(s.text for s in segments if s.text.strip())
     if not text:
         raise HTTPException(status_code=422, detail="empty transcript")
-    return TranscribeResponse(text=text, segments=segments)
+    return TranscribeResponse(text=text, segments=segments, source=source)
 
 
 def suffix_from_content_type(content_type: str | None) -> str:
@@ -936,9 +1010,10 @@ def run(cmd: list[str], check: bool) -> subprocess.CompletedProcess[str]:
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail=f"{cmd[0]} not found")
     logger.info(
-        "event=command-done cmd=%s returncode=%s",
+        "event=command-done cmd=%s returncode=%s stderr=%s",
         cmd[0],
         completed.returncode,
+        (completed.stderr.strip() or "")[-500:],
     )
     if check and completed.returncode != 0:
         error = completed.stderr.strip() or completed.stdout.strip()

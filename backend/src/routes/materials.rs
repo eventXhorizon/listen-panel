@@ -24,8 +24,7 @@ pub fn router() -> Router<crate::AppState> {
         )
 }
 
-const SELECT_COLS: &str =
-    "id, user_id, title, language, source_type, source_ref, text, notes, created_at, updated_at";
+const SELECT_COLS: &str = "id, user_id, title, language, source_type, source_ref, text, text_source, notes, created_at, updated_at";
 
 #[derive(Debug, Deserialize)]
 struct MaterialMetadataReq {
@@ -177,8 +176,8 @@ async fn create(
     let now = Utc::now();
     let row = sqlx::query_as::<_, Material>(&format!(
         "INSERT INTO materials \
-         (user_id, title, language, source_type, source_ref, text, notes, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         (user_id, title, language, source_type, source_ref, text, text_source, notes, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?) \
          RETURNING {SELECT_COLS}"
     ))
     .bind(user.id)
@@ -230,6 +229,7 @@ async fn update(
            source_type = COALESCE(?, source_type), \
            source_ref  = COALESCE(?, source_ref), \
            text        = COALESCE(?, text), \
+           text_source = CASE WHEN ? IS NULL THEN text_source ELSE 'manual' END, \
            notes       = COALESCE(?, notes), \
            updated_at  = ? \
          WHERE id = ? \
@@ -240,7 +240,8 @@ async fn update(
     .bind(next_language)
     .bind(input.source_type)
     .bind(input.source_ref)
-    .bind(input.text)
+    .bind(input.text.as_deref())
+    .bind(input.text.as_deref())
     .bind(input.notes)
     .bind(now)
     .bind(id)

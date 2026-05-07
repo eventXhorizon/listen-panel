@@ -101,6 +101,8 @@ pub struct AsrConfig {
     pub beam_size: i64,
     pub vad_filter: bool,
     pub condition_on_previous_text: bool,
+    #[serde(default = "default_asr_high_accuracy")]
+    pub high_accuracy: bool,
     pub timeout_seconds: u64,
 }
 
@@ -116,6 +118,7 @@ impl Default for AsrConfig {
             beam_size: 5,
             vad_filter: true,
             condition_on_previous_text: false,
+            high_accuracy: true,
             timeout_seconds: 7200,
         }
     }
@@ -128,6 +131,10 @@ impl AsrConfig {
 }
 
 pub type SharedAsr = Arc<RwLock<AsrConfig>>;
+
+fn default_asr_high_accuracy() -> bool {
+    true
+}
 
 pub async fn load() -> SharedLlm {
     let path = crate::paths::llm_config_path();

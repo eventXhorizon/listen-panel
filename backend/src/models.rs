@@ -11,6 +11,7 @@ pub struct Material {
     pub source_type: String,
     pub source_ref: String,
     pub text: String,
+    pub text_source: String,
     pub notes: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

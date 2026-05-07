@@ -85,6 +85,8 @@ struct WorkerResponse {
     text: Option<String>,
     #[serde(default)]
     segments: Vec<WorkerSegment>,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -101,6 +103,8 @@ struct WorkerRequest<'a> {
     beam_size: i64,
     vad_filter: bool,
     condition_on_previous_text: bool,
+    high_accuracy: bool,
+    initial_prompt: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     progress_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -362,7 +366,7 @@ async fn run_job(
 
     let result: Result<()> = async {
         let worker = call_worker(&cfg, &material, job_id, &media_token).await?;
-        persist_worker_result(&state.pool, job_id, material.id, worker).await?;
+        persist_worker_result(&state.pool, job_id, &material, worker).await?;
         Ok(())
     }
     .await;
@@ -415,6 +419,8 @@ async fn call_worker(
         beam_size: cfg.beam_size,
         vad_filter: cfg.vad_filter,
         condition_on_previous_text: cfg.condition_on_previous_text,
+        high_accuracy: cfg.high_accuracy,
+        initial_prompt: &material.title,
         progress_url,
         progress_token: Some(media_token),
     };
@@ -448,7 +454,7 @@ async fn call_worker(
 async fn persist_worker_result(
     pool: &sqlx::SqlitePool,
     job_id: i64,
-    material_id: i64,
+    material: &Material,
     worker: WorkerResponse,
 ) -> Result<Vec<TranscriptSegment>> {
     let mut segments = worker.segments;
@@ -459,12 +465,18 @@ async fn persist_worker_result(
             text: worker.text.unwrap_or_default(),
         });
     }
-    let text = paragraphize_segments(&segments);
-    if text.is_empty() {
+    let generated_text = paragraphize_segments(&segments);
+    if generated_text.is_empty() {
         return Err(AppError(anyhow::anyhow!(
             "ASR worker returned only blank text"
         )));
     }
+    let worker_source = worker.source.as_deref().unwrap_or("asr");
+    let has_manual_text = material.text_source == "manual" && !material.text.trim().is_empty();
+    let should_update_material_text = !has_manual_text
+        && (worker_source != "asr"
+            || material.text.trim().is_empty()
+            || material.text_source == "asr");
 
     let now = Utc::now();
     let mut persisted = Vec::new();
@@ -486,7 +498,7 @@ async fn persist_worker_result(
              RETURNING id, job_id, material_id, start_ms, end_ms, text",
         )
         .bind(job_id)
-        .bind(material_id)
+        .bind(material.id)
         .bind(start_ms)
         .bind(end_ms)
         .bind(text)
@@ -494,12 +506,22 @@ async fn persist_worker_result(
         .await?;
         persisted.push(row);
     }
-    sqlx::query("UPDATE materials SET text = ?, updated_at = ? WHERE id = ?")
-        .bind(&text)
-        .bind(now)
-        .bind(material_id)
-        .execute(&mut *tx)
-        .await?;
+    if should_update_material_text {
+        sqlx::query("UPDATE materials SET text = ?, text_source = ?, updated_at = ? WHERE id = ?")
+            .bind(&generated_text)
+            .bind(worker_source)
+            .bind(now)
+            .bind(material.id)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        tracing::info!(
+            job_id,
+            material_id = material.id,
+            worker_source,
+            "preserved existing material text while storing ASR timing segments"
+        );
+    }
     sqlx::query(
         "UPDATE transcription_jobs \
          SET status = 'succeeded', progress = 100, error = NULL, updated_at = ?, completed_at = ? \
@@ -556,7 +578,7 @@ async fn material_for_user(
     user_id: i64,
 ) -> Result<Material> {
     Ok(sqlx::query_as::<_, Material>(
-        "SELECT id, user_id, title, language, source_type, source_ref, text, notes, created_at, updated_at \
+        "SELECT id, user_id, title, language, source_type, source_ref, text, text_source, notes, created_at, updated_at \
          FROM materials \
          WHERE id = ? AND user_id = ?",
     )
