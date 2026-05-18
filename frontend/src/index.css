@@ -97,6 +97,15 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
+  /* Typography — system stack for UI, serif stack reserved for Reader prose */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans CJK SC", sans-serif;
+  --font-serif:
+    "Iowan Old Style", "Source Serif Pro", Georgia,
+    "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -142,8 +151,7 @@
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    @apply bg-background text-foreground font-sans antialiased;
     text-rendering: optimizeLegibility;
   }
 }
