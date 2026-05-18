@@ -60,6 +60,7 @@ MAX_SUBTITLE_PREFIX_SCAN_WORDS = 4
 MAX_CJK_SUBTITLE_OVERLAP_CHARS = 48
 MIN_CJK_SUBTITLE_OVERLAP_CHARS = 4
 MAX_CJK_SUBTITLE_PREFIX_SCAN_CHARS = 8
+MAX_REPEATED_ASR_LOOKBACK = 6
 _CJK_CHAR = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 _KANJI_OR_KATAKANA_CHAR = re.compile(r"[一-龯ァ-ヺ]")
 _CJK_SPACE = re.compile(r"(?<=[\u3040-\u30ff\u3400-\u9fff])\s+(?=[\u3040-\u30ff\u3400-\u9fff])")
@@ -836,7 +837,17 @@ def transcribe_audio(req: TranscribeRequest, audio: Path) -> TranscribeResponse:
         elif len(segments) % 20 == 0:
             log_job(req, "asr-progress", segments=len(segments))
             report_progress(req, min(95, 40 + len(segments)), "asr-progress")
+    before_postprocess = len(segments)
     segments = normalize_dialogue_segments(segments, req.language)
+    segments = dedupe_repeated_asr_segments(segments, req.language)
+    if len(segments) != before_postprocess:
+        log_job(
+            req,
+            "asr-postprocess",
+            input_segments=before_postprocess,
+            output_segments=len(segments),
+            removed=before_postprocess - len(segments),
+        )
     log_segments_summary(req, "asr-done", segments)
     report_progress(req, 95, "asr-done")
     return response_from_segments(segments, "asr")
@@ -1016,6 +1027,44 @@ def normalize_dialogue_segments(
             if text:
                 normalized.append(Segment(start=segment.start, end=segment.end, text=text))
     return normalized
+
+
+def dedupe_repeated_asr_segments(
+    segments: list[Segment],
+    language: str = "",
+) -> list[Segment]:
+    if not segments:
+        return segments
+
+    deduped: list[Segment] = []
+    recent_keys: list[str] = []
+    cjk_mode = is_japanese_language(language) or any(contains_cjk(s.text) for s in segments)
+    for segment in segments:
+        key = repeated_segment_key(segment.text, cjk_mode)
+        if key and key in recent_keys:
+            continue
+        deduped.append(segment)
+        if key:
+            recent_keys.append(key)
+            recent_keys = recent_keys[-MAX_REPEATED_ASR_LOOKBACK:]
+    return deduped
+
+
+def repeated_segment_key(text: str, cjk_mode: bool) -> str:
+    text = normalize_speaker_for_repeat_key(text)
+    if cjk_mode:
+        units = [unit for unit, _end in cjk_overlap_units(text)]
+        return "".join(units)
+    return " ".join(normalized_words(text.split()))
+
+
+def normalize_speaker_for_repeat_key(text: str) -> str:
+    if ":" not in text:
+        return text
+    label, body = text.split(":", 1)
+    label = re.sub(r"(さん|氏)$", "", label.strip())
+    body = body.strip()
+    return f"{label}:{body}" if body else label
 
 
 def split_japanese_dialogue_turns(text: str, known_speakers: set[str]) -> list[str]:
