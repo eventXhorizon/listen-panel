@@ -41,6 +41,7 @@ import VocabPanel from '../components/VocabPanel';
 import { highlightText } from '../lib/highlight';
 import { languageAdapter, languageLabel } from '../lib/languages';
 import { textSourceLabel } from '../lib/textSources';
+import { markOpened } from '../lib/lastOpened';
 
 interface PendingAdd {
   word: string;
@@ -466,6 +467,7 @@ export default function Reader() {
         return;
       }
       setM(data);
+      markOpened(mid);
       setVocab(await listVocab(mid));
       try {
         setNotes(await listNotes(mid));
