@@ -1,14 +1,149 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
-html, body, #root {
-  height: 100%;
-  margin: 0;
+@custom-variant dark (&:is(.dark *));
+
+/* ===========================================================
+ * Listen Panel design tokens — amber on stone
+ * Light mode: paper-warm background (stone-50), ink text (stone-900),
+ *             amber-600 signature color. Dark mode kept for shadcn
+ *             components that reference it, but not toggled yet.
+ * Tailwind 4: CSS vars feed @theme inline so utilities like
+ *             bg-background / text-primary / border-border work.
+ * =========================================================== */
+
+:root {
+  --radius: 0.625rem;
+
+  /* Surface */
+  --background: oklch(0.985 0.001 106.423);     /* stone-50 */
+  --foreground: oklch(0.216 0.006 56.043);      /* stone-900 */
+  --card: oklch(1 0 0);                          /* white */
+  --card-foreground: oklch(0.216 0.006 56.043);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.216 0.006 56.043);
+
+  /* Brand — amber-600, hover amber-500 */
+  --primary: oklch(0.666 0.179 58.318);          /* amber-600 */
+  --primary-foreground: oklch(0.985 0.001 106.423);
+  --primary-hover: oklch(0.769 0.188 70.08);     /* amber-500 */
+
+  /* Neutrals — stone tints */
+  --secondary: oklch(0.97 0.001 106.424);        /* stone-100 */
+  --secondary-foreground: oklch(0.216 0.006 56.043);
+  --muted: oklch(0.97 0.001 106.424);
+  --muted-foreground: oklch(0.553 0.013 58.071); /* stone-500 */
+  --accent: oklch(0.97 0.001 106.424);
+  --accent-foreground: oklch(0.216 0.006 56.043);
+
+  /* States */
+  --destructive: oklch(0.577 0.245 27.325);      /* rose-600 */
+  --destructive-foreground: oklch(0.985 0.001 106.423);
+  --success: oklch(0.596 0.145 163.225);         /* emerald-600 */
+  --success-foreground: oklch(0.985 0.001 106.423);
+
+  /* Borders / focus */
+  --border: oklch(0.923 0.003 48.717);           /* stone-200 */
+  --input: oklch(0.923 0.003 48.717);
+  --ring: oklch(0.769 0.188 70.08);              /* amber-500 */
+
+  /* Sidebar (used later) */
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.216 0.006 56.043);
+  --sidebar-primary: oklch(0.666 0.179 58.318);
+  --sidebar-primary-foreground: oklch(0.985 0.001 106.423);
+  --sidebar-accent: oklch(0.97 0.001 106.424);
+  --sidebar-accent-foreground: oklch(0.216 0.006 56.043);
+  --sidebar-border: oklch(0.923 0.003 48.717);
+  --sidebar-ring: oklch(0.769 0.188 70.08);
 }
 
-body {
-  background: #ffffff;
-  color: #1c1917;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+.dark {
+  --background: oklch(0.147 0.004 49.25);
+  --foreground: oklch(0.985 0.001 106.423);
+  --card: oklch(0.216 0.006 56.043);
+  --card-foreground: oklch(0.985 0.001 106.423);
+  --popover: oklch(0.216 0.006 56.043);
+  --popover-foreground: oklch(0.985 0.001 106.423);
+  --primary: oklch(0.769 0.188 70.08);
+  --primary-foreground: oklch(0.147 0.004 49.25);
+  --primary-hover: oklch(0.879 0.169 91.605);
+  --secondary: oklch(0.268 0.007 34.298);
+  --secondary-foreground: oklch(0.985 0.001 106.423);
+  --muted: oklch(0.268 0.007 34.298);
+  --muted-foreground: oklch(0.709 0.01 56.259);
+  --accent: oklch(0.268 0.007 34.298);
+  --accent-foreground: oklch(0.985 0.001 106.423);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0.001 106.423);
+  --success: oklch(0.696 0.17 162.48);
+  --success-foreground: oklch(0.147 0.004 49.25);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.216 0.006 56.043);
+  --sidebar-foreground: oklch(0.985 0.001 106.423);
+  --sidebar-primary: oklch(0.769 0.188 70.08);
+  --sidebar-primary-foreground: oklch(0.147 0.004 49.25);
+  --sidebar-accent: oklch(0.268 0.007 34.298);
+  --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.769 0.188 70.08);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
 }
