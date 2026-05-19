@@ -760,7 +760,7 @@ export default function Reader() {
   if (!m) {
     return (
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto px-6 py-10 text-stone-500 text-sm">
+        <div className="max-w-6xl mx-auto px-6 py-10 text-muted-foreground text-sm">
           加载中...
         </div>
       </main>
@@ -796,21 +796,21 @@ export default function Reader() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="border-b border-stone-200 bg-white">
+      <div className="border-b border-border bg-card">
         <div className="w-full px-4 py-2 md:px-8 md:py-0 md:h-14 flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-5">
           <div className="min-w-0 flex items-center gap-2">
             <Link
               to="/"
               aria-label="返回书架"
               title="返回书架"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-stone-500 hover:bg-stone-100 hover:text-stone-900 shrink-0"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground shrink-0"
             >
               <span aria-hidden="true" className="text-base leading-none">←</span>
             </Link>
-            <h1 className="text-[17px] font-semibold text-stone-900 truncate tracking-tight">
+            <h1 className="text-[17px] font-semibold text-foreground truncate tracking-tight">
               {m.title}
             </h1>
-            <span className="hidden rounded bg-stone-100 px-1.5 py-0.5 text-[11px] text-stone-500 sm:inline">
+            <span className="hidden rounded bg-accent px-1.5 py-0.5 text-[11px] text-muted-foreground sm:inline">
               {languageLabel(m.language)}
             </span>
           </div>
@@ -818,7 +818,7 @@ export default function Reader() {
             <button
               type="button"
               onClick={() => setShowMobileMedia(true)}
-              className="inline-flex h-8 shrink-0 items-center rounded-md border border-stone-800 bg-stone-900 px-3 text-xs font-medium text-white hover:bg-stone-800 md:hidden"
+              className="inline-flex h-8 shrink-0 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 md:hidden"
             >
               播放
             </button>
@@ -827,8 +827,8 @@ export default function Reader() {
               title={highlightOn ? '关闭生词高亮' : '开启生词高亮'}
               className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition ${
                 highlightOn
-                  ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
-                  : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
+                  ? 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'
+                  : 'border-border bg-card text-foreground/85 hover:border-border hover:bg-accent/50'
               }`}
             >
               高亮
@@ -836,7 +836,7 @@ export default function Reader() {
             <button
               onClick={() => setLeftPct(50)}
               title="重置分栏比例 50:50"
-              className="hidden h-8 shrink-0 items-center rounded-md border border-stone-200 bg-stone-50 px-3 text-xs font-medium text-stone-700 hover:bg-stone-100 md:inline-flex"
+              className="hidden h-8 shrink-0 items-center rounded-md border border-border bg-muted/50 px-3 text-xs font-medium text-foreground/85 hover:bg-accent md:inline-flex"
             >
               50:50
             </button>
@@ -844,24 +844,24 @@ export default function Reader() {
               <button
                 type="button"
                 onClick={() => setShowTypography((v) => !v)}
-                className="inline-flex h-8 shrink-0 items-center rounded-md border border-teal-200 bg-teal-50 px-3 text-xs font-medium text-teal-800 hover:bg-teal-100"
+                className="inline-flex h-8 shrink-0 items-center rounded-md border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/20"
               >
                 排版
               </button>
               {showTypography && (
-                <div className="fixed inset-x-4 top-28 z-40 rounded-lg border border-stone-200 bg-white p-4 text-sm shadow-xl shadow-stone-900/10 md:absolute md:inset-auto md:right-0 md:top-9 md:w-72">
+                <div className="fixed inset-x-4 top-28 z-40 rounded-lg border border-border bg-card p-4 text-sm shadow-xl shadow-foreground/10 md:absolute md:inset-auto md:right-0 md:top-9 md:w-72">
                   <div className="mb-3 flex items-center justify-between">
-                    <span className="font-medium text-stone-900">阅读排版</span>
+                    <span className="font-medium text-foreground">阅读排版</span>
                     <button
                       type="button"
                       onClick={() => setTypography(DEFAULT_TYPOGRAPHY)}
-                      className="text-xs font-medium text-stone-500 hover:text-stone-900"
+                      className="text-xs font-medium text-muted-foreground hover:text-foreground"
                     >
                       重置
                     </button>
                   </div>
                   <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-stone-500">
+                    <span className="mb-1 block text-xs font-medium text-muted-foreground">
                       字体
                     </span>
                     <select
@@ -872,7 +872,7 @@ export default function Reader() {
                           font: e.target.value as ReaderFont,
                         }))
                       }
-                      className="h-8 w-full rounded-md border border-stone-200 bg-white px-2 text-sm text-stone-800 focus:outline-none focus:border-stone-400"
+                      className="h-8 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground focus:outline-none focus:border-border"
                     >
                       {FONT_OPTIONS.map((font) => (
                         <option key={font.value} value={font.value}>
@@ -918,11 +918,11 @@ export default function Reader() {
             </div>
             <button
               onClick={() => setShowVocabPanel(true)}
-              className="inline-flex h-8 shrink-0 items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+              className="inline-flex h-8 shrink-0 items-center rounded-md border border-success/30 bg-success/10 px-3 text-xs font-medium text-success hover:bg-success/20"
             >
               生词 ({vocab.length})
             </button>
-            <span aria-hidden="true" className="mx-1 hidden h-4 w-px bg-stone-200 md:block" />
+            <span aria-hidden="true" className="mx-1 hidden h-4 w-px bg-secondary md:block" />
             <button
               onClick={startTranscription}
               disabled={
@@ -930,7 +930,7 @@ export default function Reader() {
                 job?.status === 'queued' ||
                 job?.status === 'running'
               }
-              className="inline-flex h-8 shrink-0 items-center rounded-md border border-sky-200 bg-sky-50 px-3 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+              className="inline-flex h-8 shrink-0 items-center rounded-md border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-accent disabled:text-muted-foreground/70"
               title="调用局域网 GPU ASR worker 生成原文"
             >
               {transcriptionButtonLabel(job, transcribing)}
@@ -941,10 +941,10 @@ export default function Reader() {
                   type="button"
                   onClick={toggleStudy}
                   disabled={studySubmitting}
-                  className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400 ${
+                  className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-border disabled:bg-accent disabled:text-muted-foreground/70 ${
                     showStudy
-                      ? 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
-                      : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
+                      ? 'border-border bg-accent text-foreground hover:bg-accent/80'
+                      : 'border-border bg-card text-foreground/85 hover:border-border hover:bg-accent/50'
                   }`}
                   title="按需生成并显示分段翻译、语法和固定搭配"
                 >
@@ -955,7 +955,7 @@ export default function Reader() {
                     type="button"
                     onClick={pauseStudy}
                     disabled={studyPausing || job.study_stage === '暂停中'}
-                    className="inline-flex h-8 shrink-0 items-center rounded-md border border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 transition hover:border-stone-300 hover:bg-stone-50 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
+                    className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-card px-3 text-xs font-medium text-foreground/85 transition hover:border-border hover:bg-accent/50 disabled:cursor-not-allowed disabled:bg-accent disabled:text-muted-foreground/70"
                   >
                     {studyPausing || job.study_stage === '暂停中' ? '暂停中...' : '暂停分析'}
                   </button>
@@ -965,7 +965,7 @@ export default function Reader() {
                     type="button"
                     onClick={resumeStudy}
                     disabled={studySubmitting}
-                    className="inline-flex h-8 shrink-0 items-center rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-medium text-indigo-800 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+                    className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-accent px-3 text-xs font-medium text-foreground transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:border-border disabled:bg-accent disabled:text-muted-foreground/70"
                   >
                     {studySubmitting
                       ? '继续中...'
@@ -985,19 +985,19 @@ export default function Reader() {
           </div>
         </div>
         {transcriptionErr && (
-          <div className="border-t border-rose-100 bg-rose-50 px-6 py-2 text-sm text-rose-700">
+          <div className="border-t border-destructive/20 bg-destructive/5 px-6 py-2 text-sm text-destructive">
             生成原文失败:{' '}
             <span className="font-medium break-words">{transcriptionErr}</span>
           </div>
         )}
         {studyErr && (
-          <div className="border-t border-rose-100 bg-rose-50 px-6 py-2 text-sm text-rose-700">
+          <div className="border-t border-destructive/20 bg-destructive/5 px-6 py-2 text-sm text-destructive">
             翻译分析失败:{' '}
             <span className="font-medium break-words">{studyErr}</span>
           </div>
         )}
         {notesErr && (
-          <div className="border-t border-rose-100 bg-rose-50 px-6 py-2 text-sm text-rose-700">
+          <div className="border-t border-destructive/20 bg-destructive/5 px-6 py-2 text-sm text-destructive">
             笔记加载失败:{' '}
             <span className="font-medium break-words">{notesErr}</span>
           </div>
@@ -1011,7 +1011,7 @@ export default function Reader() {
         <div
           ref={articleScrollRef}
           onScroll={handleArticleScroll}
-          className="overflow-y-auto bg-white touch-pan-y"
+          className="overflow-y-auto bg-card touch-pan-y"
           style={{
             width: isMobileReader ? '100%' : `${leftPct}%`,
             touchAction: isMobileReader ? 'pan-y' : undefined,
@@ -1024,7 +1024,7 @@ export default function Reader() {
             className="max-w-2xl mx-auto px-5 pb-28 pt-7 md:px-10 md:py-10"
           >
             {(hasMaterialText || job || transcriptionErr) && (
-              <div className="mb-6 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
+              <div className="mb-6 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
                 {hasMaterialText && (
                   <span>
                     来源: {textSourceLabel(m.text_source)}
@@ -1048,7 +1048,7 @@ export default function Reader() {
                   </span>
                 )}
                 {segmentsErr && (
-                  <span className="ml-3 text-rose-600">
+                  <span className="ml-3 text-destructive">
                     分段加载失败: {segmentsErr}
                   </span>
                 )}
@@ -1107,7 +1107,7 @@ export default function Reader() {
                 />
               ))
             ) : (
-              <p className="text-stone-400 italic">
+              <p className="text-muted-foreground/70 italic">
                 尚无原文。
                 <Link
                   to={`/m/${m.id}/edit`}
@@ -1118,11 +1118,11 @@ export default function Reader() {
               </p>
             )}
             {m.notes && (
-              <div className="mt-12 pt-6 border-t border-stone-200">
-                <h3 className="text-xs uppercase tracking-wider text-stone-500 mb-3">
+              <div className="mt-12 pt-6 border-t border-border">
+                <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">
                   备注
                 </h3>
-                <p className="text-stone-600 leading-relaxed whitespace-pre-wrap text-[15px]">
+                <p className="text-muted-foreground leading-relaxed whitespace-pre-wrap text-[15px]">
                   {m.notes}
                 </p>
               </div>
@@ -1140,11 +1140,11 @@ export default function Reader() {
               aria-label="调整左右分栏宽度"
               title="拖动调整左右分栏"
             >
-              <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-stone-200 transition group-hover:bg-stone-400 group-active:bg-stone-500" />
+              <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-secondary transition group-hover:bg-secondary group-active:bg-muted/500" />
             </div>
 
             <div
-              className="bg-stone-900 flex flex-col"
+              className="bg-foreground flex flex-col"
               style={{ width: `${100 - leftPct}%` }}
             >
               <div className="flex-1 min-h-0">
@@ -1178,7 +1178,7 @@ export default function Reader() {
                 showMobileMedia
                   ? 'absolute inset-x-0 bottom-0 flex max-h-[86vh] flex-col rounded-t-xl'
                   : 'pointer-events-auto relative rounded-lg'
-              } bg-stone-950 shadow-2xl shadow-stone-950/40`}
+              } bg-neutral-950 shadow-2xl shadow-neutral-950/40`}
             >
               <div
                 className={`flex shrink-0 items-center justify-between px-4 py-3 ${
@@ -1193,14 +1193,14 @@ export default function Reader() {
                   <span className="block truncate text-sm font-medium text-white">
                     {m.title}
                   </span>
-                  <span className="mt-0.5 block text-[11px] text-stone-400">
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground/70">
                     {showMobileMedia ? '播放面板' : '点击展开播放面板'}
                   </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowMobileMedia((v) => !v)}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-stone-300 hover:bg-white/10 hover:text-white"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 hover:bg-card/10 hover:text-white"
                   aria-label={showMobileMedia ? '收起播放面板' : '展开播放面板'}
                 >
                   {showMobileMedia ? '×' : '⌃'}
@@ -1341,20 +1341,20 @@ function StudyProgress({
 }) {
   const progress = Math.max(0, Math.min(100, job.study_progress));
   return (
-    <div className="mt-2 rounded-md border border-indigo-100 bg-white px-3 py-2">
-      <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-stone-500">
+    <div className="mt-2 rounded-md border border-border bg-card px-3 py-2">
+      <div className="mb-1 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
         <span>
           {job.study_stage || '正在分批分析'} · 已完成 {analyzedCount} 段
         </span>
-        <span className="font-mono text-indigo-700">{progress}%</span>
+        <span className="font-mono text-foreground">{progress}%</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-stone-200">
+      <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
         <div
-          className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+          className="h-full rounded-full bg-accent0 transition-all duration-300"
           style={{ width: `${progress}%` }}
         />
       </div>
-      <p className="mt-1 text-[11px] leading-5 text-stone-500">
+      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
         长文章会分批处理，已完成的段落会先显示。
       </p>
     </div>
@@ -1405,7 +1405,7 @@ function ParagraphBlock({
           }
         />
       </div>
-      <p className="text-stone-800" style={paragraphStyle}>
+      <p className="text-foreground" style={paragraphStyle}>
         {highlightOn ? highlightText(text, vocab, materialId, language) : text}
       </p>
     </section>
@@ -1465,15 +1465,15 @@ function NoteButton({
         title={hasNote ? '编辑段落笔记' : '添加段落笔记'}
         className={`inline-flex h-7 items-center rounded-md border px-2 text-[11px] font-medium transition ${
           hasNote
-            ? 'border-lime-200 bg-lime-50 text-lime-800 hover:bg-lime-100'
-            : 'border-stone-200 bg-white text-stone-500 hover:border-stone-300 hover:bg-stone-50 hover:text-stone-800'
+            ? 'border-success/30 bg-success/10 text-success hover:bg-success/15'
+            : 'border-border bg-card text-muted-foreground hover:border-border hover:bg-accent/50 hover:text-foreground'
         } select-none`}
       >
         {hasNote ? '笔记' : '+ 笔记'}
       </button>
       {previewOpen && previewText && (
         <span
-          className="absolute right-0 top-8 z-40 w-96 rounded-lg border border-stone-200 bg-white px-4 py-3 text-left text-sm font-normal leading-6 text-stone-800 shadow-xl shadow-stone-900/10"
+          className="absolute right-0 top-8 z-40 w-96 rounded-lg border border-border bg-card px-4 py-3 text-left text-sm font-normal leading-6 text-foreground shadow-xl shadow-foreground/10"
           onMouseEnter={openPreview}
           onMouseLeave={scheduleClosePreview}
         >
@@ -1529,7 +1529,7 @@ function TranscriptSegmentBlock({
       data-paragraph-text={text}
       className="mb-7 scroll-mt-6"
     >
-      <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-medium text-stone-400">
+      <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-medium text-muted-foreground/70">
         <span>{formatTimestamp(start)} - {formatTimestamp(end)}</span>
         <NoteButton
           hasNote={Boolean(note?.content.trim())}
@@ -1546,21 +1546,21 @@ function TranscriptSegmentBlock({
           }}
         />
       </div>
-      <p className="text-stone-800" style={paragraphStyle}>
+      <p className="text-foreground" style={paragraphStyle}>
         {highlightOn ? highlightText(text, vocab, materialId, language) : text}
       </p>
       {showStudy && studyItems.map(({ segment, study }) => (
         <div
           key={segment.id}
-          className="mt-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-stone-700"
+          className="mt-3 rounded-md border border-border bg-accent/60 px-4 py-3 text-sm text-foreground/85"
         >
           {segments.length > 1 && (
-            <div className="mb-2 text-[11px] font-medium text-indigo-500">
+            <div className="mb-2 text-[11px] font-medium text-muted-foreground">
               {formatTimestamp(segment.start_ms)} - {formatTimestamp(segment.end_ms)}
             </div>
           )}
           {study.translation_zh && (
-            <p className="leading-7 text-stone-800">{study.translation_zh}</p>
+            <p className="leading-7 text-foreground">{study.translation_zh}</p>
           )}
           {study.grammar_points.length > 0 && (
             <StudyPointList
@@ -1593,7 +1593,7 @@ function StudyPointList<T>({
 }) {
   return (
     <div className="mt-3">
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-stone-500">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </div>
       <ul className="space-y-2">
@@ -1608,13 +1608,13 @@ function StudyPointList<T>({
 function GrammarPointItem({ point }: { point: GrammarPoint }) {
   return (
     <div className="leading-6">
-      <span className="font-medium text-stone-900">{point.title}</span>
-      <span className="text-stone-600">: {point.explanation_zh}</span>
+      <span className="font-medium text-foreground">{point.title}</span>
+      <span className="text-muted-foreground">: {point.explanation_zh}</span>
       {point.evidence && (
-        <span className="ml-1 text-stone-500">例: {point.evidence}</span>
+        <span className="ml-1 text-muted-foreground">例: {point.evidence}</span>
       )}
       {point.tip_zh && (
-        <div className="text-xs leading-5 text-stone-500">{point.tip_zh}</div>
+        <div className="text-xs leading-5 text-muted-foreground">{point.tip_zh}</div>
       )}
     </div>
   );
@@ -1623,13 +1623,13 @@ function GrammarPointItem({ point }: { point: GrammarPoint }) {
 function UsagePointItem({ point }: { point: UsagePoint }) {
   return (
     <div className="leading-6">
-      <span className="font-medium text-stone-900">{point.phrase}</span>
-      <span className="text-stone-600">: {point.meaning_zh}</span>
+      <span className="font-medium text-foreground">{point.phrase}</span>
+      <span className="text-muted-foreground">: {point.meaning_zh}</span>
       {point.note_zh && (
-        <div className="text-xs leading-5 text-stone-500">{point.note_zh}</div>
+        <div className="text-xs leading-5 text-muted-foreground">{point.note_zh}</div>
       )}
       {point.example && (
-        <div className="text-xs leading-5 text-stone-500">例: {point.example}</div>
+        <div className="text-xs leading-5 text-muted-foreground">例: {point.example}</div>
       )}
     </div>
   );
@@ -1766,43 +1766,43 @@ function NoteEditor({
       />
       <aside
         style={isMobile ? undefined : popoverStyle}
-        className={`absolute flex flex-col bg-white shadow-2xl shadow-stone-950/20 ${
+        className={`absolute flex flex-col bg-card shadow-2xl shadow-foreground/20 ${
           isMobile
             ? 'inset-x-0 bottom-0 max-h-[86vh] rounded-t-xl'
-            : 'max-h-[min(620px,calc(100vh-24px))] w-[24rem] rounded-lg border border-stone-200'
+            : 'max-h-[min(620px,calc(100vh-24px))] w-[24rem] rounded-lg border border-border'
         }`}
       >
         <div
-          className={`flex shrink-0 items-center justify-between border-b border-stone-200 px-4 py-3 ${
+          className={`flex shrink-0 items-center justify-between border-b border-border px-4 py-3 ${
             isMobile ? '' : 'cursor-move select-none'
           }`}
           onPointerDown={startDrag}
         >
           <div>
-            <div className="text-sm font-semibold text-stone-900">{label}</div>
-            <div className="text-[11px] text-stone-500">
+            <div className="text-sm font-semibold text-foreground">{label}</div>
+            <div className="text-[11px] text-muted-foreground">
               {target.note ? '已保存' : '新笔记'}
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             ×
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-          <div className="mb-4 rounded-md border border-stone-200 bg-stone-50 px-3 py-2">
-            <div className="mb-1 text-[11px] font-medium text-stone-500">
+          <div className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2">
+            <div className="mb-1 text-[11px] font-medium text-muted-foreground">
               原文
             </div>
-            <p className="max-h-28 overflow-y-auto text-sm leading-6 text-stone-700">
+            <p className="max-h-28 overflow-y-auto text-sm leading-6 text-foreground/85">
               {target.anchorText}
             </p>
           </div>
           <label className="block">
-            <span className="mb-2 block text-xs font-medium text-stone-500">
+            <span className="mb-2 block text-xs font-medium text-muted-foreground">
               笔记
             </span>
             <textarea
@@ -1810,17 +1810,17 @@ function NoteEditor({
               onChange={(e) => setContent(e.target.value)}
               rows={isMobile ? 8 : 10}
               autoFocus
-              className="w-full resize-none rounded-md border border-stone-200 bg-white px-3 py-2 text-sm leading-6 text-stone-800 outline-none focus:border-lime-500"
+              className="w-full resize-none rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 text-foreground outline-none focus:border-primary"
               placeholder="写下这里的理解、语法、疑问或补充例句..."
             />
           </label>
         </div>
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-stone-200 px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-4 py-3">
           <button
             type="button"
             onClick={deleteCurrent}
             disabled={!target.note || deleting || saving}
-            className="inline-flex h-8 items-center rounded-md border border-rose-200 bg-white px-3 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-300"
+            className="inline-flex h-8 items-center rounded-md border border-destructive/30 bg-card px-3 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground/50"
           >
             {deleting ? '删除中...' : '删除'}
           </button>
@@ -1828,7 +1828,7 @@ function NoteEditor({
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-8 items-center rounded-md border border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 hover:bg-stone-50"
+              className="inline-flex h-8 items-center rounded-md border border-border bg-card px-3 text-xs font-medium text-foreground/85 hover:bg-accent/50"
             >
               取消
             </button>
@@ -1836,7 +1836,7 @@ function NoteEditor({
               type="button"
               onClick={save}
               disabled={saving || deleting}
-              className="inline-flex h-8 items-center rounded-md border border-lime-200 bg-lime-50 px-3 text-xs font-medium text-lime-800 hover:bg-lime-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+              className="inline-flex h-8 items-center rounded-md border border-success/30 bg-success/10 px-3 text-xs font-medium text-success hover:bg-success/15 disabled:cursor-not-allowed disabled:border-border disabled:bg-accent disabled:text-muted-foreground/70"
             >
               {saving ? '保存中...' : '保存'}
             </button>
@@ -1905,9 +1905,9 @@ function TypographySlider({
 }) {
   return (
     <label className="mt-3 block">
-      <span className="mb-1 flex items-center justify-between text-xs font-medium text-stone-500">
+      <span className="mb-1 flex items-center justify-between text-xs font-medium text-muted-foreground">
         <span>{label}</span>
-        <span className="font-mono text-stone-700">
+        <span className="font-mono text-foreground/85">
           {formatSliderValue(value, step)}
           {suffix}
         </span>
@@ -1919,7 +1919,7 @@ function TypographySlider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-teal-700"
+        className="w-full accent-primary"
       />
     </label>
   );

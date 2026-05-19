@@ -85,7 +85,7 @@ export default function SelectionPopup({
 
   return (
     <div
-      className="selection-popup fixed z-50 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white p-1.5 shadow-lg shadow-stone-900/10"
+      className="selection-popup fixed z-50 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card p-1.5 shadow-lg shadow-foreground/10"
       style={{ top, left }}
       onMouseDown={(e) => e.preventDefault()}
       onPointerDown={(e) => e.preventDefault()}
@@ -104,7 +104,7 @@ export default function SelectionPopup({
           setSel(null);
           window.getSelection()?.removeAllRanges();
         }}
-        className="h-7 px-2.5 rounded-md border border-emerald-200 bg-emerald-50 text-xs font-medium text-emerald-800 hover:bg-emerald-100 whitespace-nowrap"
+        className="h-7 whitespace-nowrap rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
       >
         + 加为生词
       </button>

@@ -381,7 +381,7 @@ function BilibiliVideo({
         className="h-full w-full border-0 bg-black"
       />
       {metadataErr && (
-        <div className="absolute left-3 top-3 rounded-md bg-amber-50/95 px-3 py-2 text-xs text-amber-800 shadow">
+        <div className="absolute left-3 top-3 rounded-md bg-primary/10 px-3 py-2 text-xs text-primary shadow">
           Bilibili 视频信息读取失败，已使用基础 BV 播放。
         </div>
       )}
@@ -607,8 +607,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function Placeholder({ children, error }: { children: React.ReactNode; error?: boolean }) {
   return (
     <div
-      className={`w-full h-full grid place-items-center text-sm px-6 text-center ${
-        error ? 'text-rose-500 bg-rose-50/40' : 'text-stone-400 bg-stone-100'
+      className={`grid h-full w-full place-items-center px-6 text-center text-sm ${
+        error
+          ? 'bg-destructive/5 text-destructive'
+          : 'bg-muted text-muted-foreground'
       }`}
     >
       {children}

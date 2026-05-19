@@ -5,6 +5,17 @@ import { createVocab } from '../api';
 import type { MaterialLanguage } from '../types';
 import { languageAdapter } from '../lib/languages';
 import SpeakButton from './SpeakButton';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 
 interface Props {
   word: string;
@@ -87,29 +98,22 @@ export default function AddVocabDialog({
   const keyMissing = (error ?? '').toLowerCase().includes('not configured');
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
     >
-      <div
-        className="bg-white rounded-xl shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-6 py-4 border-b border-stone-200 flex items-center justify-between shrink-0">
-          <h2 className="text-base font-medium text-stone-900">加为生词</h2>
-          <button
-            onClick={onClose}
-            className="text-stone-400 hover:text-stone-700 text-xl leading-none"
-          >
-            ×
-          </button>
-        </div>
+      <DialogContent className="max-h-[90vh] gap-0 overflow-hidden p-0 sm:max-w-xl">
+        <DialogHeader className="border-b border-border px-6 py-4">
+          <DialogTitle className="text-base font-medium">加为生词</DialogTitle>
+        </DialogHeader>
 
-        <div className="px-6 py-5 space-y-4 overflow-y-auto">
+        <div className="space-y-4 overflow-y-auto px-6 py-5">
           <div>
-            <div className="text-xs text-stone-500 mb-1">选中</div>
+            <div className="mb-1 text-xs text-muted-foreground">选中</div>
             <div className="flex items-center gap-2">
-              <div className="text-xl font-medium text-stone-900 break-words">
+              <div className="break-words text-xl font-medium text-foreground">
                 {word}
               </div>
               <SpeakButton word={word} materialId={materialId} language={language} />
@@ -117,19 +121,19 @@ export default function AddVocabDialog({
           </div>
 
           {loading && (
-            <div className="text-sm text-stone-500 py-6 text-center animate-pulse">
+            <div className="animate-pulse py-6 text-center text-sm text-muted-foreground">
               DeepSeek 查询中...
             </div>
           )}
 
           {error && (
-            <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded p-3">
+            <div className="rounded border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               <div>{error}</div>
               {keyMissing && (
                 <Link
                   to="/settings"
                   onClick={onClose}
-                  className="underline mt-1 inline-block"
+                  className="mt-1 inline-block underline"
                 >
                   去设置 →
                 </Link>
@@ -172,23 +176,16 @@ export default function AddVocabDialog({
           )}
         </div>
 
-        <div className="px-6 py-3 border-t border-stone-200 flex justify-end gap-2 shrink-0">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded-md border border-stone-200 text-sm hover:bg-stone-50"
-          >
+        <DialogFooter className="border-t border-border px-6 py-3">
+          <Button variant="outline" onClick={onClose}>
             取消
-          </button>
-          <button
-            onClick={save}
-            disabled={loading || saving || !!error}
-            className="px-3 py-1.5 rounded-md bg-stone-900 text-white text-sm hover:bg-stone-700 disabled:opacity-50"
-          >
+          </Button>
+          <Button onClick={save} disabled={loading || saving || !!error}>
             {saving ? '保存中...' : '保存'}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -205,11 +202,11 @@ function Field({
 }) {
   return (
     <label className="block">
-      <div className="text-xs text-stone-500 mb-1">{label}</div>
-      <input
+      <div className="mb-1 text-xs text-muted-foreground">{label}</div>
+      <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`w-full bg-white border border-stone-200 rounded px-2 py-1 text-sm focus:outline-none focus:border-stone-400 ${mono ? 'font-mono' : ''}`}
+        className={cn('h-8 px-2 text-sm', mono && 'font-mono')}
       />
     </label>
   );
@@ -228,12 +225,12 @@ function FieldArea({
 }) {
   return (
     <label className="block">
-      <div className="text-xs text-stone-500 mb-1">{label}</div>
-      <textarea
+      <div className="mb-1 text-xs text-muted-foreground">{label}</div>
+      <Textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={rows}
-        className="w-full bg-white border border-stone-200 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-stone-400 resize-y leading-relaxed"
+        className="resize-y px-2 py-1.5 text-sm leading-relaxed"
       />
     </label>
   );
