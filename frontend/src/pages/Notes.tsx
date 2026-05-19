@@ -60,10 +60,10 @@ export default function Notes() {
     <main className="flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-5xl px-6 py-10">
         <div className="mb-6 flex items-baseline justify-between">
-          <h1 className="text-2xl font-medium tracking-tight text-stone-900">
+          <h1 className="text-2xl font-medium tracking-tight text-foreground">
             笔记
           </h1>
-          <span className="text-sm text-stone-500">
+          <span className="text-sm text-muted-foreground">
             {filtered.length} / {items.length}
           </span>
         </div>
@@ -73,14 +73,14 @@ export default function Notes() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="搜索笔记、原文、文章标题..."
-            className="min-w-[220px] flex-1 rounded-md border border-stone-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+            className="min-w-[220px] flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm focus:outline-none focus:border-border"
           />
           <select
             value={scope === 'all' ? 'all' : String(scope)}
             onChange={(e) =>
               setScope(e.target.value === 'all' ? 'all' : Number(e.target.value))
             }
-            className="rounded-md border border-stone-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+            className="rounded-md border border-border bg-card px-3 py-2 text-sm focus:outline-none focus:border-border"
           >
             <option value="all">全部材料</option>
             {materials.map((material) => (
@@ -91,17 +91,17 @@ export default function Notes() {
           </select>
         </div>
 
-        {loading && <p className="text-sm text-stone-500">加载中...</p>}
+        {loading && <p className="text-sm text-muted-foreground">加载中...</p>}
 
         {error && (
-          <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
             {error}
           </div>
         )}
 
         {!loading && !error && filtered.length === 0 && (
-          <div className="rounded-lg border border-dashed border-stone-300 bg-white p-12 text-center">
-            <p className="text-stone-500">
+          <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
+            <p className="text-muted-foreground">
               {items.length === 0 ? '还没有笔记' : '没有匹配的笔记'}
             </p>
           </div>
@@ -114,18 +114,18 @@ export default function Notes() {
             return (
               <li
                 key={note.id}
-                className="rounded-lg border border-stone-200 bg-white p-4"
+                className="rounded-lg border border-border bg-card p-4"
               >
                 <div className="mb-2 flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <Link
                       to={`/m/${note.material_id}`}
-                      className="block truncate text-sm font-medium text-stone-900 hover:underline"
+                      className="block truncate text-sm font-medium text-foreground hover:underline"
                       title={title}
                     >
                       {title}
                     </Link>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-stone-400">
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/70">
                       <span>{noteTargetLabel(note)}</span>
                       <span>{new Date(note.updated_at).toLocaleString()}</span>
                     </div>
@@ -133,24 +133,24 @@ export default function Notes() {
                   <div className="flex shrink-0 items-center gap-3">
                     <Link
                       to={`/m/${note.material_id}`}
-                      className="text-xs font-medium text-sky-700 hover:text-sky-900"
+                      className="text-xs font-medium text-primary hover:text-primary"
                     >
                       打开文章
                     </Link>
                     <button
                       type="button"
                       onClick={() => onDelete(note.id)}
-                      className="text-xs text-stone-400 hover:text-rose-600"
+                      className="text-xs text-muted-foreground/70 hover:text-destructive"
                     >
                       删除
                     </button>
                   </div>
                 </div>
-                <p className="whitespace-pre-wrap break-words text-sm leading-7 text-stone-800">
+                <p className="whitespace-pre-wrap break-words text-sm leading-7 text-foreground">
                   {note.content}
                 </p>
                 {note.anchor_text && (
-                  <p className="mt-3 border-l-2 border-stone-200 pl-3 text-xs leading-6 text-stone-500">
+                  <p className="mt-3 border-l-2 border-border pl-3 text-xs leading-6 text-muted-foreground">
                     {note.anchor_text}
                   </p>
                 )}

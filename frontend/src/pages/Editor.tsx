@@ -238,7 +238,7 @@ export default function Editor() {
 
   if (!loaded) {
     return (
-      <main className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-10 text-stone-500 text-sm">加载中...</div></main>
+      <main className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-10 text-muted-foreground text-sm">加载中...</div></main>
     );
   }
 
@@ -250,12 +250,12 @@ export default function Editor() {
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-10 w-full">
       <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-medium text-stone-900 tracking-tight">
+        <h1 className="text-2xl font-medium text-foreground tracking-tight">
           {editingId ? '编辑材料' : '新建材料'}
         </h1>
         <Link
           to={editingId ? `/m/${editingId}` : '/'}
-          className="text-sm text-stone-500 hover:text-stone-900"
+          className="text-sm text-muted-foreground hover:text-foreground"
         >
           取消
         </Link>
@@ -270,7 +270,7 @@ export default function Editor() {
               setTitle(e.target.value);
             }}
             placeholder="例:TED - The Power of Vulnerability"
-            className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-stone-400 focus:ring-2 focus:ring-stone-100"
+            className="w-full bg-card border border-border rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-border focus:ring-2 focus:ring-ring/30"
           />
         </Field>
 
@@ -283,12 +283,12 @@ export default function Editor() {
                 onClick={() => setLanguage(option.value)}
                 className={`rounded-md border px-3 py-2 text-left transition ${
                   language === option.value
-                    ? 'border-teal-300 bg-teal-50 text-teal-900'
-                    : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50'
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-border bg-card text-foreground/85 hover:border-border hover:bg-accent/50'
                 }`}
               >
                 <span className="block text-sm font-medium">{option.label}</span>
-                <span className="mt-0.5 block text-xs text-stone-500">
+                <span className="mt-0.5 block text-xs text-muted-foreground">
                   {option.hint}
                 </span>
               </button>
@@ -313,15 +313,15 @@ export default function Editor() {
                 }}
                 className={`px-3 py-1.5 rounded-md border text-sm transition ${
                   sourceType === t.value
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                    : 'bg-white text-stone-700 border-stone-200 hover:border-stone-400'
+                    ? 'bg-success/10 text-success border-success/40'
+                    : 'bg-card text-foreground/85 border-border hover:border-border'
                 }`}
               >
                 {t.label}
               </button>
             ))}
           </div>
-          <p className="mt-2 text-xs text-stone-500">
+          <p className="mt-2 text-xs text-muted-foreground">
             {TYPES.find((t) => t.value === sourceType)?.hint}
           </p>
 
@@ -336,15 +336,15 @@ export default function Editor() {
                   onDrop={onDrop}
                   className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition select-none ${
                     isDragging
-                      ? 'border-stone-900 bg-stone-50'
-                      : 'border-stone-300 hover:border-stone-400 hover:bg-stone-50'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-border hover:bg-accent/50'
                   }`}
                 >
                   <div className="pointer-events-none">
-                    <div className="text-sm font-medium text-stone-800">
+                    <div className="text-sm font-medium text-foreground">
                       {isDragging ? '松手即放' : '拖入视频文件,或点此选择'}
                     </div>
-                    <div className="text-xs text-stone-500 mt-1">
+                    <div className="text-xs text-muted-foreground mt-1">
                       支持 {ALLOWED_EXTS.join(' / ')}
                     </div>
                   </div>
@@ -362,10 +362,10 @@ export default function Editor() {
                 />
 
                 {pendingFile && (
-                  <div className="mt-3 flex items-center justify-between gap-3 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-sm">
+                  <div className="mt-3 flex items-center justify-between gap-3 bg-success/10 border border-success/30 rounded px-3 py-2 text-sm">
                     <div className="min-w-0">
-                      <div className="font-medium text-stone-900 truncate">{pendingFile.name}</div>
-                      <div className="text-xs text-stone-500">
+                      <div className="font-medium text-foreground truncate">{pendingFile.name}</div>
+                      <div className="text-xs text-muted-foreground">
                         {formatSize(pendingFile.size)} · 保存时才上传
                         {sourceRef ? ' · 将替换原文件' : ''}
                       </div>
@@ -373,7 +373,7 @@ export default function Editor() {
                     <button
                       type="button"
                       onClick={() => setPendingFile(null)}
-                      className="text-xs text-stone-500 hover:text-rose-600 shrink-0"
+                      className="text-xs text-muted-foreground hover:text-destructive shrink-0"
                     >
                       取消
                     </button>
@@ -381,7 +381,7 @@ export default function Editor() {
                 )}
 
                 {!pendingFile && sourceRef && (
-                  <p className="mt-3 text-xs text-stone-500 break-all">
+                  <p className="mt-3 text-xs text-muted-foreground break-all">
                     当前文件:backend/data/uploads/{sourceRef}
                   </p>
                 )}
@@ -401,7 +401,7 @@ export default function Editor() {
                     ? 'https://www.youtube.com/watch?v=...'
                     : 'https://www.bilibili.com/video/BV...'
                 }
-                className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-[15px] font-mono focus:outline-none focus:border-stone-400 focus:ring-2 focus:ring-stone-100"
+                className="w-full bg-card border border-border rounded-md px-3 py-2 text-[15px] font-mono focus:outline-none focus:border-border focus:ring-2 focus:ring-ring/30"
               />
             )}
             {sourceType !== 'local' && (
@@ -420,9 +420,9 @@ export default function Editor() {
             onChange={(e) => setText(e.target.value)}
             rows={14}
             placeholder="把听力原文粘贴到这里..."
-            className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-stone-400 focus:ring-2 focus:ring-stone-100 resize-y leading-relaxed"
+            className="w-full bg-card border border-border rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-border focus:ring-2 focus:ring-ring/30 resize-y leading-relaxed"
           />
-          <p className="mt-1.5 text-xs text-stone-400">
+          <p className="mt-1.5 text-xs text-muted-foreground/70">
             空行会被识别为段落分隔。
           </p>
         </Field>
@@ -433,21 +433,21 @@ export default function Editor() {
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
             placeholder="生词、句法、感想..."
-            className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-stone-400 focus:ring-2 focus:ring-stone-100 resize-y"
+            className="w-full bg-card border border-border rounded-md px-3 py-2 text-[15px] focus:outline-none focus:border-border focus:ring-2 focus:ring-ring/30 resize-y"
           />
         </Field>
 
-        <div className="flex justify-end gap-2 pt-2 border-t border-stone-200">
+        <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Link
             to={editingId ? `/m/${editingId}` : '/'}
-            className="px-4 py-2 rounded-md border border-stone-200 text-sm text-stone-700 hover:bg-stone-50"
+            className="px-4 py-2 rounded-md border border-border text-sm text-foreground/85 hover:bg-accent/50"
           >
             取消
           </Link>
           <button
             disabled={stage !== 'idle'}
             onClick={save}
-            className="px-4 py-2 rounded-md bg-stone-900 text-white text-sm hover:bg-stone-700 disabled:opacity-50"
+            className="px-4 py-2 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85 disabled:opacity-50"
           >
             {buttonLabel}
           </button>
@@ -461,7 +461,7 @@ export default function Editor() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-sm font-medium text-stone-800 mb-2">{label}</div>
+      <div className="text-sm font-medium text-foreground mb-2">{label}</div>
       {children}
     </div>
   );
@@ -478,12 +478,12 @@ function MetadataHint({
 }) {
   if (status === 'idle') return null;
   if (status === 'loading') {
-    return <p className="mt-2 text-xs text-stone-500">正在读取视频信息...</p>;
+    return <p className="mt-2 text-xs text-muted-foreground">正在读取视频信息...</p>;
   }
   if (status === 'detected' && metadata?.source_type) {
     const label = metadata.source_type === 'youtube' ? 'YouTube' : 'Bilibili';
     return (
-      <p className="mt-2 text-xs text-emerald-700">
+      <p className="mt-2 text-xs text-success">
         已识别为 {label}
         {metadata.title ? ` · 已读取标题: ${metadata.title}` : ' · 暂未读取到标题'}
         {metadata.bilibili?.page_count && metadata.bilibili.page_count > 1
@@ -495,13 +495,13 @@ function MetadataHint({
   }
   if (status === 'unknown') {
     return (
-      <p className="mt-2 text-xs text-amber-700">
+      <p className="mt-2 text-xs text-primary">
         暂未识别来源,保存时会按当前选择的视频源处理。
       </p>
     );
   }
   return (
-    <p className="mt-2 text-xs text-rose-600">
+    <p className="mt-2 text-xs text-destructive">
       视频信息读取失败,仍可保存,但可能需要手动确认视频源。
     </p>
   );

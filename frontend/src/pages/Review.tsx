@@ -34,7 +34,7 @@ function maskWord(
     parts.push(
       <span
         key={m.index}
-        className="bg-stone-200 text-stone-200 rounded px-1 select-none"
+        className="bg-foreground/15 text-transparent rounded px-1 select-none"
       >
         {m[0]}
       </span>,
@@ -97,15 +97,15 @@ export default function Review() {
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-xl mx-auto px-6 py-12 w-full">
           <div className="text-center mb-8">
-            <h1 className="text-2xl font-medium text-stone-900 mb-2">生词复习</h1>
-            <p className="text-sm text-stone-500">
+            <h1 className="text-2xl font-medium text-foreground mb-2">生词复习</h1>
+            <p className="text-sm text-muted-foreground">
               翻卡片复习,根据上下文回想词义。
             </p>
           </div>
 
-          <div className="space-y-5 bg-white border border-stone-200 rounded-lg p-6">
+          <div className="space-y-5 bg-card border border-border rounded-lg p-6">
             <div>
-              <div className="text-sm font-medium text-stone-800 mb-2">范围</div>
+              <div className="text-sm font-medium text-foreground mb-2">范围</div>
               <select
                 value={scope === 'all' ? 'all' : String(scope)}
                 onChange={(e) =>
@@ -113,7 +113,7 @@ export default function Review() {
                     e.target.value === 'all' ? 'all' : Number(e.target.value),
                   )
                 }
-                className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+                className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-border"
               >
                 <option value="all">全部材料</option>
                 {materials.map((m) => (
@@ -123,7 +123,7 @@ export default function Review() {
                 ))}
               </select>
             </div>
-            <label className="flex items-center gap-2 text-sm text-stone-700 cursor-pointer">
+            <label className="flex items-center gap-2 text-sm text-foreground/85 cursor-pointer">
               <input
                 type="checkbox"
                 checked={includeMastered}
@@ -131,9 +131,9 @@ export default function Review() {
               />
               包含已掌握的(三点全亮)
             </label>
-            <p className="text-xs text-stone-500">
+            <p className="text-xs text-muted-foreground">
               本次将复习{' '}
-              <strong className="text-stone-900">{candidates.length}</strong> 个词
+              <strong className="text-foreground">{candidates.length}</strong> 个词
             </p>
           </div>
 
@@ -141,7 +141,7 @@ export default function Review() {
             <button
               onClick={start}
               disabled={candidates.length === 0}
-              className="px-6 py-2.5 rounded-md bg-stone-900 text-white text-sm hover:bg-stone-700 disabled:opacity-50"
+              className="px-6 py-2.5 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85 disabled:opacity-50"
             >
               开始
             </button>
@@ -149,7 +149,7 @@ export default function Review() {
           <div className="text-center mt-4">
             <Link
               to="/vocab"
-              className="text-xs text-stone-500 hover:text-stone-900"
+              className="text-xs text-muted-foreground hover:text-foreground"
             >
               ← 返回生词本
             </Link>
@@ -163,19 +163,19 @@ export default function Review() {
     return (
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-xl mx-auto px-6 py-20 w-full text-center">
-          <h1 className="text-2xl font-medium text-stone-900 mb-2">复习完成</h1>
-          <p className="text-sm text-stone-500 mb-8">
+          <h1 className="text-2xl font-medium text-foreground mb-2">复习完成</h1>
+          <p className="text-sm text-muted-foreground mb-8">
             本轮 {queue.length} 个词已过。
           </p>
           <button
             onClick={() => setStarted(false)}
-            className="px-4 py-2 rounded-md border border-stone-200 text-sm hover:bg-stone-50 mr-2"
+            className="px-4 py-2 rounded-md border border-border text-sm hover:bg-accent/50 mr-2"
           >
             再来一轮
           </button>
           <Link
             to="/vocab"
-            className="inline-block px-4 py-2 rounded-md bg-stone-900 text-white text-sm hover:bg-stone-700"
+            className="inline-block px-4 py-2 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85"
           >
             返回生词本
           </Link>
@@ -189,22 +189,22 @@ export default function Review() {
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10 w-full">
-        <div className="flex items-center justify-between mb-6 text-xs text-stone-500">
+        <div className="flex items-center justify-between mb-6 text-xs text-muted-foreground">
           <span>
             {idx + 1} / {queue.length}
           </span>
           <button
             onClick={() => setStarted(false)}
-            className="hover:text-stone-900"
+            className="hover:text-foreground"
           >
             退出
           </button>
         </div>
 
-        <div className="bg-white border border-stone-200 rounded-xl p-8 min-h-[320px] flex flex-col">
+        <div className="bg-card border border-border rounded-xl p-8 min-h-[320px] flex flex-col">
           <div className="text-center mb-6">
             <div className="flex items-center justify-center gap-2">
-              <div className="text-3xl font-medium text-stone-900 break-words">
+              <div className="text-3xl font-medium text-foreground break-words">
                 {cur.word}
               </div>
               <SpeakButton
@@ -215,14 +215,14 @@ export default function Review() {
               />
             </div>
             {cur.phonetic && (
-              <div className="text-sm text-stone-500 font-mono mt-1">
+              <div className="text-sm text-muted-foreground font-mono mt-1">
                 {cur.phonetic}
               </div>
             )}
           </div>
 
           {cur.context && (
-            <div className="text-sm text-stone-600 leading-relaxed border-l-2 border-stone-200 pl-3 mb-6">
+            <div className="text-sm text-muted-foreground leading-relaxed border-l-2 border-border pl-3 mb-6">
               {revealed ? cur.context : maskWord(cur.context, cur.word, cur.language)}
             </div>
           )}
@@ -231,27 +231,27 @@ export default function Review() {
             {!revealed ? (
               <button
                 onClick={() => setRevealed(true)}
-                className="px-6 py-2 rounded-md bg-stone-100 text-stone-800 text-sm hover:bg-stone-200"
+                className="px-6 py-2 rounded-md bg-accent text-foreground text-sm hover:bg-secondary/80"
               >
                 显示释义
               </button>
             ) : (
               <div className="text-center">
                 {cur.pos && (
-                  <div className="text-xs text-stone-500 italic mb-1">
+                  <div className="text-xs text-muted-foreground italic mb-1">
                     {cur.pos}
                   </div>
                 )}
-                <div className="text-base text-stone-900 leading-relaxed">
+                <div className="text-base text-foreground leading-relaxed">
                   {cur.definition_zh}
                 </div>
                 {cur.definition_en && (
-                  <div className="text-sm text-stone-500 leading-relaxed mt-1">
+                  <div className="text-sm text-muted-foreground leading-relaxed mt-1">
                     {cur.definition_en}
                   </div>
                 )}
                 {cur.example_zh && (
-                  <div className="text-xs text-stone-500 italic mt-3">
+                  <div className="text-xs text-muted-foreground italic mt-3">
                     {cur.example_zh}
                   </div>
                 )}
@@ -264,19 +264,19 @@ export default function Review() {
           <div className="grid grid-cols-3 gap-2 mt-4">
             <button
               onClick={() => judge(-3)}
-              className="py-2 rounded-md border border-rose-200 text-rose-700 text-sm hover:bg-rose-50"
+              className="py-2 rounded-md border border-destructive/30 text-destructive text-sm hover:bg-destructive/10"
             >
               不记得
             </button>
             <button
               onClick={() => judge(0)}
-              className="py-2 rounded-md border border-stone-200 text-stone-700 text-sm hover:bg-stone-50"
+              className="py-2 rounded-md border border-border text-foreground/85 text-sm hover:bg-accent/50"
             >
               模糊
             </button>
             <button
               onClick={() => judge(1)}
-              className="py-2 rounded-md border border-emerald-200 text-emerald-700 text-sm hover:bg-emerald-50"
+              className="py-2 rounded-md border border-success/30 text-success text-sm hover:bg-success/10"
             >
               记得
             </button>

@@ -325,10 +325,10 @@ export default function Settings() {
     return (
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-6 py-10 w-full">
-          <h1 className="text-2xl font-medium text-stone-900 tracking-tight mb-2">
+          <h1 className="text-2xl font-medium text-foreground tracking-tight mb-2">
             设置
           </h1>
-          <p className="text-sm text-stone-500">
+          <p className="text-sm text-muted-foreground">
             只有管理员可以查看和修改 DeepSeek / ElevenLabs 凭据。
           </p>
         </div>
@@ -339,33 +339,33 @@ export default function Settings() {
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10 w-full">
-        <h1 className="text-2xl font-medium text-stone-900 tracking-tight mb-2">
+        <h1 className="text-2xl font-medium text-foreground tracking-tight mb-2">
           设置
         </h1>
-        <p className="text-sm text-stone-500 mb-8">
+        <p className="text-sm text-muted-foreground mb-8">
           DeepSeek、TTS、ASR 凭据和本地数据保存在数据目录中,不会回传 API key。本地音量存浏览器 localStorage。
         </p>
 
         <div className="space-y-7">
-          <section className="bg-white border border-stone-200 rounded-lg p-5">
+          <section className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
-              <h2 className="text-sm font-medium text-stone-800">数据存储</h2>
+              <h2 className="text-sm font-medium text-foreground">数据存储</h2>
               {dataDirLoadErr ? (
-                <span className="text-xs px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                <span className="text-xs px-2 py-0.5 rounded bg-destructive/5 text-destructive border border-destructive/30">
                   后端不可达 · {dataDirLoadErr}
                 </span>
               ) : dataDirStatus ? (
-                <span className="text-xs px-2 py-0.5 rounded bg-stone-100 text-stone-600 border border-stone-200">
+                <span className="text-xs px-2 py-0.5 rounded bg-accent text-muted-foreground border border-border">
                   {dataDirSourceLabel(dataDirStatus.source)}
                 </span>
               ) : (
-                <span className="text-xs text-stone-400">读取中...</span>
+                <span className="text-xs text-muted-foreground/70">读取中...</span>
               )}
             </div>
 
             <div className="space-y-5">
               <Field label="当前使用目录">
-                <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-mono text-stone-700 break-all">
+                <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs font-mono text-foreground/85 break-all">
                   {dataDirStatus?.active_dir ?? '读取中...'}
                 </div>
               </Field>
@@ -376,18 +376,18 @@ export default function Settings() {
                   onChange={(e) => setDataDir(e.target.value)}
                   disabled={dataDirLocked}
                   placeholder="/Users/you/listen-panel-data"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400 disabled:bg-stone-50 disabled:text-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border disabled:bg-muted/50 disabled:text-muted-foreground/70"
                 />
-                <p className="mt-2 text-xs text-stone-500">
+                <p className="mt-2 text-xs text-muted-foreground">
                   这里是整个本机服务的数据目录,包含 SQLite、生词、文章、上传视频、TTS 缓存和凭据。修改后需要重启服务才会生效;旧数据不会自动搬迁。
                 </p>
                 {dataDirLocked && (
-                  <p className="mt-2 text-xs text-amber-700">
+                  <p className="mt-2 text-xs text-primary">
                     当前由 LISTEN_PANEL_DATA_DIR 环境变量指定,设置页不能覆盖。
                   </p>
                 )}
                 {dataDirStatus?.restart_required && (
-                  <p className="mt-2 text-xs text-amber-700">
+                  <p className="mt-2 text-xs text-primary">
                     已保存新的目录,重启后才会切换。
                   </p>
                 )}
@@ -395,9 +395,9 @@ export default function Settings() {
             </div>
           </section>
 
-          <section className="bg-white border border-stone-200 rounded-lg p-5">
+          <section className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
-              <h2 className="text-sm font-medium text-stone-800">DeepSeek</h2>
+              <h2 className="text-sm font-medium text-foreground">DeepSeek</h2>
               <StatusBadge status={status} loadErr={loadErr} />
             </div>
 
@@ -409,17 +409,17 @@ export default function Settings() {
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                     placeholder={keyPlaceholder}
-                    className="flex-1 bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                    className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                   />
                   <button
                     type="button"
                     onClick={() => setShow((s) => !s)}
-                    className="px-3 py-2 rounded-md border border-stone-200 text-xs hover:bg-stone-50"
+                    className="px-3 py-2 rounded-md border border-border text-xs hover:bg-accent/50"
                   >
                     {show ? '隐藏' : '显示'}
                   </button>
                 </div>
-                <p className="mt-2 text-xs text-stone-500">
+                <p className="mt-2 text-xs text-muted-foreground">
                   申请地址:
                   <a
                     href="https://platform.deepseek.com/api_keys"
@@ -437,9 +437,9 @@ export default function Settings() {
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder="https://api.deepseek.com"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
-                <p className="mt-2 text-xs text-stone-500">
+                <p className="mt-2 text-xs text-muted-foreground">
                   兼容 OpenAI 协议的代理(SiliconFlow / DashScope 等)在这里改。
                 </p>
               </Field>
@@ -449,15 +449,15 @@ export default function Settings() {
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                   placeholder="deepseek-chat"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
             </div>
           </section>
 
-          <section className="bg-white border border-stone-200 rounded-lg p-5">
+          <section className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
-              <h2 className="text-sm font-medium text-stone-800">ElevenLabs TTS</h2>
+              <h2 className="text-sm font-medium text-foreground">ElevenLabs TTS</h2>
               <StatusBadge status={ttsStatus} loadErr={ttsLoadErr} />
             </div>
 
@@ -469,17 +469,17 @@ export default function Settings() {
                     value={ttsApiKey}
                     onChange={(e) => setTtsApiKey(e.target.value)}
                     placeholder={ttsKeyPlaceholder}
-                    className="flex-1 bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                    className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                   />
                   <button
                     type="button"
                     onClick={() => setShowTtsKey((s) => !s)}
-                    className="px-3 py-2 rounded-md border border-stone-200 text-xs hover:bg-stone-50"
+                    className="px-3 py-2 rounded-md border border-border text-xs hover:bg-accent/50"
                   >
                     {showTtsKey ? '隐藏' : '显示'}
                   </button>
                 </div>
-                <p className="mt-2 text-xs text-stone-500">
+                <p className="mt-2 text-xs text-muted-foreground">
                   申请地址:
                   <a
                     href="https://elevenlabs.io/app/settings/api-keys"
@@ -497,7 +497,7 @@ export default function Settings() {
                   value={ttsBaseUrl}
                   onChange={(e) => setTtsBaseUrl(e.target.value)}
                   placeholder="https://api.elevenlabs.io"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
 
@@ -506,7 +506,7 @@ export default function Settings() {
                   value={ttsVoiceId}
                   onChange={(e) => setTtsVoiceId(e.target.value)}
                   placeholder="JBFqnCBsd6RMkjVDRZzb"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
 
@@ -515,7 +515,7 @@ export default function Settings() {
                   value={ttsModel}
                   onChange={(e) => setTtsModel(e.target.value)}
                   placeholder="eleven_multilingual_v2"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
 
@@ -524,15 +524,15 @@ export default function Settings() {
                   value={ttsOutputFormat}
                   onChange={(e) => setTtsOutputFormat(e.target.value)}
                   placeholder="mp3_44100_128"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
             </div>
           </section>
 
-          <section className="bg-white border border-stone-200 rounded-lg p-5">
+          <section className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
-              <h2 className="text-sm font-medium text-stone-800">远程 ASR Worker</h2>
+              <h2 className="text-sm font-medium text-foreground">远程 ASR Worker</h2>
               <StatusBadge status={asrStatus} loadErr={asrLoadErr} />
             </div>
 
@@ -542,18 +542,18 @@ export default function Settings() {
                   value={asrBaseUrl}
                   onChange={(e) => setAsrBaseUrl(e.target.value)}
                   placeholder="http://192.168.0.50:8765"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
                 <div className="mt-3 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
                     onClick={onCheckAsrHealth}
                     disabled={checkingAsrHealth || !asrBaseUrl.trim()}
-                    className="inline-flex h-8 items-center rounded-md border border-sky-200 bg-sky-50 px-3 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
+                    className="inline-flex h-8 items-center rounded-md border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-accent disabled:text-muted-foreground/70"
                   >
                     {checkingAsrHealth ? '检查中...' : '健康检查'}
                   </button>
-                  <span className="text-xs text-stone-500">
+                  <span className="text-xs text-muted-foreground">
                     从 listen-panel 后端访问 worker,适合验证公网/隧道地址。
                   </span>
                 </div>
@@ -567,9 +567,9 @@ export default function Settings() {
                   value={asrBackendBaseUrl}
                   onChange={(e) => setAsrBackendBaseUrl(e.target.value)}
                   placeholder="http://192.168.0.113:9527"
-                  className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
-                <p className="mt-2 text-xs text-stone-500">
+                <p className="mt-2 text-xs text-muted-foreground">
                   GPU 机器用这个地址回连本机后端读取本地视频。
                 </p>
               </Field>
@@ -581,12 +581,12 @@ export default function Settings() {
                     value={asrToken}
                     onChange={(e) => setAsrToken(e.target.value)}
                     placeholder={asrTokenPlaceholder}
-                    className="flex-1 bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                    className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                   />
                   <button
                     type="button"
                     onClick={() => setShowAsrToken((s) => !s)}
-                    className="px-3 py-2 rounded-md border border-stone-200 text-xs hover:bg-stone-50"
+                    className="px-3 py-2 rounded-md border border-border text-xs hover:bg-accent/50"
                   >
                     {showAsrToken ? '隐藏' : '显示'}
                   </button>
@@ -599,7 +599,7 @@ export default function Settings() {
                     value={asrModel}
                     onChange={(e) => setAsrModel(e.target.value)}
                     placeholder="large-v3"
-                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                    className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                   />
                 </Field>
                 <Field label="语言">
@@ -607,7 +607,7 @@ export default function Settings() {
                     value={asrLanguage}
                     onChange={(e) => setAsrLanguage(e.target.value)}
                     placeholder="en"
-                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                    className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                   />
                 </Field>
                 <Field label="Beam Size">
@@ -617,7 +617,7 @@ export default function Settings() {
                     max={10}
                     value={asrBeamSize}
                     onChange={(e) => setAsrBeamSize(Number(e.target.value))}
-                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                    className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                   />
                 </Field>
                 <Field label="超时秒数">
@@ -626,12 +626,12 @@ export default function Settings() {
                     min={60}
                     value={asrTimeoutSeconds}
                     onChange={(e) => setAsrTimeoutSeconds(Number(e.target.value))}
-                    className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-stone-400"
+                    className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                   />
                 </Field>
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-stone-700">
+              <label className="flex items-center gap-2 text-sm text-foreground/85">
                 <input
                   type="checkbox"
                   checked={asrVadFilter}
@@ -639,7 +639,7 @@ export default function Settings() {
                 />
                 VAD 静音过滤
               </label>
-              <label className="flex items-center gap-2 text-sm text-stone-700">
+              <label className="flex items-center gap-2 text-sm text-foreground/85">
                 <input
                   type="checkbox"
                   checked={asrConditionPrevious}
@@ -647,7 +647,7 @@ export default function Settings() {
                 />
                 condition_on_previous_text
               </label>
-              <label className="flex items-center gap-2 text-sm text-stone-700">
+              <label className="flex items-center gap-2 text-sm text-foreground/85">
                 <input
                   type="checkbox"
                   checked={asrHighAccuracy}
@@ -658,8 +658,8 @@ export default function Settings() {
             </div>
           </section>
 
-          <section className="bg-white border border-stone-200 rounded-lg p-5">
-            <h2 className="text-sm font-medium text-stone-800 mb-4">播放</h2>
+          <section className="bg-card border border-border rounded-lg p-5">
+            <h2 className="text-sm font-medium text-foreground mb-4">播放</h2>
             <Field label="本地视频默认音量">
               <div className="flex items-center gap-3">
                 <input
@@ -669,13 +669,13 @@ export default function Settings() {
                   step={0.05}
                   value={volume}
                   onChange={(e) => setVolume(Number(e.target.value))}
-                  className="flex-1 accent-stone-700"
+                  className="flex-1 accent-primary"
                 />
-                <span className="text-sm text-stone-700 font-mono w-12 text-right tabular-nums">
+                <span className="text-sm text-foreground/85 font-mono w-12 text-right tabular-nums">
                   {Math.round(volume * 100)}%
                 </span>
               </div>
-              <p className="mt-2 text-xs text-stone-500">
+              <p className="mt-2 text-xs text-muted-foreground">
                 Reader 起播时本地视频用这个值,播放过程中调整也会写回。YouTube/Bilibili 走自己的播放器。
               </p>
             </Field>
@@ -685,12 +685,12 @@ export default function Settings() {
             <button
               onClick={onSave}
               disabled={saving}
-              className="px-4 py-2 rounded-md bg-stone-900 text-white text-sm hover:bg-stone-700 disabled:opacity-50"
+              className="px-4 py-2 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85 disabled:opacity-50"
             >
               {saving ? '保存中...' : '保存'}
             </button>
             {savedAt && (
-              <span className="text-xs text-stone-500">已保存 · {savedAt}</span>
+              <span className="text-xs text-muted-foreground">已保存 · {savedAt}</span>
             )}
           </div>
         </div>
@@ -708,23 +708,23 @@ function StatusBadge({
 }) {
   if (loadErr) {
     return (
-      <span className="text-xs px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
+      <span className="text-xs px-2 py-0.5 rounded bg-destructive/5 text-destructive border border-destructive/30">
         后端不可达 · {loadErr}
       </span>
     );
   }
   if (!status) {
-    return <span className="text-xs text-stone-400">读取中...</span>;
+    return <span className="text-xs text-muted-foreground/70">读取中...</span>;
   }
   if (status.configured) {
     return (
-      <span className="text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+      <span className="text-xs px-2 py-0.5 rounded bg-success/10 text-success border border-success/30">
         ● 已配置
       </span>
     );
   }
   return (
-    <span className="text-xs px-2 py-0.5 rounded bg-stone-100 text-stone-600 border border-stone-200">
+    <span className="text-xs px-2 py-0.5 rounded bg-accent text-muted-foreground border border-border">
       ○ 未配置
     </span>
   );
@@ -739,7 +739,7 @@ function AsrHealthResult({
 }) {
   if (error) {
     return (
-      <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+      <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
         健康检查失败: {error}
       </div>
     );
@@ -750,24 +750,24 @@ function AsrHealthResult({
     <div
       className={`mt-3 rounded-md border px-3 py-3 text-xs ${
         result.ok
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-          : 'border-amber-200 bg-amber-50 text-amber-800'
+          ? 'border-success/30 bg-success/10 text-success'
+          : 'border-primary/30 bg-primary/10 text-primary'
       }`}
     >
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="font-medium">
           {result.ok ? 'GPU Worker 可达' : 'GPU Worker 未完全可达'}
         </span>
-        <span className="font-mono text-[11px] text-stone-500">
+        <span className="font-mono text-[11px] text-muted-foreground">
           {new Date(result.checked_at).toLocaleTimeString()}
         </span>
       </div>
-      <div className="space-y-1.5 text-stone-700">
+      <div className="space-y-1.5 text-foreground/85">
         <EndpointProbe label="/health" probe={result.health} />
         <EndpointProbe label="/v1/capabilities" probe={result.capabilities} />
       </div>
       {result.worker && (
-        <div className="mt-3 grid grid-cols-1 gap-1.5 border-t border-current/10 pt-3 text-stone-700 sm:grid-cols-2">
+        <div className="mt-3 grid grid-cols-1 gap-1.5 border-t border-current/10 pt-3 text-foreground/85 sm:grid-cols-2">
           <InfoLine label="Service" value={result.worker.service} />
           <InfoLine label="Version" value={result.worker.version} />
           <InfoLine label="Device" value={result.worker.device} />
@@ -784,7 +784,7 @@ function AsrHealthResult({
         </div>
       )}
       {result.worker?.capabilities.length ? (
-        <p className="mt-2 text-stone-600">
+        <p className="mt-2 text-muted-foreground">
           Capabilities: {result.worker.capabilities.join(', ')}
         </p>
       ) : null}
@@ -801,13 +801,13 @@ function EndpointProbe({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <span className={probe.ok ? 'text-emerald-700' : 'text-rose-700'}>
+      <span className={probe.ok ? 'text-success' : 'text-destructive'}>
         {probe.ok ? '通过' : '失败'}
       </span>
       <span className="font-mono">{label}</span>
       {probe.status != null && <span>HTTP {probe.status}</span>}
       <span>{probe.latency_ms}ms</span>
-      {probe.error && <span className="break-all text-rose-700">{probe.error}</span>}
+      {probe.error && <span className="break-all text-destructive">{probe.error}</span>}
     </div>
   );
 }
@@ -821,7 +821,7 @@ function InfoLine({
 }) {
   return (
     <div className="min-w-0">
-      <span className="text-stone-500">{label}: </span>
+      <span className="text-muted-foreground">{label}: </span>
       <span className="font-mono break-all">{value || '-'}</span>
     </div>
   );
@@ -836,7 +836,7 @@ function Field({
 }) {
   return (
     <div>
-      <div className="text-sm font-medium text-stone-800 mb-2">{label}</div>
+      <div className="text-sm font-medium text-foreground mb-2">{label}</div>
       {children}
     </div>
   );

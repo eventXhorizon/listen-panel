@@ -38,7 +38,7 @@ export function Login() {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoFocus
-            className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+            className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-border"
           />
         </AuthField>
         <AuthField label="密码">
@@ -46,18 +46,18 @@ export function Login() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+            className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-border"
           />
         </AuthField>
-        {err && <p className="text-sm text-rose-600">{err}</p>}
+        {err && <p className="text-sm text-destructive">{err}</p>}
         <button
           disabled={busy}
-          className="w-full px-4 py-2 rounded-md bg-stone-900 text-white text-sm hover:bg-stone-700 disabled:opacity-50"
+          className="w-full px-4 py-2 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85 disabled:opacity-50"
         >
           {busy ? '登录中...' : '登录'}
         </button>
-        <div className="text-center text-xs text-stone-500">
-          <Link to="/register" className="hover:text-stone-900 underline">
+        <div className="text-center text-xs text-muted-foreground">
+          <Link to="/register" className="hover:text-foreground underline">
             创建新账户
           </Link>
         </div>
@@ -135,8 +135,8 @@ export function Register() {
         err={err}
         submitLabel="创建账户"
       />
-      <div className="text-center text-xs text-stone-500 mt-4">
-        <Link to="/login" className="hover:text-stone-900 underline">
+      <div className="text-center text-xs text-muted-foreground mt-4">
+        <Link to="/login" className="hover:text-foreground underline">
           已有账户,去登录
         </Link>
       </div>
@@ -146,7 +146,7 @@ export function Register() {
 
 function AuthLoading() {
   return (
-    <main className="min-h-screen bg-stone-50 flex items-center justify-center text-sm text-stone-500">
+    <main className="min-h-screen bg-muted/50 flex items-center justify-center text-sm text-muted-foreground">
       加载中...
     </main>
   );
@@ -154,9 +154,9 @@ function AuthLoading() {
 
 function AuthShell({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <main className="min-h-screen bg-stone-50 flex items-center justify-center px-6">
-      <div className="w-full max-w-sm bg-white border border-stone-200 rounded-lg p-6">
-        <h1 className="text-xl font-medium text-stone-900 mb-5">{title}</h1>
+    <main className="min-h-screen bg-muted/50 flex items-center justify-center px-6">
+      <div className="w-full max-w-sm bg-card border border-border rounded-lg p-6">
+        <h1 className="text-xl font-medium text-foreground mb-5">{title}</h1>
         {children}
       </div>
     </main>
@@ -187,7 +187,7 @@ function AuthForm({
           value={form.username}
           onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
           autoFocus
-          className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+          className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-border"
         />
       </AuthField>
       <AuthField label="显示名">
@@ -195,7 +195,7 @@ function AuthForm({
           value={form.displayName}
           onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))}
           placeholder="留空则使用用户名"
-          className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+          className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-border"
         />
       </AuthField>
       <AuthField label="密码">
@@ -203,13 +203,13 @@ function AuthForm({
           type="password"
           value={form.password}
           onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-          className="w-full bg-white border border-stone-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-stone-400"
+          className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-border"
         />
       </AuthField>
-      {err && <p className="text-sm text-rose-600">{err}</p>}
+      {err && <p className="text-sm text-destructive">{err}</p>}
       <button
         disabled={busy}
-        className="w-full px-4 py-2 rounded-md bg-stone-900 text-white text-sm hover:bg-stone-700 disabled:opacity-50"
+        className="w-full px-4 py-2 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85 disabled:opacity-50"
       >
         {busy ? '提交中...' : submitLabel}
       </button>
@@ -220,7 +220,7 @@ function AuthForm({
 function AuthField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="block text-sm font-medium text-stone-800 mb-2">{label}</span>
+      <span className="block text-sm font-medium text-foreground mb-2">{label}</span>
       {children}
     </label>
   );

@@ -50,7 +50,7 @@ function RequireAuth() {
 
   if (auth.loading) {
     return (
-      <main className="min-h-screen bg-stone-50 flex items-center justify-center text-sm text-stone-500">
+      <main className="min-h-screen bg-muted/50 flex items-center justify-center text-sm text-muted-foreground">
         加载中...
       </main>
     );

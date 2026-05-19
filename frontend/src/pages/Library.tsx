@@ -263,7 +263,7 @@ function Cover({ material: m, cover }: { material: Material; cover: string | nul
 }
 
 function gradientForLanguage(lang: MaterialLanguage): string {
-  // Subtle on-brand gradients — amber for ja, stone for en. Tunable later.
-  if (lang === 'ja') return 'bg-gradient-to-br from-amber-50 to-amber-100';
-  return 'bg-gradient-to-br from-stone-100 to-stone-200';
+  // Subtle on-brand gradients — primary tint for ja, neutral for en.
+  if (lang === 'ja') return 'bg-gradient-to-br from-primary/10 to-primary/20';
+  return 'bg-gradient-to-br from-accent to-secondary';
 }

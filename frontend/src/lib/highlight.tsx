@@ -90,7 +90,7 @@ function HighlightedWord({
     <>
       <mark
         ref={markRef}
-        className="bg-amber-100 hover:bg-amber-200 rounded px-0.5 cursor-pointer transition-colors text-stone-900"
+        className="bg-primary/15 hover:bg-primary/25 rounded px-0.5 cursor-pointer transition-colors text-foreground"
         onPointerUp={(e) => {
           if (e.pointerType === 'touch') toggle(e);
         }}
@@ -110,13 +110,13 @@ function HighlightedWord({
               left: pos.left,
               width: POP_W,
             }}
-            className="z-50 max-h-[70vh] overflow-y-auto bg-white border border-stone-200 shadow-xl rounded-lg p-4 text-left cursor-default normal-case"
+            className="z-50 max-h-[70vh] overflow-y-auto bg-card border border-border shadow-xl rounded-lg p-4 text-left cursor-default normal-case"
           >
             <div className="flex items-center gap-2">
-              <div className="text-lg font-medium text-stone-900">{entry.word}</div>
+              <div className="text-lg font-medium text-foreground">{entry.word}</div>
               <SpeakButton word={entry.word} materialId={materialId} language={language} />
             </div>
-            <div className="mt-1 text-sm text-stone-500">
+            <div className="mt-1 text-sm text-muted-foreground">
               {entry.lemma &&
                 entry.lemma.toLowerCase() !== entry.word.toLowerCase() && (
                   <span className="mr-2">({entry.lemma})</span>
@@ -126,16 +126,16 @@ function HighlightedWord({
               )}
               {entry.pos && <span className="italic">{entry.pos}</span>}
             </div>
-            <div className="mt-3 text-base text-stone-800 leading-relaxed">
+            <div className="mt-3 text-base text-foreground leading-relaxed">
               {entry.definition_zh}
             </div>
             {entry.definition_en && (
-              <div className="mt-1.5 text-sm text-stone-500 leading-relaxed">
+              <div className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
                 {entry.definition_en}
               </div>
             )}
             {entry.example_zh && (
-              <div className="mt-3 text-sm text-stone-500 italic leading-relaxed">
+              <div className="mt-3 text-sm text-muted-foreground italic leading-relaxed">
                 {entry.example_zh}
               </div>
             )}
