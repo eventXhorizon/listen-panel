@@ -26,27 +26,40 @@ pub struct VideoMetadata {
     pub duration_sec: i64,
 }
 
-pub async fn fetch_video_metadata(
+/// Batched `videos.list` (up to 50 IDs per request, splits automatically).
+/// Costs 1 quota unit per request regardless of ID count.
+pub async fn fetch_videos_metadata(
     client: &reqwest::Client,
     api_key: &str,
-    video_id: &str,
-) -> Result<Option<VideoMetadata>> {
-    let url = format!(
-        "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id={video_id}&key={api_key}"
-    );
-    let resp: VideosListResponse = client
-        .get(&url)
-        .send()
-        .await
-        .context("youtube videos.list request")?
-        .error_for_status()
-        .context("youtube videos.list status")?
-        .json()
-        .await
-        .context("youtube videos.list parse")?;
-    let Some(item) = resp.items.into_iter().next() else {
-        return Ok(None);
-    };
+    video_ids: &[String],
+) -> Result<Vec<VideoMetadata>> {
+    if video_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::with_capacity(video_ids.len());
+    for chunk in video_ids.chunks(50) {
+        let joined = chunk.join(",");
+        let url = format!(
+            "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id={joined}&key={api_key}"
+        );
+        let resp: VideosListResponse = client
+            .get(&url)
+            .send()
+            .await
+            .context("youtube videos.list batch request")?
+            .error_for_status()
+            .context("youtube videos.list batch status")?
+            .json()
+            .await
+            .context("youtube videos.list batch parse")?;
+        for item in resp.items {
+            out.push(metadata_from_item(item)?);
+        }
+    }
+    Ok(out)
+}
+
+fn metadata_from_item(item: VideoItem) -> Result<VideoMetadata> {
     let thumbnail = item
         .snippet
         .thumbnails
@@ -54,7 +67,7 @@ pub async fn fetch_video_metadata(
         .or(item.snippet.thumbnails.medium)
         .or(item.snippet.thumbnails.default)
         .map(|t| t.url);
-    Ok(Some(VideoMetadata {
+    Ok(VideoMetadata {
         video_id: item.id,
         channel_id: item.snippet.channel_id,
         channel_name: item.snippet.channel_title,
@@ -63,7 +76,64 @@ pub async fn fetch_video_metadata(
         thumbnail_url: thumbnail,
         published_at: item.snippet.published_at,
         duration_sec: parse_iso8601_duration(&item.content_details.duration)?,
-    }))
+    })
+}
+
+/// `playlistItems.list` — returns video IDs from a playlist (e.g. a channel's uploads).
+/// Costs 1 quota unit per call. `max_results` is capped at 50 by the API.
+pub async fn fetch_playlist_video_ids(
+    client: &reqwest::Client,
+    api_key: &str,
+    playlist_id: &str,
+    max_results: usize,
+) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Resp {
+        #[serde(default)]
+        items: Vec<Item>,
+    }
+    #[derive(Deserialize)]
+    struct Item {
+        #[serde(rename = "contentDetails")]
+        content_details: Details,
+    }
+    #[derive(Deserialize)]
+    struct Details {
+        #[serde(rename = "videoId")]
+        video_id: String,
+    }
+
+    let url = format!(
+        "https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults={}&playlistId={playlist_id}&key={api_key}",
+        max_results.clamp(1, 50)
+    );
+    let resp: Resp = client
+        .get(&url)
+        .send()
+        .await
+        .context("youtube playlistItems.list request")?
+        .error_for_status()
+        .context("youtube playlistItems.list status")?
+        .json()
+        .await
+        .context("youtube playlistItems.list parse")?;
+    Ok(resp
+        .items
+        .into_iter()
+        .map(|i| i.content_details.video_id)
+        .collect())
+}
+
+/// YouTube convention: a channel's auto-generated uploads playlist ID is the channel ID
+/// with the leading "UC" replaced by "UU".
+pub fn uploads_playlist_id(channel_id: &str) -> Result<String> {
+    if !channel_id.starts_with("UC") || channel_id.len() < 4 {
+        return Err(anyhow!("not a UC-prefixed channel id: {channel_id}"));
+    }
+    let mut s = String::with_capacity(channel_id.len());
+    s.push_str("UU");
+    s.push_str(&channel_id[2..]);
+    Ok(s)
 }
 
 #[derive(Deserialize)]
@@ -305,6 +375,16 @@ fn json3_to_segments(track: Json3Track) -> Vec<NewsSegment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derives_uploads_playlist_id() {
+        assert_eq!(
+            uploads_playlist_id("UC16niRr50-MSBwiO3YDb3RA").unwrap(),
+            "UU16niRr50-MSBwiO3YDb3RA"
+        );
+        assert!(uploads_playlist_id("PLxxx").is_err());
+        assert!(uploads_playlist_id("UC").is_err());
+    }
 
     #[test]
     fn parses_iso8601_durations() {

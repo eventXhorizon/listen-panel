@@ -4,6 +4,7 @@ mod db;
 mod error;
 mod language;
 mod models;
+mod news_fetcher;
 mod paths;
 mod routes;
 mod study;
@@ -70,6 +71,14 @@ async fn main() -> Result<()> {
         tts,
         asr,
     };
+
+    let youtube_api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
+    news_fetcher::spawn(
+        state.pool.clone(),
+        state.http.clone(),
+        state.llm.clone(),
+        youtube_api_key,
+    );
 
     let app = axum::Router::new()
         .nest("/api", routes::api_router(state))
