@@ -166,6 +166,27 @@ pub struct UpdateMaterialNote {
     pub content: Option<String>,
 }
 
+/// Lightweight projection for list responses — excludes segments_json / idioms_json.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct NewsItemSummary {
+    pub id: i64,
+    pub yt_video_id: String,
+    pub source: String,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub title: String,
+    pub description: String,
+    pub thumbnail_url: Option<String>,
+    pub published_at: DateTime<Utc>,
+    pub duration_sec: i64,
+    pub language: String,
+    pub topic: String,
+    pub difficulty: i64,
+    pub has_captions: i64,
+    pub fetched_at: DateTime<Utc>,
+    pub analyzed_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct NewsItem {
     pub id: i64,

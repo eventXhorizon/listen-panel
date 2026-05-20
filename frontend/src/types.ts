@@ -76,7 +76,7 @@ export interface NewsIdiom {
   usage_note?: string | null;
 }
 
-export interface NewsItem {
+export interface NewsItemSummary {
   id: number;
   yt_video_id: string;
   source: NewsSource;
@@ -91,8 +91,6 @@ export interface NewsItem {
   topic: NewsTopic;
   difficulty: number;
   has_captions: number; // 0 | 1
-  segments_json: string;
-  idioms_json: string;
   fetched_at: string;
   analyzed_at?: string | null;
 }
