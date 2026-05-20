@@ -17,14 +17,15 @@ pub fn router() -> Router<crate::AppState> {
         .route("/vocab/:id", get(get_one).put(update).delete(delete_one))
 }
 
-const SELECT_COLS: &str = "id, material_id, word, language, lemma, phonetic, pos, \
+const SELECT_COLS: &str = "id, material_id, word, language, kind, lemma, phonetic, pos, \
     definition_zh, definition_en, example_zh, context, mastery, created_at";
-const SELECT_COLS_V: &str = "v.id, v.material_id, v.word, v.language, v.lemma, v.phonetic, v.pos, \
+const SELECT_COLS_V: &str = "v.id, v.material_id, v.word, v.language, v.kind, v.lemma, v.phonetic, v.pos, \
     v.definition_zh, v.definition_en, v.example_zh, v.context, v.mastery, v.created_at";
 
 #[derive(Debug, Deserialize)]
 struct ListQuery {
     material_id: Option<i64>,
+    kind: Option<String>,
 }
 
 async fn list(
@@ -32,27 +33,40 @@ async fn list(
     user: CurrentUser,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Vec<Vocab>>> {
-    let rows = if let Some(mid) = q.material_id {
-        sqlx::query_as::<_, Vocab>(&format!(
-            "SELECT {SELECT_COLS_V} FROM vocab v \
-             JOIN materials m ON m.id = v.material_id \
-             WHERE v.material_id = ? AND m.user_id = ? \
-             ORDER BY v.created_at DESC"
-        ))
-        .bind(mid)
-        .bind(user.id)
-        .fetch_all(&pool)
-        .await?
+    let kind_filter = q.kind.as_deref().and_then(|k| match k {
+        "word" | "idiom" => Some(k),
+        _ => None,
+    });
+    let kind_clause = if kind_filter.is_some() {
+        " AND v.kind = ?"
     } else {
-        sqlx::query_as::<_, Vocab>(&format!(
+        ""
+    };
+
+    let rows = if let Some(mid) = q.material_id {
+        let sql = format!(
             "SELECT {SELECT_COLS_V} FROM vocab v \
              JOIN materials m ON m.id = v.material_id \
-             WHERE m.user_id = ? \
+             WHERE v.material_id = ? AND m.user_id = ?{kind_clause} \
              ORDER BY v.created_at DESC"
-        ))
-        .bind(user.id)
-        .fetch_all(&pool)
-        .await?
+        );
+        let mut query = sqlx::query_as::<_, Vocab>(&sql).bind(mid).bind(user.id);
+        if let Some(k) = kind_filter {
+            query = query.bind(k);
+        }
+        query.fetch_all(&pool).await?
+    } else {
+        let sql = format!(
+            "SELECT {SELECT_COLS_V} FROM vocab v \
+             JOIN materials m ON m.id = v.material_id \
+             WHERE m.user_id = ?{kind_clause} \
+             ORDER BY v.created_at DESC"
+        );
+        let mut query = sqlx::query_as::<_, Vocab>(&sql).bind(user.id);
+        if let Some(k) = kind_filter {
+            query = query.bind(k);
+        }
+        query.fetch_all(&pool).await?
     };
     Ok(Json(rows))
 }
@@ -85,16 +99,21 @@ async fn create(
         .as_deref()
         .map(Language::normalize)
         .unwrap_or(material_language.as_str());
+    let kind = match input.kind.as_deref() {
+        Some("idiom") => "idiom",
+        _ => "word",
+    };
     let row = sqlx::query_as::<_, Vocab>(&format!(
         "INSERT INTO vocab \
-         (material_id, word, language, lemma, phonetic, pos, \
+         (material_id, word, language, kind, lemma, phonetic, pos, \
           definition_zh, definition_en, example_zh, context, mastery) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING {SELECT_COLS}"
     ))
     .bind(input.material_id)
     .bind(&input.word)
     .bind(language)
+    .bind(kind)
     .bind(&input.lemma)
     .bind(input.phonetic.as_deref())
     .bind(input.pos.as_deref())
@@ -114,10 +133,15 @@ async fn update(
     Path(id): Path<i64>,
     Json(input): Json<UpdateVocab>,
 ) -> Result<Json<Vocab>> {
+    let kind = input.kind.as_deref().and_then(|k| match k {
+        "word" | "idiom" => Some(k),
+        _ => None,
+    });
     let row = sqlx::query_as::<_, Vocab>(&format!(
         "UPDATE vocab SET \
            word          = COALESCE(?, word), \
            language      = COALESCE(?, language), \
+           kind          = COALESCE(?, kind), \
            lemma         = COALESCE(?, lemma), \
            phonetic      = COALESCE(?, phonetic), \
            pos           = COALESCE(?, pos), \
@@ -135,6 +159,7 @@ async fn update(
     ))
     .bind(input.word)
     .bind(input.language.as_deref().map(Language::normalize))
+    .bind(kind)
     .bind(input.lemma)
     .bind(input.phonetic)
     .bind(input.pos)

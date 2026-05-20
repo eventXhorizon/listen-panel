@@ -37,10 +37,13 @@ export interface MaterialMetadata {
   } | null;
 }
 
+export type VocabKind = 'word' | 'idiom';
+
 export interface VocabEntry {
   id: number;
   word: string;
   language: MaterialLanguage;
+  kind: VocabKind;
   lemma: string;
   phonetic?: string;
   pos?: string;
@@ -53,7 +56,46 @@ export interface VocabEntry {
   mastery: number;
 }
 
-export type CreateVocab = Omit<VocabEntry, 'id' | 'created_at'>;
+export type CreateVocab = Omit<VocabEntry, 'id' | 'created_at' | 'kind'> & {
+  kind?: VocabKind;
+};
+
+export type NewsSource = 'bbc' | 'bloomberg' | 'economist' | 'ft';
+export type NewsTopic = 'finance' | 'politics' | 'tech' | 'culture' | 'other';
+
+export interface NewsSegment {
+  start_ms: number;
+  end_ms: number;
+  text: string;
+}
+
+export interface NewsIdiom {
+  phrase: string;
+  anchor_sentence: string;
+  meaning_zh: string;
+  usage_note?: string | null;
+}
+
+export interface NewsItem {
+  id: number;
+  yt_video_id: string;
+  source: NewsSource;
+  channel_id: string;
+  channel_name: string;
+  title: string;
+  description: string;
+  thumbnail_url?: string | null;
+  published_at: string;
+  duration_sec: number;
+  language: MaterialLanguage;
+  topic: NewsTopic;
+  difficulty: number;
+  has_captions: number; // 0 | 1
+  segments_json: string;
+  idioms_json: string;
+  fetched_at: string;
+  analyzed_at?: string | null;
+}
 
 export type NoteTargetType = 'paragraph' | 'segment';
 

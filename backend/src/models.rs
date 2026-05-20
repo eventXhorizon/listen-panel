@@ -46,6 +46,7 @@ pub struct Vocab {
     pub material_id: i64,
     pub word: String,
     pub language: String,
+    pub kind: String,
     pub lemma: String,
     pub phonetic: Option<String>,
     pub pos: Option<String>,
@@ -63,6 +64,8 @@ pub struct CreateVocab {
     pub word: String,
     #[serde(default)]
     pub language: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
     pub lemma: String,
     #[serde(default)]
     pub phonetic: Option<String>,
@@ -83,6 +86,7 @@ pub struct CreateVocab {
 pub struct UpdateVocab {
     pub word: Option<String>,
     pub language: Option<String>,
+    pub kind: Option<String>,
     pub lemma: Option<String>,
     pub phonetic: Option<String>,
     pub pos: Option<String>,
@@ -160,4 +164,42 @@ pub struct UpdateMaterialNote {
     pub anchor_text: Option<String>,
     pub anchor_hash: Option<String>,
     pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct NewsItem {
+    pub id: i64,
+    pub yt_video_id: String,
+    pub source: String,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub title: String,
+    pub description: String,
+    pub thumbnail_url: Option<String>,
+    pub published_at: DateTime<Utc>,
+    pub duration_sec: i64,
+    pub language: String,
+    pub topic: String,
+    pub difficulty: i64,
+    pub has_captions: i64,
+    pub segments_json: String,
+    pub idioms_json: String,
+    pub fetched_at: DateTime<Utc>,
+    pub analyzed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewsSegment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewsIdiom {
+    pub phrase: String,
+    pub anchor_sentence: String,
+    pub meaning_zh: String,
+    #[serde(default)]
+    pub usage_note: Option<String>,
 }
