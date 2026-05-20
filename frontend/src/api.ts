@@ -8,6 +8,9 @@ import type {
   Material,
   MaterialNote,
   MaterialMetadata,
+  NewsItemSummary,
+  NewsSource,
+  NewsTopic,
   TranscriptionJob,
   User,
   VocabEntry,
@@ -116,6 +119,25 @@ export function updateVocab(
 
 export async function deleteVocab(id: number): Promise<void> {
   await request<void>(`/api/vocab/${id}`, { method: 'DELETE' });
+}
+
+// News
+
+export function listNews(filters?: {
+  source?: NewsSource;
+  topic?: NewsTopic;
+  duration?: 'short' | 'medium' | 'long';
+}): Promise<NewsItemSummary[]> {
+  const params = new URLSearchParams();
+  if (filters?.source) params.set('source', filters.source);
+  if (filters?.topic) params.set('topic', filters.topic);
+  if (filters?.duration) params.set('duration', filters.duration);
+  const qs = params.toString();
+  return request<NewsItemSummary[]>(`/api/news${qs ? `?${qs}` : ''}`);
+}
+
+export function importNews(id: number): Promise<Material> {
+  return request<Material>(`/api/news/${id}/import`, { method: 'POST' });
 }
 
 // Notes
