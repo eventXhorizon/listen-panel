@@ -7,6 +7,7 @@ mod models;
 mod paths;
 mod routes;
 mod study;
+mod youtube;
 
 use std::time::Duration;
 
