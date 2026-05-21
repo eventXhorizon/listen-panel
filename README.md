@@ -32,7 +32,10 @@ listen-panel/
 │   │       ├── tts.rs           /api/tts/speech,代理到 TTS provider
 │   │       ├── auth.rs          /api/auth/* 本地账户与 session
 │   │       ├── asr.rs           /api/*/transcriptions,远程 ASR worker 适配
+│   │       ├── news.rs          /api/news 列表 + 导入 + 手动 refresh
 │   │       └── settings.rs      GET/PUT /api/settings/llm/tts/asr
+│   ├── news_fetcher.rs          每 3h 拉取 BBC/Bloomberg/Economist/FT 上传 + DeepSeek 分析
+│   └── youtube.rs               YouTube Data API + 字幕抓取(JSON3)
 │   └── data/                    gitignored
 │       ├── app.db
 │       ├── config.json          DeepSeek 凭据(api_key/base_url/model)
@@ -58,7 +61,8 @@ listen-panel/
 │       ├── pages/
 │       │   ├── Library.tsx      书架
 │       │   ├── Editor.tsx       新建/编辑(含拖放上传)
-│       │   ├── Reader.tsx       左文右视频主页
+│       │   ├── Reader.tsx       左文右视频主页 + 跟读控件
+│       │   ├── News.tsx         英语新闻发现 + 一键加入书架
 │       │   ├── Vocab.tsx        全局生词本
 │       │   ├── Review.tsx       翻卡复习
 │       │   └── Settings.tsx     DeepSeek/TTS/ASR 设置
@@ -128,13 +132,14 @@ listen-panel/
 | material_id | INTEGER | FK,**ON DELETE CASCADE** |
 | word | TEXT | 实际选中的词形,小写 |
 | language | TEXT | 生词语言,默认继承材料语言 |
-| lemma | TEXT | LLM 给的原形 |
+| kind | TEXT | `word` 或 `idiom`,CHECK 约束;默认 `word`。idiom 由新闻导入时自动落地 |
+| lemma | TEXT | LLM 给的原形(idiom 直接等于 phrase) |
 | phonetic | TEXT? | 英语为 IPA;日语为假名读音 |
 | pos | TEXT? | n. / v. / adj. ... |
-| definition_zh | TEXT | 主释义(必填) |
+| definition_zh | TEXT | 主释义(必填);idiom 时存 meaning_zh |
 | definition_en | TEXT? | |
-| example_zh | TEXT? | 原句中文翻译 |
-| context | TEXT | 加词时所在句 |
+| example_zh | TEXT? | 原句中文翻译;idiom 时存 usage_note |
+| context | TEXT | 加词时所在句;idiom 时存 anchor_sentence |
 | mastery | INTEGER | CHECK 0..3 |
 | created_at | TEXT | |
 
@@ -193,6 +198,26 @@ listen-panel/
 | material_id | INTEGER | FK 到 materials |
 | start_ms/end_ms | INTEGER | segment 时间戳 |
 | text | TEXT | segment 文本 |
+
+### `news_items`
+**全局缓存表,不绑用户。** 由后台 fetcher 每 3 小时从 YouTube 拉取 4 个频道(BBC News / Bloomberg Originals / The Economist / Financial Times),已经预先分析好话题、难度、idiom。用户在 `/news` 看到列表,点"加入书架"才会复制到自己的 `materials` 表。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | |
+| yt_video_id | TEXT UNIQUE | YouTube 11 位 ID |
+| source | TEXT | CHECK ∈ `bbc / bloomberg / economist / ft` |
+| channel_id / channel_name | TEXT | YouTube 频道信息 |
+| title / description / thumbnail_url | TEXT | |
+| published_at | TEXT | YouTube `publishedAt` |
+| duration_sec | INTEGER | ISO 8601 PT 时长解析 |
+| language | TEXT | 默认 `en` |
+| topic | TEXT | CHECK ∈ `finance / politics / tech / culture / other` |
+| difficulty | INTEGER | CHECK 1..5 |
+| has_captions | INTEGER | 0/1;无字幕条目不进列表 |
+| segments_json | TEXT | NewsSegment[] JSON,导入时展开成 `transcript_segments` |
+| idioms_json | TEXT | NewsIdiom[] JSON,导入时落到 `vocab.kind='idiom'` |
+| fetched_at / analyzed_at | TEXT | |
 
 ### `transcript_segment_studies`
 | 字段 | 类型 | 说明 |
@@ -258,6 +283,9 @@ listen-panel/
 | POST | `/transcriptions/:id/study` | 按需启动当前转写任务的分段翻译、语法和固定搭配分析 |
 | GET | `/asr/media/:job_id` | 仅 worker 用;local 视频转写时凭 `Authorization: Bearer <一次性token>` 读取原始上传文件 |
 | POST | `/asr/progress/:job_id` | 仅 worker 用;凭同一个一次性 token 回调 `{progress, stage?}` 更新转写进度 |
+| GET | `/news[?source=&topic=&duration=]` | 列出已分析的新闻条目;过滤参数详见 5.x。只返回有字幕的 |
+| POST | `/news/:id/import` | 把这条新闻导入当前用户书架:建 Material(`source_type=youtube`, `text_source=manual_subtitle`)+ 合成 transcription_job(`provider=youtube_caption`, status `succeeded`)+ 展开 segments + idiom 落 vocab(`kind='idiom'`)。幂等:同 yt_video_id 已导入则直接返回旧 Material |
+| POST | `/news/_refresh` | **admin only。** 立即触发一次抓取,不等 3 小时;返回 `{added}` |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -347,6 +375,21 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - 如果 LLM key 未配置,`study_status` 置为 `skipped`;如果讲解调用失败,`study_status` 置为 `failed` 并记录 `study_error`。这些失败不影响原文转写成功。
 - `GET /api/transcriptions/:id/segments` 会把 `transcript_segment_studies` 左连接到 segment 上,前端用 `segment.study` 展示译文、语法和搭配。
 
+### 4.10 英语新闻自动抓取(`news_fetcher.rs` + `youtube.rs`)
+- 4 个频道写死在 `news_fetcher::CHANNELS`(BBC News、Bloomberg Originals、The Economist、Financial Times)。要换频道改这个常量后重启。
+- 启动延迟 45 秒后跑第一轮,之后每 3 小时一轮。空 `YOUTUBE_API_KEY` 时 task 直接返回 + warn,不影响其他功能。
+- 每轮:对每个频道,把 channel id `UC...` 换成 uploads playlist `UU...`,`playlistItems.list` 取最近 10 条 → 跳过 `news_items` 里已有的 → `videos.list` 批量(单次 50 ID,quota 1 unit)拿 metadata → 抓字幕(优先人工字幕,不接受自动生成 — 当前不做 ASR fallback)→ 拿到字幕的视频走 DeepSeek 一次拿 `{topic, difficulty, idioms[8]}` → INSERT。
+- 字幕抓取走 YouTube 公开 `timedtext` 接口:抓 watch 页 HTML → 提 `ytInitialPlayerResponse` JSON → 选 `captionTracks` 里 `languageCode=en` 且 `kind` 不是 `asr` 的轨 → `baseUrl + &fmt=json3` → 解 JSON3 events 成 segments。
+- DeepSeek prompt 在 `news_fetcher::system_prompt`,JSON mode 严格输出 8 个 idiom(短语动词 / collocations / 习语,带 anchor sentence 和中文释义 / usage note)。无效 topic 兜底 `other`,difficulty 越界 clamp 1-5,空 phrase 过滤。
+- 配额估算:每轮 4 频道 × 3 次请求(playlist + 1 batch videos + 字幕走非 quota 接口)≈ 12 quota units/轮 × 8 轮/天 ≈ 100 units/天,Data API 每天 10000 免费配额,够用。
+- DeepSeek 调用复用现有 `SharedLlm` 配置,跟 `/api/lookup` 共享 key。
+- **手动触发**:`POST /api/news/_refresh`(admin only)立即跑一次 `run_once`,返回 `{added}`,开发期或刚拿到新 key 时用。
+- **YOUTUBE_API_KEY** 通过环境变量传:
+  ```bash
+  YOUTUBE_API_KEY="AIza..." ./dev.sh
+  ```
+  申请地址:Google Cloud Console → APIs & Services → YouTube Data API v3,免费配额 10k units/天。当前只做单租户,key 不进数据库不进设置页。
+
 ## 5. 前端实现细节
 
 ### 5.1 路由
@@ -356,6 +399,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 | `/new` | Editor 创建 |
 | `/m/:id` | Reader 阅读+视频 |
 | `/m/:id/edit` | Editor 编辑 |
+| `/news` | News 英语新闻发现页 |
 | `/vocab` | 生词本 |
 | `/review` | 复习 |
 | `/settings` | DeepSeek key |
@@ -464,7 +508,16 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。
 - 浏览器朗读按语言选择 fallback,英语 `en-US`,日语 `ja-JP`,语速 `0.9`;不同系统/浏览器的声音会不同。Free Dictionary mp3 只在英语材料启用。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
 
-### 5.14 多语种适配
+### 5.14 News 页面 + 跟读控件
+- `/news` 页:横向 pill 按钮筛选来源、话题、时长(`< 10min / 10–30min / > 30min`);卡片网格显示缩略图(优先 `thumbnail_url`,fallback `https://i.ytimg.com/vi/<id>/mqdefault.jpg`)、来源 badge、时长 badge、话题、难度、相对时间、标题、描述。
+- 点"加入书架并跟读"→ `POST /api/news/:id/import` → 拿到新 Material → `navigate('/m/' + id)` 直接跳 Reader。同一 yt_video_id 已导入则返回旧 Material(幂等)。
+- **VocabPanel** 顶部新增 `生词 / 地道表达` 两 tab,显示各自计数;idiom tab 多渲染一行 `example_zh`(usage_note)。
+- **idiom 高亮**:`lib/highlight.tsx` 检测 `entry.kind === 'idiom'`,渲染 dotted-underline + 同主题色,区分于生词的纯背景高亮。多词 idiom 因为 `englishHighlights` 已经用 `\b(...)\b` 正则 + 长度倒序匹配,内部空格自动正确处理,不需要专门支持。
+- **Reader 跟读控件**(`ShadowingControls`):toolbar 加速度选择(0.75 / 0.85 / 1×)+ 句末停顿(0 / 0.5 / 1 / 2 秒);每段时间戳旁多一个 `↻ 循环` 按钮,点了变成 `● 循环中`。循环逻辑:`setInterval(100ms)` 轮询 `getCurrentTime`,过 `end_ms` 就 `pause` → 等 `endPauseMs` → `seekTo(start_ms)` → `play`,`loopBusyRef` 防重入。
+- **VideoPlayer 暴露 handle**:新导出 `VideoPlayerHandle = { play, pause, seekTo, setPlaybackRate, getCurrentTime }`,Reader 通过 `handleRef` prop 拿到。LocalVideo 走原生 `<video>` API,YouTubeVideo 走 iframe API(`playVideo / pauseVideo / seekTo / setPlaybackRate / getCurrentTime`),Bilibili 暂返 no-op handle。
+- 注意:YouTube `setPlaybackRate(0.85)` 可能被取整到 0.75 或 1(YouTube 只保证 0.25/0.5/0.75/1/1.25/1.5/1.75/2),本地视频精确。
+
+### 5.15 多语种适配
 - V1 把语言设为材料级属性,新建/编辑材料时选择。当前支持 `en` 和 `ja`。
 - ASR 创建任务时优先使用材料语言,全局 ASR `language` 只作为旧材料或手动测试的 fallback。
 - 生词保存时记录语言;查词 prompt、分段翻译分析 prompt、朗读 fallback 和高亮匹配都会按语言切换。
@@ -524,7 +577,12 @@ worker V1 已提供通用 GPU Job API:
 3. 打开 http://localhost:19527/settings
 4. 如需调整数据目录,在“数据存储”里填写目录,保存后重启。旧数据不会自动搬迁,需要手动复制旧 `backend/data/` 内容。
 5. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)、ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)和远程 ASR worker 地址→ 保存。**Key/token 落到数据目录的 `*.json`,不入数据库,不回传前端**
-6. 回到书架,新建第一条材料
+6. 如要启用 `/news` 自动抓取,启动时通过环境变量传 `YOUTUBE_API_KEY`(申请:https://console.cloud.google.com/ → APIs & Services → YouTube Data API v3):
+   ```bash
+   YOUTUBE_API_KEY="AIza..." ./dev.sh
+   ```
+   不设也没事,新闻页就是空的。设了之后启动 45s 后开始第一轮抓取,然后每 3h 一轮。要立刻跑一次:`curl -X POST http://localhost:9527/api/news/_refresh -H 'Cookie: listen_panel_session=...'`(admin only)。
+7. 回到书架,新建第一条材料
 
 ## 7. 已知限制 / 待办
 

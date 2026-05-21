@@ -11,17 +11,20 @@ use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::auth::CurrentUser;
+use crate::config::SharedLlm;
 use crate::error::{AppError, Result};
 use crate::models::{Material, NewsIdiom, NewsItem, NewsItemSummary, NewsSegment};
+use crate::news_fetcher;
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/news", get(list))
         .route("/news/:id/import", post(import))
+        .route("/news/_refresh", post(refresh))
 }
 
 const LIST_COLS: &str = "id, yt_video_id, source, channel_id, channel_name, title, description, \
@@ -212,4 +215,33 @@ async fn import(
     );
 
     Ok(Json(material))
+}
+
+#[derive(Debug, Serialize)]
+struct RefreshResp {
+    added: usize,
+}
+
+/// Dev/admin trigger that runs the news fetcher once on demand.
+/// Reads YOUTUBE_API_KEY from env each call so the user can rotate keys
+/// without restarting the server.
+async fn refresh(
+    State(pool): State<SqlitePool>,
+    State(http): State<reqwest::Client>,
+    State(llm): State<SharedLlm>,
+    user: CurrentUser,
+) -> Result<Json<RefreshResp>> {
+    if !user.is_admin {
+        return Err(AppError(anyhow::anyhow!(
+            "only admin can trigger news refresh"
+        )));
+    }
+    let api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
+    if api_key.is_empty() {
+        return Err(AppError(anyhow::anyhow!(
+            "YOUTUBE_API_KEY env var not set"
+        )));
+    }
+    let added = news_fetcher::run_once(&pool, &http, &llm, &api_key).await?;
+    Ok(Json(RefreshResp { added }))
 }
