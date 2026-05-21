@@ -1,18 +1,23 @@
 //! YouTube metadata + caption fetching.
 //!
 //! Two public entry points:
-//! - `fetch_video_metadata`: hits YouTube Data API v3 (`videos.list`) — needs an API key.
-//! - `fetch_captions`: scrapes the watch page for `ytInitialPlayerResponse`, picks an English
-//!   caption track (manual preferred over auto-generated), and parses JSON3 cues into segments.
+//! - `fetch_videos_metadata`: hits YouTube Data API v3 (`videos.list`) — needs an API key.
+//! - `fetch_captions`: shells out to `yt-dlp` to download English captions as JSON3, then
+//!   parses cues into segments. Anonymous direct fetching from YouTube's timedtext endpoint
+//!   is bot-blocked (returns 200/empty); `yt-dlp` handles client-rotation and signature
+//!   decoding so caption coverage tracks whatever it supports today.
+
+use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use tokio::process::Command;
 
 use crate::models::NewsSegment;
 
-const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-    AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const YTDLP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {
@@ -214,120 +219,93 @@ fn parse_iso8601_duration(s: &str) -> Result<i64> {
     Ok(total)
 }
 
+/// Fetches English captions via `yt-dlp` and parses the resulting JSON3 file.
+/// Both `--write-subs` (manual) and `--write-auto-subs` (auto-generated) are enabled —
+/// yt-dlp prefers manual when both exist and falls back to auto otherwise.
+/// Returns `Ok(None)` when no English captions are available or yt-dlp fails for any reason.
 pub async fn fetch_captions(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     video_id: &str,
-    accept_auto: bool,
+    _accept_auto: bool,
 ) -> Result<Option<Vec<NewsSegment>>> {
-    let watch_url = format!("https://www.youtube.com/watch?v={video_id}");
-    let html = client
-        .get(&watch_url)
-        .header(reqwest::header::USER_AGENT, BROWSER_UA)
-        .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
-        .send()
-        .await
-        .context("fetch youtube watch page")?
-        .error_for_status()
-        .context("watch page status")?
-        .text()
-        .await
-        .context("read watch page body")?;
+    let unique = format!(
+        "listen-panel-{}-{}",
+        video_id,
+        uuid::Uuid::new_v4().simple()
+    );
+    let out_prefix = std::env::temp_dir().join(&unique);
+    let prefix_str = out_prefix.to_string_lossy().into_owned();
+    let url = format!("https://www.youtube.com/watch?v={video_id}");
 
-    let player_response = match extract_player_response(&html) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("ytInitialPlayerResponse extraction failed for {video_id}: {e:#}");
+    let mut cmd = Command::new("yt-dlp");
+    cmd.kill_on_drop(true)
+        .arg("--quiet")
+        .arg("--no-warnings")
+        .arg("--no-playlist")
+        .arg("--write-subs")
+        .arg("--write-auto-subs")
+        .arg("--skip-download")
+        .arg("--sub-langs")
+        .arg("en.*")
+        .arg("--sub-format")
+        .arg("json3")
+        .arg("-o")
+        .arg(&prefix_str)
+        .arg(&url);
+
+    match tokio::time::timeout(YTDLP_TIMEOUT, cmd.status()).await {
+        Ok(Ok(s)) if !s.success() => {
+            tracing::warn!(video_id, status = ?s, "yt-dlp non-zero exit");
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(video_id, "yt-dlp spawn failed: {e:#}");
+            cleanup_prefix(&out_prefix).await;
             return Ok(None);
         }
-    };
-    let tracks = extract_caption_tracks(&player_response);
-    let Some(track) = pick_english_track(&tracks, accept_auto) else {
+        Err(_) => {
+            tracing::warn!(video_id, "yt-dlp timed out after {:?}", YTDLP_TIMEOUT);
+            cleanup_prefix(&out_prefix).await;
+            return Ok(None);
+        }
+        Ok(Ok(_)) => {}
+    }
+
+    let json3_path = find_json3_for_prefix(&out_prefix);
+    let Some(path) = json3_path else {
         return Ok(None);
     };
-
-    let url = format!("{}&fmt=json3", track.base_url);
-    let json3: Json3Track = client
-        .get(&url)
-        .header(reqwest::header::USER_AGENT, BROWSER_UA)
-        .send()
-        .await
-        .context("fetch caption json3")?
-        .error_for_status()
-        .context("caption json3 status")?
-        .json()
-        .await
-        .context("parse caption json3")?;
-
-    let segments = json3_to_segments(json3);
+    let data_res = tokio::fs::read(&path).await;
+    let _ = tokio::fs::remove_file(&path).await;
+    let data = data_res.context("read yt-dlp json3 file")?;
+    if data.is_empty() {
+        return Ok(None);
+    }
+    let track: Json3Track = serde_json::from_slice(&data).context("parse yt-dlp json3")?;
+    let segments = json3_to_segments(track);
     if segments.is_empty() {
         return Ok(None);
     }
     Ok(Some(segments))
 }
 
-#[derive(Debug)]
-struct CaptionTrack {
-    base_url: String,
-    language_code: String,
-    /// `Some("asr")` for auto-generated; absent for human-uploaded.
-    kind: Option<String>,
-}
-
-fn extract_player_response(html: &str) -> Result<serde_json::Value> {
-    const MARKER: &str = "ytInitialPlayerResponse";
-    let idx = html
-        .find(MARKER)
-        .ok_or_else(|| anyhow!("ytInitialPlayerResponse marker not found"))?;
-    let rest = &html[idx + MARKER.len()..];
-    let eq_idx = rest
-        .find('=')
-        .ok_or_else(|| anyhow!("no '=' after ytInitialPlayerResponse"))?;
-    let after_eq = &rest[eq_idx + 1..];
-    let brace_idx = after_eq
-        .find('{')
-        .ok_or_else(|| anyhow!("no '{{' after '=' for ytInitialPlayerResponse"))?;
-    let mut de = serde_json::Deserializer::from_str(&after_eq[brace_idx..]);
-    let value = serde_json::Value::deserialize(&mut de)
-        .context("parse ytInitialPlayerResponse JSON")?;
-    Ok(value)
-}
-
-fn extract_caption_tracks(player: &serde_json::Value) -> Vec<CaptionTrack> {
-    let Some(arr) = player
-        .get("captions")
-        .and_then(|c| c.get("playerCaptionsTracklistRenderer"))
-        .and_then(|r| r.get("captionTracks"))
-        .and_then(|a| a.as_array())
-    else {
-        return Vec::new();
-    };
-    arr.iter()
-        .filter_map(|item| {
-            Some(CaptionTrack {
-                base_url: item.get("baseUrl")?.as_str()?.to_string(),
-                language_code: item.get("languageCode")?.as_str()?.to_string(),
-                kind: item
-                    .get("kind")
-                    .and_then(|k| k.as_str())
-                    .map(|s| s.to_string()),
-            })
-        })
-        .collect()
-}
-
-fn pick_english_track(tracks: &[CaptionTrack], accept_auto: bool) -> Option<&CaptionTrack> {
-    if let Some(t) = tracks
-        .iter()
-        .find(|t| t.language_code.starts_with("en") && t.kind.is_none())
-    {
-        return Some(t);
-    }
-    if accept_auto {
-        return tracks
-            .iter()
-            .find(|t| t.language_code.starts_with("en") && t.kind.as_deref() == Some("asr"));
+fn find_json3_for_prefix(out_prefix: &std::path::Path) -> Option<PathBuf> {
+    let dir = out_prefix.parent()?;
+    let stem = out_prefix.file_name()?.to_string_lossy().into_owned();
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let s = name.to_string_lossy();
+        if s.starts_with(&stem) && s.ends_with(".json3") {
+            return Some(entry.path());
+        }
     }
     None
+}
+
+async fn cleanup_prefix(out_prefix: &std::path::Path) {
+    let Some(path) = find_json3_for_prefix(out_prefix) else {
+        return;
+    };
+    let _ = tokio::fs::remove_file(&path).await;
 }
 
 #[derive(Deserialize)]
@@ -400,82 +378,6 @@ mod tests {
         assert!(parse_iso8601_duration("5M30S").is_err());
         assert!(parse_iso8601_duration("PT5X").is_err());
         assert!(parse_iso8601_duration("PT5").is_err());
-    }
-
-    #[test]
-    fn extracts_player_response_from_html() {
-        let html = r#"<script>var x = 1; var ytInitialPlayerResponse = {"a":1,"b":{"c":2}};var y = 2;</script>"#;
-        let v = extract_player_response(html).unwrap();
-        assert_eq!(v["a"], 1);
-        assert_eq!(v["b"]["c"], 2);
-    }
-
-    #[test]
-    fn extract_player_response_errors_when_missing() {
-        assert!(extract_player_response("<html>nothing here</html>").is_err());
-    }
-
-    #[test]
-    fn extracts_caption_tracks_from_player_json() {
-        let player = serde_json::json!({
-            "captions": {
-                "playerCaptionsTracklistRenderer": {
-                    "captionTracks": [
-                        {"baseUrl": "https://x/auto", "languageCode": "en", "kind": "asr"},
-                        {"baseUrl": "https://x/manual", "languageCode": "en"},
-                        {"baseUrl": "https://x/zh", "languageCode": "zh"}
-                    ]
-                }
-            }
-        });
-        let tracks = extract_caption_tracks(&player);
-        assert_eq!(tracks.len(), 3);
-        assert_eq!(tracks[1].base_url, "https://x/manual");
-    }
-
-    #[test]
-    fn picks_manual_over_asr() {
-        let tracks = vec![
-            CaptionTrack {
-                base_url: "auto".into(),
-                language_code: "en".into(),
-                kind: Some("asr".into()),
-            },
-            CaptionTrack {
-                base_url: "manual".into(),
-                language_code: "en".into(),
-                kind: None,
-            },
-        ];
-        assert_eq!(
-            pick_english_track(&tracks, true).map(|t| t.base_url.as_str()),
-            Some("manual")
-        );
-        assert_eq!(
-            pick_english_track(&tracks, false).map(|t| t.base_url.as_str()),
-            Some("manual")
-        );
-    }
-
-    #[test]
-    fn falls_back_to_asr_when_allowed() {
-        let tracks = vec![CaptionTrack {
-            base_url: "auto".into(),
-            language_code: "en-GB".into(),
-            kind: Some("asr".into()),
-        }];
-        assert!(pick_english_track(&tracks, true).is_some());
-        assert!(pick_english_track(&tracks, false).is_none());
-    }
-
-    #[test]
-    fn rejects_non_english_tracks() {
-        let tracks = vec![CaptionTrack {
-            base_url: "zh".into(),
-            language_code: "zh-CN".into(),
-            kind: None,
-        }];
-        assert!(pick_english_track(&tracks, true).is_none());
     }
 
     #[test]

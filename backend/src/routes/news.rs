@@ -23,6 +23,7 @@ use crate::news_fetcher;
 pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/news", get(list))
+        .route("/news/:id", axum::routing::delete(delete_one))
         .route("/news/:id/import", post(import))
         .route("/news/_refresh", post(refresh))
 }
@@ -53,7 +54,7 @@ async fn list(
 ) -> Result<Json<Vec<NewsItemSummary>>> {
     let mut conds: Vec<&'static str> = vec!["has_captions = 1"];
     let source = q.source.as_deref().filter(|s| {
-        matches!(*s, "bbc" | "bloomberg" | "economist" | "ft")
+        matches!(*s, "cnbc" | "bloomberg" | "wsj" | "ft")
     });
     let topic = q.topic.as_deref().filter(|t| {
         matches!(*t, "finance" | "politics" | "tech" | "culture" | "other")
@@ -215,6 +216,26 @@ async fn import(
     );
 
     Ok(Json(material))
+}
+
+async fn delete_one(
+    State(pool): State<SqlitePool>,
+    user: CurrentUser,
+    Path(news_id): Path<i64>,
+) -> Result<axum::http::StatusCode> {
+    if !user.is_admin {
+        return Err(AppError(anyhow::anyhow!(
+            "only admin can delete news items"
+        )));
+    }
+    let result = sqlx::query("DELETE FROM news_items WHERE id = ?")
+        .bind(news_id)
+        .execute(&pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(sqlx::Error::RowNotFound.into());
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Serialize)]

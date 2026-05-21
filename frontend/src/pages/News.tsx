@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Plus } from 'lucide-react';
-import { listNews, importNews } from '../api';
+import { Loader2, Plus, Trash2 } from 'lucide-react';
+import { listNews, importNews, deleteNewsItem } from '../api';
 import type { NewsItemSummary, NewsSource, NewsTopic } from '../types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,9 +13,9 @@ type DurationFilter = 'all' | 'short' | 'medium' | 'long';
 
 const SOURCES: { value: SourceFilter; label: string }[] = [
   { value: 'all', label: '全部' },
-  { value: 'bbc', label: 'BBC' },
+  { value: 'cnbc', label: 'CNBC International' },
   { value: 'bloomberg', label: 'Bloomberg' },
-  { value: 'economist', label: 'The Economist' },
+  { value: 'wsj', label: 'WSJ' },
   { value: 'ft', label: 'Financial Times' },
 ];
 
@@ -36,10 +36,10 @@ const DURATIONS: { value: DurationFilter; label: string }[] = [
 ];
 
 const SOURCE_LABEL: Record<NewsSource, string> = {
-  bbc: 'BBC',
+  cnbc: 'CNBC',
   bloomberg: 'Bloomberg',
-  economist: 'The Economist',
-  ft: 'Financial Times',
+  wsj: 'WSJ',
+  ft: 'FT',
 };
 
 const TOPIC_LABEL: Record<NewsTopic, string> = {
@@ -128,6 +128,17 @@ export default function News() {
     }
   }
 
+  async function onDelete(item: NewsItemSummary) {
+    if (!confirm(`确定删除这条新闻?\n\n${item.title}`)) return;
+    try {
+      await deleteNewsItem(item.id);
+      setItems((arr) => arr.filter((x) => x.id !== item.id));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      alert(`删除失败:${msg}`);
+    }
+  }
+
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-6xl px-6 py-10">
@@ -184,6 +195,7 @@ export default function News() {
                 key={it.id}
                 item={it}
                 onImport={onImport}
+                onDelete={onDelete}
                 isImporting={importingId === it.id}
               />
             ))}
@@ -232,10 +244,12 @@ function FilterRow<T extends string>({
 function NewsCard({
   item,
   onImport,
+  onDelete,
   isImporting,
 }: {
   item: NewsItemSummary;
   onImport: (item: NewsItemSummary) => void;
+  onDelete: (item: NewsItemSummary) => void;
   isImporting: boolean;
 }) {
   const [imgErrored, setImgErrored] = useState(false);
@@ -289,12 +303,12 @@ function NewsCard({
             {item.description}
           </p>
         )}
-        <div className="mt-auto pt-2">
+        <div className="mt-auto flex items-center gap-2 pt-2">
           <Button
             onClick={() => onImport(item)}
             disabled={isImporting}
             size="sm"
-            className="w-full"
+            className="flex-1"
           >
             {isImporting ? (
               <>
@@ -308,6 +322,15 @@ function NewsCard({
               </>
             )}
           </Button>
+          <button
+            type="button"
+            onClick={() => onDelete(item)}
+            aria-label="删除这条新闻"
+            title="从新闻库删除(全局)"
+            className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="size-4" />
+          </button>
         </div>
       </div>
     </article>

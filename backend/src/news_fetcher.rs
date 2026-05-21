@@ -19,10 +19,14 @@ use crate::youtube::{self, VideoMetadata};
 
 const RUN_INTERVAL: Duration = Duration::from_secs(3 * 3600);
 const STARTUP_DELAY: Duration = Duration::from_secs(45);
-const PER_CHANNEL_LIMIT: usize = 10;
+const PER_CHANNEL_LIMIT: usize = 20;
 const IDIOMS_PER_VIDEO: usize = 8;
 /// Cap transcript length sent to DeepSeek to keep prompts bounded.
 const TRANSCRIPT_CHAR_CAP: usize = 15_000;
+/// Skip videos outside this duration window (in seconds) — keeps the feed focused on
+/// 5-10 minute pieces and rejects breaking-news clips, shorts, and long documentaries.
+const MIN_DURATION_SEC: i64 = 240; // 4 minutes
+const MAX_DURATION_SEC: i64 = 900; // 15 minutes
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelDef {
@@ -32,25 +36,27 @@ pub struct ChannelDef {
 }
 
 /// Hardcoded for the first version. To change feeds, edit this and restart.
+/// Channel IDs resolved from each outlet's @handle on YouTube.
+/// All four are finance/business-leaning with steady tech coverage at 5-10 min lengths.
 pub const CHANNELS: &[ChannelDef] = &[
     ChannelDef {
-        source: "bbc",
-        channel_id: "UC16niRr50-MSBwiO3YDb3RA",
-        channel_name: "BBC News",
+        source: "cnbc",
+        channel_id: "UCo7a6riBFJ3tkeHjvkXPn1g",
+        channel_name: "CNBC International",
     },
     ChannelDef {
         source: "bloomberg",
         channel_id: "UCUMZ7gohGI9HcU9VNsr2FJQ",
-        channel_name: "Bloomberg Originals",
+        channel_name: "Bloomberg",
     },
     ChannelDef {
-        source: "economist",
-        channel_id: "UC0p5jTq6Xx_DosDFxVXnWaQ",
-        channel_name: "The Economist",
+        source: "wsj",
+        channel_id: "UCK7tptUDHh-RYDsdxO1-5QQ",
+        channel_name: "The Wall Street Journal",
     },
     ChannelDef {
         source: "ft",
-        channel_id: "UCKjf3jjmHPnk1zwxR3qPDgw",
+        channel_id: "UCoUxsWakJucWg46KW5RsvPw",
         channel_name: "Financial Times",
     },
 ];
@@ -87,7 +93,11 @@ pub async fn run_once(
                 tracing::info!(channel = ch.channel_name, added = n, "channel done");
             }
             Err(e) => {
-                tracing::warn!(channel = ch.channel_name, "channel failed: {e:#}");
+                tracing::warn!(
+                    channel = ch.channel_name,
+                    "channel failed: {}",
+                    redact_api_key(&format!("{e:#}"))
+                );
             }
         }
     }
@@ -127,13 +137,25 @@ async fn fetch_channel(
         .with_context(|| format!("batch metadata for {}", ch.channel_name))?;
 
     let mut added = 0usize;
+    let mut skipped_duration = 0usize;
     for meta in metas {
+        if meta.duration_sec < MIN_DURATION_SEC || meta.duration_sec > MAX_DURATION_SEC {
+            skipped_duration += 1;
+            continue;
+        }
         let video_id = meta.video_id.clone();
         if let Err(e) = ingest_one(pool, http, llm, ch, meta).await {
             tracing::warn!(video_id, "ingest failed: {e:#}");
             continue;
         }
         added += 1;
+    }
+    if skipped_duration > 0 {
+        tracing::info!(
+            channel = ch.channel_name,
+            skipped = skipped_duration,
+            "skipped videos outside duration window"
+        );
     }
     Ok(added)
 }
@@ -365,6 +387,26 @@ fn user_prompt(title: &str, transcript: &str) -> String {
     format!("Title: {title}\n\nTranscript:\n{transcript}")
 }
 
+/// Replace `key=<value>` with `key=REDACTED` so YouTube Data API keys don't leak
+/// into error logs (reqwest's `error_for_status` formatter includes the request URL).
+fn redact_api_key(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(idx) = rest.find("key=") {
+        out.push_str(&rest[..idx + 4]);
+        rest = &rest[idx + 4..];
+        let end = rest
+            .find(|c: char| {
+                !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~')
+            })
+            .unwrap_or(rest.len());
+        out.push_str("REDACTED");
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +465,20 @@ mod tests {
         let a = parse_analysis(&content).unwrap();
         assert_eq!(a.idioms.len(), 8);
         assert_eq!(a.idioms[0].phrase, "p0");
+    }
+
+    #[test]
+    fn redacts_api_keys_in_strings() {
+        let input = "GET https://x?part=foo&key=AIzaSyABCDEF&maxResults=10";
+        assert_eq!(
+            redact_api_key(input),
+            "GET https://x?part=foo&key=REDACTED&maxResults=10"
+        );
+        // multiple occurrences
+        let multi = "k1: key=abc, k2: (key=def)";
+        assert_eq!(redact_api_key(multi), "k1: key=REDACTED, k2: (key=REDACTED)");
+        // no key, untouched
+        assert_eq!(redact_api_key("hello"), "hello");
     }
 
     #[test]

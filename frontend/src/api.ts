@@ -140,6 +140,10 @@ export function importNews(id: number): Promise<Material> {
   return request<Material>(`/api/news/${id}/import`, { method: 'POST' });
 }
 
+export async function deleteNewsItem(id: number): Promise<void> {
+  await request<void>(`/api/news/${id}`, { method: 'DELETE' });
+}
+
 // Notes
 
 export function listNotes(materialId?: number): Promise<MaterialNote[]> {

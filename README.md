@@ -376,10 +376,10 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `GET /api/transcriptions/:id/segments` 会把 `transcript_segment_studies` 左连接到 segment 上,前端用 `segment.study` 展示译文、语法和搭配。
 
 ### 4.10 英语新闻自动抓取(`news_fetcher.rs` + `youtube.rs`)
-- 4 个频道写死在 `news_fetcher::CHANNELS`(BBC News、Bloomberg Originals、The Economist、Financial Times)。要换频道改这个常量后重启。
+- 4 个频道写死在 `news_fetcher::CHANNELS`(BBC News、Bloomberg Originals、The Economist、Financial Times),channel ID 是从各家 YouTube `@handle` 解析出来的。要换频道改这个常量后重启。
 - 启动延迟 45 秒后跑第一轮,之后每 3 小时一轮。空 `YOUTUBE_API_KEY` 时 task 直接返回 + warn,不影响其他功能。
-- 每轮:对每个频道,把 channel id `UC...` 换成 uploads playlist `UU...`,`playlistItems.list` 取最近 10 条 → 跳过 `news_items` 里已有的 → `videos.list` 批量(单次 50 ID,quota 1 unit)拿 metadata → 抓字幕(优先人工字幕,不接受自动生成 — 当前不做 ASR fallback)→ 拿到字幕的视频走 DeepSeek 一次拿 `{topic, difficulty, idioms[8]}` → INSERT。
-- 字幕抓取走 YouTube 公开 `timedtext` 接口:抓 watch 页 HTML → 提 `ytInitialPlayerResponse` JSON → 选 `captionTracks` 里 `languageCode=en` 且 `kind` 不是 `asr` 的轨 → `baseUrl + &fmt=json3` → 解 JSON3 events 成 segments。
+- 每轮:对每个频道,把 channel id `UC...` 换成 uploads playlist `UU...`,`playlistItems.list` 取最近 10 条 → 跳过 `news_items` 里已有的 → `videos.list` 批量(单次 50 ID,quota 1 unit)拿 metadata → 抓字幕(用 yt-dlp,详见下条)→ 拿到字幕的视频走 DeepSeek 一次拿 `{topic, difficulty, idioms[8]}` → INSERT。
+- **字幕抓取依赖 `yt-dlp` 二进制**(`brew install yt-dlp` 或 `pip install -U yt-dlp`)。早期实现是直连 YouTube `timedtext` 公开接口,2025 年这个接口已经全面 bot-block(返 200 + 空 body),需要 yt-dlp 维护的 client rotation / 签名解码才能拿到字幕。yt-dlp 落盘 `*.en.json3` 后,Rust 端读回用已有的 `json3_to_segments` 解析,数据格式没变。yt-dlp 没装的话 `fetch_captions` 直接 spawn 失败 + warn,该 news item 入库时 `has_captions=0`,前端列表里不展示。
 - DeepSeek prompt 在 `news_fetcher::system_prompt`,JSON mode 严格输出 8 个 idiom(短语动词 / collocations / 习语,带 anchor sentence 和中文释义 / usage note)。无效 topic 兜底 `other`,difficulty 越界 clamp 1-5,空 phrase 过滤。
 - 配额估算:每轮 4 频道 × 3 次请求(playlist + 1 batch videos + 字幕走非 quota 接口)≈ 12 quota units/轮 × 8 轮/天 ≈ 100 units/天,Data API 每天 10000 免费配额,够用。
 - DeepSeek 调用复用现有 `SharedLlm` 配置,跟 `/api/lookup` 共享 key。
@@ -577,7 +577,7 @@ worker V1 已提供通用 GPU Job API:
 3. 打开 http://localhost:19527/settings
 4. 如需调整数据目录,在“数据存储”里填写目录,保存后重启。旧数据不会自动搬迁,需要手动复制旧 `backend/data/` 内容。
 5. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)、ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)和远程 ASR worker 地址→ 保存。**Key/token 落到数据目录的 `*.json`,不入数据库,不回传前端**
-6. 如要启用 `/news` 自动抓取,把 `YOUTUBE_API_KEY` 写到项目根目录的 `.env` 文件(`dev.sh` 启动时会自动 source):
+6. 如要启用 `/news` 自动抓取,**先装 `yt-dlp`**(`brew install yt-dlp` 或 `pip install -U yt-dlp`,YouTube 反爬一直在变,要保持 yt-dlp 是最近版本),再把 `YOUTUBE_API_KEY` 写到项目根目录的 `.env` 文件(`dev.sh` 启动时会自动 source):
    ```bash
    cp .env.example .env
    # 编辑 .env,填入 YOUTUBE_API_KEY=AIza...
