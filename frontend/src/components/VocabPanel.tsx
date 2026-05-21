@@ -1,8 +1,10 @@
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { X } from 'lucide-react';
-import type { VocabEntry } from '../types';
+import type { VocabEntry, VocabKind } from '../types';
 import { deleteVocab } from '../api';
 import SpeakButton from './SpeakButton';
+import { cn } from '@/lib/utils';
 
 interface Props {
   items: VocabEntry[];
@@ -10,9 +12,26 @@ interface Props {
   onChange: () => void;
 }
 
+const TABS: { value: VocabKind; label: string }[] = [
+  { value: 'word', label: '生词' },
+  { value: 'idiom', label: '地道表达' },
+];
+
 export default function VocabPanel({ items, onClose, onChange }: Props) {
+  const counts = useMemo(() => {
+    const c: Record<VocabKind, number> = { word: 0, idiom: 0 };
+    for (const v of items) {
+      c[v.kind ?? 'word'] += 1;
+    }
+    return c;
+  }, [items]);
+  const initialTab: VocabKind = counts.word === 0 && counts.idiom > 0 ? 'idiom' : 'word';
+  const [tab, setTab] = useState<VocabKind>(initialTab);
+
+  const visible = items.filter((v) => (v.kind ?? 'word') === tab);
+
   async function onDelete(id: number) {
-    if (!confirm('确定删除这条生词?')) return;
+    if (!confirm('确定删除?')) return;
     await deleteVocab(id);
     onChange();
   }
@@ -27,9 +46,26 @@ export default function VocabPanel({ items, onClose, onChange }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
-          <h2 className="text-base font-medium text-foreground">
-            本篇生词 ({items.length})
-          </h2>
+          <div className="flex items-center gap-1">
+            {TABS.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => setTab(t.value)}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-sm transition',
+                  tab === t.value
+                    ? 'bg-accent font-medium text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t.label}
+                <span className="ml-1.5 text-xs text-muted-foreground">
+                  {counts[t.value]}
+                </span>
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-3">
             <Link
               to="/vocab"
@@ -50,13 +86,15 @@ export default function VocabPanel({ items, onClose, onChange }: Props) {
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {items.length === 0 && (
+          {visible.length === 0 && (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              还没有生词。在原文里选中一段文字试试。
+              {tab === 'word'
+                ? '本篇还没收录生词。在原文里选中一段文字试试。'
+                : '本篇暂无地道表达。导入新闻时会自动抽取 8 个。'}
             </p>
           )}
           <ul className="space-y-3">
-            {items.map((v) => (
+            {visible.map((v) => (
               <li
                 key={v.id}
                 className="group rounded-lg border border-border bg-background/50 p-3 transition hover:border-primary/30"
@@ -99,6 +137,11 @@ export default function VocabPanel({ items, onClose, onChange }: Props) {
                 <p className="mt-1 text-sm leading-relaxed text-foreground/85">
                   {v.definition_zh}
                 </p>
+                {v.example_zh && (
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {v.example_zh}
+                  </p>
+                )}
                 {v.context && (
                   <p className="mt-1.5 line-clamp-2 text-xs italic text-muted-foreground">
                     “{v.context}”

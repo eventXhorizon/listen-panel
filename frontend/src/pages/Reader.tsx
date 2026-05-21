@@ -34,7 +34,7 @@ import type {
   SegmentStudy,
   MaterialLanguage,
 } from '../types';
-import VideoPlayer from '../components/VideoPlayer';
+import VideoPlayer, { type VideoPlayerHandle } from '../components/VideoPlayer';
 import SelectionPopup from '../components/SelectionPopup';
 import AddVocabDialog from '../components/AddVocabDialog';
 import VocabPanel from '../components/VocabPanel';
@@ -436,6 +436,11 @@ export default function Reader() {
   const articleRef = useRef<HTMLElement>(null);
   const typographyRef = useRef<HTMLDivElement>(null);
   const articleScrollRef = useRef<HTMLDivElement>(null);
+  const playerHandleRef = useRef<VideoPlayerHandle | null>(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [endPauseMs, setEndPauseMs] = useState(0);
+  const [loopRange, setLoopRange] = useState<{ start_ms: number; end_ms: number; key: string } | null>(null);
+  const loopBusyRef = useRef(false);
   const draggingRef = useRef(false);
   const resizePointerIdRef = useRef<number | null>(null);
   const restoredScrollForRef = useRef<number | null>(null);
@@ -707,6 +712,44 @@ export default function Reader() {
     };
   }, [m]);
 
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      playerHandleRef.current?.setPlaybackRate(playbackRate);
+    }, 1000);
+    playerHandleRef.current?.setPlaybackRate(playbackRate);
+    return () => window.clearInterval(id);
+  }, [playbackRate]);
+
+  useEffect(() => {
+    if (!loopRange) return;
+    loopBusyRef.current = false;
+    playerHandleRef.current?.seekTo(loopRange.start_ms / 1000);
+    playerHandleRef.current?.play();
+    const interval = window.setInterval(() => {
+      if (loopBusyRef.current) return;
+      const player = playerHandleRef.current;
+      if (!player) return;
+      const tMs = player.getCurrentTime() * 1000;
+      if (tMs + 50 >= loopRange.end_ms) {
+        loopBusyRef.current = true;
+        player.pause();
+        window.setTimeout(() => {
+          player.seekTo(loopRange.start_ms / 1000);
+          player.play();
+          loopBusyRef.current = false;
+        }, endPauseMs);
+      }
+    }, 100);
+    return () => {
+      window.clearInterval(interval);
+      loopBusyRef.current = false;
+    };
+  }, [loopRange, endPauseMs]);
+
+  function toggleLoop(range: { start_ms: number; end_ms: number; key: string }) {
+    setLoopRange((current) => (current && current.key === range.key ? null : range));
+  }
+
   function handleArticleScroll(e: React.UIEvent<HTMLDivElement>) {
     if (!m) return;
     const now = Date.now();
@@ -922,6 +965,14 @@ export default function Reader() {
             >
               生词 ({vocab.length})
             </button>
+            <ShadowingControls
+              playbackRate={playbackRate}
+              onChangeRate={setPlaybackRate}
+              endPauseMs={endPauseMs}
+              onChangePause={setEndPauseMs}
+              loopActive={loopRange != null}
+              onStopLoop={() => setLoopRange(null)}
+            />
             <span aria-hidden="true" className="mx-1 hidden h-4 w-px bg-secondary md:block" />
             <button
               onClick={startTranscription}
@@ -1075,6 +1126,8 @@ export default function Reader() {
                       noteKeyFor('segment', group.segments[0]?.id, undefined),
                     )}
                     onOpenNote={openNote}
+                    loopActiveKey={loopRange?.key ?? null}
+                    onToggleLoop={toggleLoop}
                   />
                 ) : (
                   <ParagraphBlock
@@ -1152,6 +1205,7 @@ export default function Reader() {
                   materialId={m.id}
                   sourceType={m.source_type}
                   sourceRef={m.source_ref}
+                  handleRef={playerHandleRef}
                 />
               </div>
             </div>
@@ -1218,6 +1272,7 @@ export default function Reader() {
                   materialId={m.id}
                   sourceType={m.source_type}
                   sourceRef={m.source_ref}
+                  handleRef={playerHandleRef}
                 />
               </div>
             </aside>
@@ -1498,6 +1553,8 @@ function TranscriptSegmentBlock({
   showStudy,
   note,
   onOpenNote,
+  loopActiveKey,
+  onToggleLoop,
 }: {
   text: string;
   segments: TranscriptSegment[];
@@ -1513,10 +1570,14 @@ function TranscriptSegmentBlock({
     target: Omit<PendingNote, 'note' | 'rect'>,
     trigger: HTMLElement,
   ) => void;
+  loopActiveKey: string | null;
+  onToggleLoop: (range: { start_ms: number; end_ms: number; key: string }) => void;
 }) {
   const start = segments[0]?.start_ms ?? 0;
   const end = segments[segments.length - 1]?.end_ms ?? start;
   const targetId = segments[0]?.id;
+  const loopKey = `seg-block-${paragraphIndex}-${targetId ?? 'x'}`;
+  const isLooping = loopActiveKey === loopKey;
   const studyItems = segments
     .map((segment) => ({ segment, study: segment.study }))
     .filter((item): item is { segment: TranscriptSegment; study: SegmentStudy } =>
@@ -1530,7 +1591,22 @@ function TranscriptSegmentBlock({
       className="mb-7 scroll-mt-6"
     >
       <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-medium text-muted-foreground/70">
-        <span>{formatTimestamp(start)} - {formatTimestamp(end)}</span>
+        <div className="flex items-center gap-2">
+          <span>{formatTimestamp(start)} - {formatTimestamp(end)}</span>
+          <button
+            type="button"
+            onClick={() => onToggleLoop({ start_ms: start, end_ms: end, key: loopKey })}
+            aria-label={isLooping ? '停止循环' : '循环这段'}
+            title={isLooping ? '停止循环' : '循环这段(跟读用)'}
+            className={`inline-flex h-5 items-center rounded px-1.5 text-[10px] font-medium transition ${
+              isLooping
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+            }`}
+          >
+            {isLooping ? '● 循环中' : '↻ 循环'}
+          </button>
+        </div>
         <NoteButton
           hasNote={Boolean(note?.content.trim())}
           preview={note?.content}
@@ -1929,4 +2005,71 @@ function formatSliderValue(value: number, step: number): string {
   if (step >= 1) return String(Math.round(value));
   if (step >= 0.01) return value.toFixed(2);
   return value.toFixed(3);
+}
+
+function ShadowingControls({
+  playbackRate,
+  onChangeRate,
+  endPauseMs,
+  onChangePause,
+  loopActive,
+  onStopLoop,
+}: {
+  playbackRate: number;
+  onChangeRate: (r: number) => void;
+  endPauseMs: number;
+  onChangePause: (ms: number) => void;
+  loopActive: boolean;
+  onStopLoop: () => void;
+}) {
+  const RATES = [0.75, 0.85, 1];
+  const PAUSES = [
+    { value: 0, label: '0' },
+    { value: 500, label: '0.5s' },
+    { value: 1000, label: '1s' },
+    { value: 2000, label: '2s' },
+  ];
+  return (
+    <div className="flex shrink-0 items-center gap-1 rounded-md border border-border bg-card px-1 py-0.5">
+      <span className="px-1.5 text-[10px] font-medium text-muted-foreground">速</span>
+      {RATES.map((r) => (
+        <button
+          key={r}
+          type="button"
+          onClick={() => onChangeRate(r)}
+          className={`h-7 rounded px-2 text-[11px] tabular-nums transition ${
+            playbackRate === r ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'
+          }`}
+        >
+          {r}×
+        </button>
+      ))}
+      <span className="mx-1 hidden h-3 w-px bg-border md:block" />
+      <span className="px-1.5 text-[10px] font-medium text-muted-foreground">停</span>
+      {PAUSES.map((p) => (
+        <button
+          key={p.value}
+          type="button"
+          onClick={() => onChangePause(p.value)}
+          className={`h-7 rounded px-2 text-[11px] tabular-nums transition ${
+            endPauseMs === p.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'
+          }`}
+        >
+          {p.label}
+        </button>
+      ))}
+      {loopActive && (
+        <>
+          <span className="mx-1 hidden h-3 w-px bg-border md:block" />
+          <button
+            type="button"
+            onClick={onStopLoop}
+            className="h-7 rounded bg-primary px-2 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            ● 停止循环
+          </button>
+        </>
+      )}
+    </div>
+  );
 }

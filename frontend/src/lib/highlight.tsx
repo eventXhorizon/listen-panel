@@ -86,11 +86,16 @@ function HighlightedWord({
     };
   }, [open]);
 
+  const isIdiom = entry?.kind === 'idiom';
   return (
     <>
       <mark
         ref={markRef}
-        className="bg-primary/15 hover:bg-primary/25 rounded px-0.5 cursor-pointer transition-colors text-foreground"
+        className={
+          isIdiom
+            ? 'bg-primary/10 hover:bg-primary/20 rounded px-0.5 cursor-pointer transition-colors text-foreground underline decoration-dotted decoration-primary/60 underline-offset-[3px]'
+            : 'bg-primary/15 hover:bg-primary/25 rounded px-0.5 cursor-pointer transition-colors text-foreground'
+        }
         onPointerUp={(e) => {
           if (e.pointerType === 'touch') toggle(e);
         }}

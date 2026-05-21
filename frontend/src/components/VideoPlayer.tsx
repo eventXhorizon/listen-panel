@@ -19,11 +19,29 @@ function youTubeId(input: string): string | null {
   return null;
 }
 
+export interface VideoPlayerHandle {
+  play(): void;
+  pause(): void;
+  seekTo(seconds: number): void;
+  setPlaybackRate(rate: number): void;
+  getCurrentTime(): number;
+}
+
 interface Props {
   materialId: number;
   sourceType: SourceType;
   sourceRef: string;
+  /** Optional handle ref; populated for local + youtube, no-op for bilibili. */
+  handleRef?: React.MutableRefObject<VideoPlayerHandle | null>;
 }
+
+const NOOP_HANDLE: VideoPlayerHandle = {
+  play: () => {},
+  pause: () => {},
+  seekTo: () => {},
+  setPlaybackRate: () => {},
+  getCurrentTime: () => 0,
+};
 
 const PROGRESS_PREFIX = 'listen-panel:video-progress:';
 const YOUTUBE_API_SRC = 'https://www.youtube.com/iframe_api';
@@ -33,6 +51,9 @@ interface YouTubePlayer {
   getCurrentTime(): number;
   getDuration(): number;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
+  playVideo(): void;
+  pauseVideo(): void;
+  setPlaybackRate(rate: number): void;
 }
 
 interface YouTubePlayerEvent {
@@ -69,11 +90,15 @@ declare global {
   }
 }
 
-export default function VideoPlayer({ materialId, sourceType, sourceRef }: Props) {
+export default function VideoPlayer({
+  materialId,
+  sourceType,
+  sourceRef,
+  handleRef,
+}: Props) {
   if (!sourceRef) {
-    return (
-      <Placeholder>未配置视频源</Placeholder>
-    );
+    if (handleRef) handleRef.current = NOOP_HANDLE;
+    return <Placeholder>未配置视频源</Placeholder>;
   }
   if (sourceType === 'local') {
     const looksRemote =
@@ -87,22 +112,31 @@ export default function VideoPlayer({ materialId, sourceType, sourceRef }: Props
       <LocalVideo
         src={src}
         progressKey={progressKey(materialId, sourceRef)}
+        handleRef={handleRef}
       />
     );
   }
   if (sourceType === 'youtube') {
     const id = youTubeId(sourceRef);
-    if (!id) return <Placeholder error>无法解析 YouTube 链接:{sourceRef}</Placeholder>;
+    if (!id) {
+      if (handleRef) handleRef.current = NOOP_HANDLE;
+      return <Placeholder error>无法解析 YouTube 链接:{sourceRef}</Placeholder>;
+    }
     return (
       <YouTubeVideo
         videoId={id}
         progressKey={progressKey(materialId, `youtube:${id}`)}
+        handleRef={handleRef}
       />
     );
   }
   if (sourceType === 'bilibili') {
     const ref = parseBilibiliSourceRef(sourceRef);
-    if (!ref) return <Placeholder error>无法解析 Bilibili BV 号:{sourceRef}</Placeholder>;
+    if (!ref) {
+      if (handleRef) handleRef.current = NOOP_HANDLE;
+      return <Placeholder error>无法解析 Bilibili BV 号:{sourceRef}</Placeholder>;
+    }
+    if (handleRef) handleRef.current = NOOP_HANDLE;
     return (
       <BilibiliVideo
         sourceRef={sourceRef}
@@ -114,16 +148,45 @@ export default function VideoPlayer({ materialId, sourceType, sourceRef }: Props
   return null;
 }
 
-function LocalVideo({ src, progressKey }: { src: string; progressKey: string }) {
+function LocalVideo({
+  src,
+  progressKey,
+  handleRef,
+}: {
+  src: string;
+  progressKey: string;
+  handleRef?: React.MutableRefObject<VideoPlayerHandle | null>;
+}) {
   const restoredRef = useRef(false);
   const lastSavedAtRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const setRef = useCallback((el: HTMLVideoElement | null) => {
-    videoRef.current = el;
-    if (!el) return;
-    el.volume = loadSettings().default_volume;
-  }, []);
+  const setRef = useCallback(
+    (el: HTMLVideoElement | null) => {
+      videoRef.current = el;
+      if (!el) {
+        if (handleRef) handleRef.current = null;
+        return;
+      }
+      el.volume = loadSettings().default_volume;
+      if (handleRef) {
+        handleRef.current = {
+          play: () => {
+            void el.play().catch(() => {});
+          },
+          pause: () => el.pause(),
+          seekTo: (s) => {
+            el.currentTime = Math.max(0, s);
+          },
+          setPlaybackRate: (r) => {
+            el.playbackRate = r;
+          },
+          getCurrentTime: () => el.currentTime,
+        };
+      }
+    },
+    [handleRef],
+  );
 
   useEffect(() => {
     return () => {
@@ -176,9 +239,11 @@ function LocalVideo({ src, progressKey }: { src: string; progressKey: string }) 
 function YouTubeVideo({
   videoId,
   progressKey,
+  handleRef,
 }: {
   videoId: string;
   progressKey: string;
+  handleRef?: React.MutableRefObject<VideoPlayerHandle | null>;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
@@ -226,6 +291,24 @@ function YouTubeVideo({
           events: {
             onReady: (event) => {
               clearEndedYouTubeProgress(progressKey, event.target);
+              if (handleRef) {
+                const p = event.target;
+                handleRef.current = {
+                  play: () => safeCall(() => p.playVideo()),
+                  pause: () => safeCall(() => p.pauseVideo()),
+                  seekTo: (s) => safeCall(() => p.seekTo(Math.max(0, s), true)),
+                  setPlaybackRate: (r) =>
+                    safeCall(() => p.setPlaybackRate(r)),
+                  getCurrentTime: () => {
+                    try {
+                      const v = p.getCurrentTime();
+                      return Number.isFinite(v) ? v : 0;
+                    } catch {
+                      return 0;
+                    }
+                  },
+                };
+              }
             },
             onStateChange: (event) => {
               const state = window.YT?.PlayerState;
@@ -250,6 +333,7 @@ function YouTubeVideo({
     return () => {
       cancelled = true;
       stopSaving();
+      if (handleRef) handleRef.current = null;
       if (playerRef.current) {
         saveYouTubeProgress(progressKey, playerRef.current);
         playerRef.current.destroy();
@@ -257,7 +341,7 @@ function YouTubeVideo({
       }
       host.replaceChildren();
     };
-  }, [progressKey, startSaving, stopSaving, videoId]);
+  }, [progressKey, startSaving, stopSaving, videoId, handleRef]);
 
   useEffect(() => {
     const onBeforeUnload = () => saveCurrentProgress();
@@ -479,6 +563,14 @@ function saveYouTubeProgress(key: string, player: YouTubePlayer) {
   }
 
   saveProgressSeconds(key, current);
+}
+
+function safeCall(fn: () => void) {
+  try {
+    fn();
+  } catch {
+    // Swallow — YouTube player can be transiently unavailable during teardown.
+  }
 }
 
 function safePlayerNumber(read: () => number): number | null {
