@@ -577,11 +577,13 @@ worker V1 已提供通用 GPU Job API:
 3. 打开 http://localhost:19527/settings
 4. 如需调整数据目录,在“数据存储”里填写目录,保存后重启。旧数据不会自动搬迁,需要手动复制旧 `backend/data/` 内容。
 5. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)、ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)和远程 ASR worker 地址→ 保存。**Key/token 落到数据目录的 `*.json`,不入数据库,不回传前端**
-6. 如要启用 `/news` 自动抓取,启动时通过环境变量传 `YOUTUBE_API_KEY`(申请:https://console.cloud.google.com/ → APIs & Services → YouTube Data API v3):
+6. 如要启用 `/news` 自动抓取,把 `YOUTUBE_API_KEY` 写到项目根目录的 `.env` 文件(`dev.sh` 启动时会自动 source):
    ```bash
-   YOUTUBE_API_KEY="AIza..." ./dev.sh
+   cp .env.example .env
+   # 编辑 .env,填入 YOUTUBE_API_KEY=AIza...
+   ./dev.sh
    ```
-   不设也没事,新闻页就是空的。设了之后启动 45s 后开始第一轮抓取,然后每 3h 一轮。要立刻跑一次:`curl -X POST http://localhost:9527/api/news/_refresh -H 'Cookie: listen_panel_session=...'`(admin only)。
+   申请见 https://console.cloud.google.com/ → APIs & Services → 启用 YouTube Data API v3 → 创建 API 密钥。`.env` 已经 gitignored,key 不会进仓库。不设也没事,新闻页就是空的。设了之后启动 45s 后开始第一轮抓取,然后每 3h 一轮。要立刻跑一次:`curl -X POST http://localhost:9527/api/news/_refresh -H 'Cookie: listen_panel_session=...'`(admin only)。
 7. 回到书架,新建第一条材料
 
 ## 7. 已知限制 / 待办

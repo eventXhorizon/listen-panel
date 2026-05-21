@@ -6,6 +6,15 @@ set -eo pipefail
 
 cd "$(dirname "$0")"
 
+# Auto-load project-local env (YOUTUBE_API_KEY, LISTEN_PANEL_DATA_DIR, etc.)
+# .env is gitignored. Existing shell vars win.
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 cleanup() {
   echo
   echo "stopping..."

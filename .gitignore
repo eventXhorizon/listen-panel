@@ -2,6 +2,9 @@
 .DS_Store
 Thumbs.db
 
+# Local env (API keys etc.)
+.env
+
 # Python worker local state
 asr-worker/.env
 asr-worker/.venv/
