@@ -279,7 +279,13 @@ fn transcript_for_prompt(segments: &[NewsSegment]) -> String {
         }
     }
     if out.len() > TRANSCRIPT_CHAR_CAP {
-        out.truncate(TRANSCRIPT_CHAR_CAP);
+        // Cut to a UTF-8 char boundary at or before the byte cap so we don't
+        // split multi-byte Japanese characters and panic on truncate().
+        let mut cut = TRANSCRIPT_CHAR_CAP;
+        while cut > 0 && !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
     }
     out
 }
@@ -545,5 +551,19 @@ mod tests {
         };
         let out = transcript_for_prompt(&[long_seg]);
         assert!(out.len() <= TRANSCRIPT_CHAR_CAP);
+    }
+
+    #[test]
+    fn transcript_cap_handles_multibyte_chars() {
+        // Japanese 3-byte char that would land mid-codepoint at TRANSCRIPT_CHAR_CAP=15000.
+        let long_seg = NewsSegment {
+            start_ms: 0,
+            end_ms: 1000,
+            text: "あ".repeat(8000), // 24,000 bytes, char count 8000
+        };
+        let out = transcript_for_prompt(&[long_seg]);
+        assert!(out.len() <= TRANSCRIPT_CHAR_CAP);
+        // Must end at a char boundary — must be parseable as valid UTF-8.
+        assert_eq!(out, out.as_str().to_string());
     }
 }
