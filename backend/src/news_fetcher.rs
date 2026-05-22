@@ -23,10 +23,10 @@ const PER_CHANNEL_LIMIT: usize = 20;
 const IDIOMS_PER_VIDEO: usize = 8;
 /// Cap transcript length sent to DeepSeek to keep prompts bounded.
 const TRANSCRIPT_CHAR_CAP: usize = 15_000;
-/// Skip videos outside this duration window (in seconds) — keeps the feed focused on
-/// 5-10 minute pieces and rejects breaking-news clips, shorts, and long documentaries.
-const MIN_DURATION_SEC: i64 = 240; // 4 minutes
-const MAX_DURATION_SEC: i64 = 900; // 15 minutes
+/// Skip videos outside this duration window (in seconds). Keeps the feed focused on
+/// shadowing-friendly lengths and rejects breaking-news clips, shorts, podcasts.
+const MIN_DURATION_SEC: i64 = 180; // 3 minutes
+const MAX_DURATION_SEC: i64 = 1200; // 20 minutes
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelDef {

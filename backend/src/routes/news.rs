@@ -88,15 +88,16 @@ async fn list(
 }
 
 async fn import(
-    State(pool): State<SqlitePool>,
+    State(state): State<crate::AppState>,
     user: CurrentUser,
     Path(news_id): Path<i64>,
 ) -> Result<Json<Material>> {
+    let pool = &state.pool;
     let news = sqlx::query_as::<_, NewsItem>(&format!(
         "SELECT {NEWS_FULL_COLS} FROM news_items WHERE id = ?"
     ))
     .bind(news_id)
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError(anyhow::anyhow!("news item not found")))?;
 
@@ -117,14 +118,14 @@ async fn import(
     )
     .bind(user.id)
     .bind(&news.yt_video_id)
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await?;
     if let Some(mid) = existing {
         let row = sqlx::query_as::<_, Material>(&format!(
             "SELECT {MATERIAL_COLS} FROM materials WHERE id = ?"
         ))
         .bind(mid)
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await?;
         return Ok(Json(row));
     }
@@ -153,12 +154,13 @@ async fn import(
     .fetch_one(&mut *tx)
     .await?;
 
+    // study_status defaults to 'pending'; we'll spawn the study task right after commit.
     let job_id: i64 = sqlx::query_scalar(
         "INSERT INTO transcription_jobs \
            (user_id, material_id, provider, model, language, status, progress, \
-            study_status, completed_at, created_at, updated_at) \
+            completed_at, created_at, updated_at) \
          VALUES (?, ?, 'youtube_caption', 'youtube_caption', 'en', 'succeeded', 100, \
-                 'skipped', ?, ?, ?) \
+                 ?, ?, ?) \
          RETURNING id",
     )
     .bind(user.id)
@@ -214,6 +216,33 @@ async fn import(
         idioms = idioms.len(),
         "imported news item"
     );
+
+    // Auto-trigger the existing study flow (per-segment translation + grammar + usage).
+    // This mirrors what `POST /api/transcriptions/:id/study` does, so the imported
+    // material behaves identically to one where the user clicked "翻译分析".
+    let spawned_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::study::mark_study_running(&spawned_state.pool, job_id).await {
+            tracing::warn!(job_id, "failed to mark study running: {e:#}");
+            return;
+        }
+        tracing::info!(job_id, "starting study generation for imported news");
+        if let Err(e) = crate::study::generate_segment_studies_for_job(
+            &spawned_state.pool,
+            &spawned_state.llm,
+            job_id,
+        )
+        .await
+        {
+            let error = format!("{e:#}");
+            if let Err(mark_err) =
+                crate::study::mark_study_failed(&spawned_state.pool, job_id, &error).await
+            {
+                tracing::warn!(job_id, "failed to mark study failure: {mark_err:#}");
+            }
+            tracing::warn!(job_id, "news study generation failed: {error}");
+        }
+    });
 
     Ok(Json(material))
 }

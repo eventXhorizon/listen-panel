@@ -483,7 +483,11 @@ export default function Reader() {
       const jobs = await listTranscriptionJobs(mid);
       const latest = jobs[0] ?? null;
       setJob(latest);
-      const shouldShowStudy = latest?.status === 'succeeded' && loadStudyVisible(mid);
+      // Default to showing study for imported news (provider='youtube_caption') so
+      // translations / grammar / usage points appear without an extra click.
+      const isNewsImport = latest?.provider === 'youtube_caption';
+      const shouldShowStudy =
+        latest?.status === 'succeeded' && (loadStudyVisible(mid) || isNewsImport);
       setShowStudy(shouldShowStudy);
       if (latest?.status === 'succeeded') {
         try {
