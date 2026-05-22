@@ -69,8 +69,8 @@ pub const CHANNELS: &[ChannelDef] = &[
     // Japanese finance/business
     ChannelDef {
         source: "wbs",
-        channel_id: "UCPTVd32fJj668E64Xg4zs1A",
-        channel_name: "テレ東BIZ (WBS)",
+        channel_id: "UCkKVQ_GNjd8FbAuT6xDcWgg",
+        channel_name: "テレ東BIZ",
         language: "ja",
     },
     ChannelDef {
@@ -200,7 +200,7 @@ async fn ingest_one(
     meta: VideoMetadata,
 ) -> Result<()> {
     // Only fetch manually-uploaded captions; auto-generated would be the ASR fallback (deferred).
-    let captions = match youtube::fetch_captions(http, &meta.video_id, false).await {
+    let captions = match youtube::fetch_captions(http, &meta.video_id, ch.language).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(video_id = meta.video_id, "caption fetch failed: {e:#}");

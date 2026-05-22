@@ -219,14 +219,15 @@ fn parse_iso8601_duration(s: &str) -> Result<i64> {
     Ok(total)
 }
 
-/// Fetches English captions via `yt-dlp` and parses the resulting JSON3 file.
+/// Fetches captions via `yt-dlp` and parses the resulting JSON3 file.
+/// `language` controls which subtitle language to ask for ("en" → `en.*`, "ja" → `ja.*`).
 /// Both `--write-subs` (manual) and `--write-auto-subs` (auto-generated) are enabled —
 /// yt-dlp prefers manual when both exist and falls back to auto otherwise.
-/// Returns `Ok(None)` when no English captions are available or yt-dlp fails for any reason.
+/// Returns `Ok(None)` when no captions in the requested language are available.
 pub async fn fetch_captions(
     _client: &reqwest::Client,
     video_id: &str,
-    _accept_auto: bool,
+    language: &str,
 ) -> Result<Option<Vec<NewsSegment>>> {
     let unique = format!(
         "listen-panel-{}-{}",
@@ -236,6 +237,7 @@ pub async fn fetch_captions(
     let out_prefix = std::env::temp_dir().join(&unique);
     let prefix_str = out_prefix.to_string_lossy().into_owned();
     let url = format!("https://www.youtube.com/watch?v={video_id}");
+    let sub_langs = format!("{language}.*");
 
     let mut cmd = Command::new("yt-dlp");
     cmd.kill_on_drop(true)
@@ -246,7 +248,7 @@ pub async fn fetch_captions(
         .arg("--write-auto-subs")
         .arg("--skip-download")
         .arg("--sub-langs")
-        .arg("en.*")
+        .arg(&sub_langs)
         .arg("--sub-format")
         .arg("json3")
         .arg("-o")
