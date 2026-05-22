@@ -33,7 +33,8 @@ export default function App() {
               <Route path="new" element={<Editor />} />
               <Route path="m/:id" element={<Reader />} />
               <Route path="m/:id/edit" element={<Editor />} />
-              <Route path="news" element={<News />} />
+              <Route path="news" element={<Navigate to="/news/en" replace />} />
+              <Route path="news/:lang" element={<News />} />
               <Route path="vocab" element={<Vocab />} />
               <Route path="notes" element={<Notes />} />
               <Route path="review" element={<Review />} />

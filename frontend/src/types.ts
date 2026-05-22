@@ -60,7 +60,15 @@ export type CreateVocab = Omit<VocabEntry, 'id' | 'created_at' | 'kind'> & {
   kind?: VocabKind;
 };
 
-export type NewsSource = 'cnbc' | 'bloomberg' | 'wsj' | 'ft';
+export type NewsSource =
+  | 'cnbc'
+  | 'bloomberg'
+  | 'wsj'
+  | 'ft'
+  | 'wbs'
+  | 'nikkei'
+  | 'pivot'
+  | 'newspicks';
 export type NewsTopic = 'finance' | 'politics' | 'tech' | 'culture' | 'other';
 
 export interface NewsSegment {

@@ -26,38 +26,70 @@ const TRANSCRIPT_CHAR_CAP: usize = 15_000;
 /// Skip videos outside this duration window (in seconds). Keeps the feed focused on
 /// shadowing-friendly lengths and rejects breaking-news clips, shorts, podcasts.
 const MIN_DURATION_SEC: i64 = 180; // 3 minutes
-const MAX_DURATION_SEC: i64 = 1200; // 20 minutes
+const MAX_DURATION_SEC: i64 = 1800; // 30 minutes
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelDef {
     pub source: &'static str,
     pub channel_id: &'static str,
     pub channel_name: &'static str,
+    /// Material language: "en" or "ja". Drives DeepSeek prompt selection and
+    /// the `language` filter on `/api/news`.
+    pub language: &'static str,
 }
 
 /// Hardcoded for the first version. To change feeds, edit this and restart.
 /// Channel IDs resolved from each outlet's @handle on YouTube.
-/// All four are finance/business-leaning with steady tech coverage at 5-10 min lengths.
 pub const CHANNELS: &[ChannelDef] = &[
+    // English finance/business
     ChannelDef {
         source: "cnbc",
         channel_id: "UCo7a6riBFJ3tkeHjvkXPn1g",
         channel_name: "CNBC International",
+        language: "en",
     },
     ChannelDef {
         source: "bloomberg",
         channel_id: "UCUMZ7gohGI9HcU9VNsr2FJQ",
         channel_name: "Bloomberg",
+        language: "en",
     },
     ChannelDef {
         source: "wsj",
         channel_id: "UCK7tptUDHh-RYDsdxO1-5QQ",
         channel_name: "The Wall Street Journal",
+        language: "en",
     },
     ChannelDef {
         source: "ft",
         channel_id: "UCoUxsWakJucWg46KW5RsvPw",
         channel_name: "Financial Times",
+        language: "en",
+    },
+    // Japanese finance/business
+    ChannelDef {
+        source: "wbs",
+        channel_id: "UCPTVd32fJj668E64Xg4zs1A",
+        channel_name: "テレ東BIZ (WBS)",
+        language: "ja",
+    },
+    ChannelDef {
+        source: "nikkei",
+        channel_id: "UCHL12woHGeiqAqLrK-pJe7g",
+        channel_name: "日本経済新聞",
+        language: "ja",
+    },
+    ChannelDef {
+        source: "pivot",
+        channel_id: "UCMPIUePGM1IGokGZCxvVxUg",
+        channel_name: "PIVOT 公式チャンネル",
+        language: "ja",
+    },
+    ChannelDef {
+        source: "newspicks",
+        channel_id: "UCfTnJmRQP79C4y_BMF_XrlA",
+        channel_name: "NewsPicks",
+        language: "ja",
     },
 ];
 
@@ -188,7 +220,7 @@ async fn ingest_one(
 
     if has_caps {
         let transcript = transcript_for_prompt(&segments);
-        match analyze(http, llm, &meta.title, &transcript).await {
+        match analyze(http, llm, ch.language, &meta.title, &transcript).await {
             Ok(a) => {
                 topic = a.topic;
                 difficulty = a.difficulty;
@@ -222,7 +254,7 @@ async fn ingest_one(
     .bind(meta.thumbnail_url.as_deref())
     .bind(meta.published_at)
     .bind(meta.duration_sec)
-    .bind("en")
+    .bind(ch.language)
     .bind(&topic)
     .bind(difficulty)
     .bind(has_captions_int)
@@ -262,6 +294,7 @@ struct Analysis {
 async fn analyze(
     http: &reqwest::Client,
     llm: &SharedLlm,
+    language: &str,
     title: &str,
     transcript: &str,
 ) -> Result<Analysis> {
@@ -270,10 +303,15 @@ async fn analyze(
         return Err(anyhow!("DeepSeek API key not configured"));
     }
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let system = if language == "ja" {
+        japanese_system_prompt()
+    } else {
+        english_system_prompt()
+    };
     let body = json!({
         "model": cfg.model,
         "messages": [
-            { "role": "system", "content": system_prompt() },
+            { "role": "system", "content": system },
             { "role": "user",   "content": user_prompt(title, transcript) },
         ],
         "response_format": { "type": "json_object" },
@@ -367,7 +405,7 @@ fn parse_analysis(content: &str) -> Result<Analysis> {
     })
 }
 
-fn system_prompt() -> &'static str {
+fn english_system_prompt() -> &'static str {
     "你是一个为中国英语学习者提取地道英语表达的助手。你会收到一段英语新闻视频的标题和字幕原文,需要:\n\
      1. 判断话题(必须是 finance / politics / tech / culture / other 之一)\n\
      2. 评估学习难度(整数 1-5,综合词汇、语速感和句法复杂度)\n\
@@ -380,6 +418,23 @@ fn system_prompt() -> &'static str {
         - usage_note 可选,提示什么场景常用 / 注意点 / 易混淆\n\
      输出必须是严格的 JSON,不要 markdown 包裹、不要任何额外解释。\n\
      JSON 结构:\n\
+     {\"topic\":\"...\",\"difficulty\":1-5,\"idioms\":[{\"phrase\":\"...\",\"anchor_sentence\":\"...\",\"meaning_zh\":\"...\",\"usage_note\":\"...\"} × 8]}"
+}
+
+fn japanese_system_prompt() -> &'static str {
+    "あなたは中国語话者の日本語学习者向けに、地道な日本語表現を抽出するアシスタントです。日本語ニュース動画のタイトルと字幕原文を受け取り、以下を行ってください:\n\
+     1. トピックを判定(必ず finance / politics / tech / culture / other のいずれか)\n\
+     2. 学习難易度を整数 1-5 で評価(语汇、话速感、文型の複雑さを総合)\n\
+     3. 原文から日本語学习者にとって最も価値のある「自然な表現」を 8 つ選びます:\n\
+        - 範疇は自由に判断してよい — 慣用句、四字熟語、二字熟語、N1/N2 レベルの副助詞・接続表現、ビジネス用語、敬語表現、和制英語、口語的な省略形、隠喩、コロケーションなど何でもよい\n\
+        - 一見すると平凡だが、日本語学习者がぶつかる用法を優先(教科書に出ない自然さ)\n\
+        - 単独で覚えても汎用性のある表現を选ぶ\n\
+        - phrase は原文に実際に出現したフレーズ(2 文字以上、複合語や定型句を含む)\n\
+        - anchor_sentence は原文中の該当表現を含む自然な完全文(短く切ってもよいが、意味が独立して通る範囲で)\n\
+        - meaning_zh は中文で簡潔に意味を説明\n\
+        - usage_note は任意 — 用いる文脈、注意点、よくある誤用、類义表现など\n\
+     出力は厳格な JSON のみ、Markdown ラップや追加の説明文を含めないこと。\n\
+     JSON 構造:\n\
      {\"topic\":\"...\",\"difficulty\":1-5,\"idioms\":[{\"phrase\":\"...\",\"anchor_sentence\":\"...\",\"meaning_zh\":\"...\",\"usage_note\":\"...\"} × 8]}"
 }
 

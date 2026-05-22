@@ -6,6 +6,7 @@ import type {
   AuthStatus,
   JobWithSegments,
   Material,
+  MaterialLanguage,
   MaterialNote,
   MaterialMetadata,
   NewsItemSummary,
@@ -124,11 +125,13 @@ export async function deleteVocab(id: number): Promise<void> {
 // News
 
 export function listNews(filters?: {
+  language?: MaterialLanguage;
   source?: NewsSource;
   topic?: NewsTopic;
   duration?: 'short' | 'medium' | 'long';
 }): Promise<NewsItemSummary[]> {
   const params = new URLSearchParams();
+  if (filters?.language) params.set('language', filters.language);
   if (filters?.source) params.set('source', filters.source);
   if (filters?.topic) params.set('topic', filters.topic);
   if (filters?.duration) params.set('duration', filters.duration);

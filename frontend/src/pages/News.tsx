@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { listNews, importNews, deleteNewsItem } from '../api';
-import type { NewsItemSummary, NewsSource, NewsTopic } from '../types';
+import type { MaterialLanguage, NewsItemSummary, NewsSource, NewsTopic } from '../types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -11,12 +11,20 @@ type SourceFilter = NewsSource | 'all';
 type TopicFilter = NewsTopic | 'all';
 type DurationFilter = 'all' | 'short' | 'medium' | 'long';
 
-const SOURCES: { value: SourceFilter; label: string }[] = [
+const EN_SOURCES: { value: SourceFilter; label: string }[] = [
   { value: 'all', label: '全部' },
   { value: 'cnbc', label: 'CNBC International' },
   { value: 'bloomberg', label: 'Bloomberg' },
   { value: 'wsj', label: 'WSJ' },
   { value: 'ft', label: 'Financial Times' },
+];
+
+const JA_SOURCES: { value: SourceFilter; label: string }[] = [
+  { value: 'all', label: '全部' },
+  { value: 'wbs', label: 'テレ東BIZ' },
+  { value: 'nikkei', label: '日経' },
+  { value: 'pivot', label: 'PIVOT' },
+  { value: 'newspicks', label: 'NewsPicks' },
 ];
 
 const TOPICS: { value: TopicFilter; label: string }[] = [
@@ -40,7 +48,16 @@ const SOURCE_LABEL: Record<NewsSource, string> = {
   bloomberg: 'Bloomberg',
   wsj: 'WSJ',
   ft: 'FT',
+  wbs: 'テレ東BIZ',
+  nikkei: '日経',
+  pivot: 'PIVOT',
+  newspicks: 'NewsPicks',
 };
+
+const LANG_TABS: { value: MaterialLanguage; label: string }[] = [
+  { value: 'en', label: '英语' },
+  { value: 'ja', label: '日语' },
+];
 
 const TOPIC_LABEL: Record<NewsTopic, string> = {
   finance: '财经',
@@ -83,6 +100,10 @@ function thumbUrl(item: NewsItemSummary): string {
 }
 
 export default function News() {
+  const { lang: langParam } = useParams<{ lang: string }>();
+  const language: MaterialLanguage = langParam === 'ja' ? 'ja' : 'en';
+  const sources = language === 'ja' ? JA_SOURCES : EN_SOURCES;
+
   const [items, setItems] = useState<NewsItemSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<SourceFilter>('all');
@@ -92,11 +113,17 @@ export default function News() {
   const [importingId, setImportingId] = useState<number | null>(null);
   const navigate = useNavigate();
 
+  // Reset source filter when language changes (sources are language-specific).
+  useEffect(() => {
+    setSource('all');
+  }, [language]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     listNews({
+      language,
       source: source === 'all' ? undefined : source,
       topic: topic === 'all' ? undefined : topic,
       duration: duration === 'all' ? undefined : duration,
@@ -113,7 +140,7 @@ export default function News() {
     return () => {
       cancelled = true;
     };
-  }, [source, topic, duration]);
+  }, [language, source, topic, duration]);
 
   async function onImport(item: NewsItemSummary) {
     setImportingId(item.id);
@@ -142,19 +169,36 @@ export default function News() {
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-6xl px-6 py-10">
-        <div className="mb-8">
+        <div className="mb-6">
           <h1 className="text-3xl font-medium tracking-tight text-foreground">
-            英语新闻
+            {language === 'ja' ? '日语新闻' : '英语新闻'}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             真实语速、地道用法 — 加入书架后跟读练口语
           </p>
         </div>
 
+        <div className="mb-6 flex items-center gap-1 border-b border-border">
+          {LANG_TABS.map((t) => (
+            <Link
+              key={t.value}
+              to={`/news/${t.value}`}
+              className={cn(
+                '-mb-px border-b-2 px-4 py-2 text-sm transition',
+                language === t.value
+                  ? 'border-primary text-foreground font-medium'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t.label}
+            </Link>
+          ))}
+        </div>
+
         <div className="mb-8 space-y-3">
           <FilterRow
             label="来源"
-            options={SOURCES}
+            options={sources}
             value={source}
             onChange={setSource}
           />

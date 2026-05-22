@@ -45,6 +45,8 @@ struct ListQuery {
     topic: Option<String>,
     /// `short` (<10min) | `medium` (10–30min) | `long` (≥30min)
     duration: Option<String>,
+    /// `en` | `ja` — omit to return all.
+    language: Option<String>,
 }
 
 async fn list(
@@ -53,17 +55,29 @@ async fn list(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Vec<NewsItemSummary>>> {
     let mut conds: Vec<&'static str> = vec!["has_captions = 1"];
-    let source = q.source.as_deref().filter(|s| {
-        matches!(*s, "cnbc" | "bloomberg" | "wsj" | "ft")
-    });
-    let topic = q.topic.as_deref().filter(|t| {
-        matches!(*t, "finance" | "politics" | "tech" | "culture" | "other")
-    });
+    let source = q
+        .source
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let topic = q
+        .topic
+        .as_deref()
+        .filter(|t| matches!(*t, "finance" | "politics" | "tech" | "culture" | "other"))
+        .map(|t| t.to_string());
+    let language = q
+        .language
+        .as_deref()
+        .filter(|l| matches!(*l, "en" | "ja"))
+        .map(|l| l.to_string());
     if source.is_some() {
         conds.push("source = ?");
     }
     if topic.is_some() {
         conds.push("topic = ?");
+    }
+    if language.is_some() {
+        conds.push("language = ?");
     }
     match q.duration.as_deref() {
         Some("short") => conds.push("duration_sec < 600"),
@@ -78,11 +92,14 @@ async fn list(
         conds.join(" AND ")
     );
     let mut query = sqlx::query_as::<_, NewsItemSummary>(&sql);
-    if let Some(s) = source {
+    if let Some(s) = source.as_deref() {
         query = query.bind(s);
     }
-    if let Some(t) = topic {
+    if let Some(t) = topic.as_deref() {
         query = query.bind(t);
+    }
+    if let Some(l) = language.as_deref() {
+        query = query.bind(l);
     }
     Ok(Json(query.fetch_all(&pool).await?))
 }
@@ -145,11 +162,12 @@ async fn import(
     let material = sqlx::query_as::<_, Material>(&format!(
         "INSERT INTO materials \
          (user_id, title, language, source_type, source_ref, text, text_source, notes, created_at, updated_at) \
-         VALUES (?, ?, 'en', 'youtube', ?, ?, 'manual_subtitle', '', ?, ?) \
+         VALUES (?, ?, ?, 'youtube', ?, ?, 'manual_subtitle', '', ?, ?) \
          RETURNING {MATERIAL_COLS}"
     ))
     .bind(user.id)
     .bind(&news.title)
+    .bind(&news.language)
     .bind(&news.yt_video_id)
     .bind(&combined_text)
     .bind(now)
@@ -162,12 +180,13 @@ async fn import(
         "INSERT INTO transcription_jobs \
            (user_id, material_id, provider, model, language, status, progress, \
             completed_at, created_at, updated_at) \
-         VALUES (?, ?, 'youtube_caption', 'youtube_caption', 'en', 'succeeded', 100, \
+         VALUES (?, ?, 'youtube_caption', 'youtube_caption', ?, 'succeeded', 100, \
                  ?, ?, ?) \
          RETURNING id",
     )
     .bind(user.id)
     .bind(material.id)
+    .bind(&news.language)
     .bind(now)
     .bind(now)
     .bind(now)
@@ -198,10 +217,11 @@ async fn import(
         sqlx::query(
             "INSERT INTO vocab \
              (material_id, word, language, kind, lemma, definition_zh, example_zh, context, mastery) \
-             VALUES (?, ?, 'en', 'idiom', ?, ?, ?, ?, 0)",
+             VALUES (?, ?, ?, 'idiom', ?, ?, ?, ?, 0)",
         )
         .bind(material.id)
         .bind(idiom.phrase.trim())
+        .bind(&news.language)
         .bind(idiom.phrase.trim())
         .bind(idiom.meaning_zh.trim())
         .bind(idiom.usage_note.as_deref().unwrap_or("").trim())
