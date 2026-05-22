@@ -131,11 +131,14 @@ async fn import(
     }
 
     let now = Utc::now();
+    // Segments are already paragraph-sized (merged in youtube::merge_into_paragraphs).
+    // Joining with blank lines gives the Reader paragraph-by-paragraph display.
     let combined_text = segments
         .iter()
-        .map(|s| s.text.as_str())
+        .map(|s| s.text.trim())
+        .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
-        .join(" ");
+        .join("\n\n");
 
     let mut tx = pool.begin().await?;
 

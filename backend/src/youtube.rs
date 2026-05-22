@@ -331,7 +331,7 @@ struct Json3Seg {
 }
 
 fn json3_to_segments(track: Json3Track) -> Vec<NewsSegment> {
-    track
+    let raw: Vec<NewsSegment> = track
         .events
         .into_iter()
         .filter_map(|ev| {
@@ -347,7 +347,111 @@ fn json3_to_segments(track: Json3Track) -> Vec<NewsSegment> {
                 text: trimmed,
             })
         })
-        .collect()
+        .collect();
+    merge_into_paragraphs(raw)
+}
+
+/// YouTube caption cues are 2-4 second display fragments — way too granular for
+/// shadowing or per-segment study. Merge consecutive cues into paragraph-sized
+/// units (~600-900 chars, 3-5 sentences) so each `transcript_segments` row and its
+/// study card map to a coherent passage.
+const PARA_MIN_CHARS: usize = 320;
+const PARA_TARGET_CHARS: usize = 650;
+const PARA_MAX_CHARS: usize = 900;
+const PARA_TARGET_SENTENCES: usize = 3;
+const PARA_MAX_SENTENCES: usize = 6;
+const PARA_GAP_MS: i64 = 1800;
+
+fn merge_into_paragraphs(raw: Vec<NewsSegment>) -> Vec<NewsSegment> {
+    let mut out: Vec<NewsSegment> = Vec::new();
+    let mut cur_text = String::new();
+    let mut cur_start: Option<i64> = None;
+    let mut cur_end: i64 = 0;
+    let mut sentence_count: usize = 0;
+    let mut last_end: Option<i64> = None;
+    // True when the most recent paragraph boundary was a speaker pause (vs. hitting
+    // a length / sentence cap mid-flow). Used at the end to decide whether a short
+    // tail is an orphan to merge back or a real paragraph after a pause.
+    let mut last_break_was_gap = false;
+
+    for seg in raw {
+        let text = seg.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        let gap = last_end.map(|le| seg.start_ms - le).unwrap_or(0);
+        if gap >= PARA_GAP_MS && !cur_text.is_empty() {
+            out.push(NewsSegment {
+                start_ms: cur_start.unwrap_or(seg.start_ms),
+                end_ms: cur_end,
+                text: cur_text.trim().to_string(),
+            });
+            cur_text.clear();
+            cur_start = None;
+            sentence_count = 0;
+            last_break_was_gap = true;
+        }
+
+        if cur_start.is_none() {
+            cur_start = Some(seg.start_ms);
+        }
+        if !cur_text.is_empty() {
+            cur_text.push(' ');
+        }
+        cur_text.push_str(text);
+        cur_end = seg.end_ms;
+        last_end = Some(seg.end_ms);
+
+        let ends_sentence = text
+            .chars()
+            .last()
+            .is_some_and(|c| matches!(c, '.' | '!' | '?' | '。' | '！' | '？'));
+        if ends_sentence {
+            sentence_count += 1;
+        }
+
+        let char_count = cur_text.chars().count();
+        let break_target = ends_sentence
+            && char_count >= PARA_MIN_CHARS
+            && sentence_count >= PARA_TARGET_SENTENCES;
+        let break_sentence_cap = ends_sentence && sentence_count >= PARA_MAX_SENTENCES;
+        let break_length = char_count >= PARA_TARGET_CHARS
+            && (ends_sentence || char_count >= PARA_MAX_CHARS);
+
+        if break_target || break_sentence_cap || break_length {
+            out.push(NewsSegment {
+                start_ms: cur_start.unwrap(),
+                end_ms: cur_end,
+                text: cur_text.trim().to_string(),
+            });
+            cur_text.clear();
+            cur_start = None;
+            sentence_count = 0;
+            last_break_was_gap = false;
+        }
+    }
+
+    if !cur_text.is_empty() {
+        let tail_chars = cur_text.chars().count();
+        // Merge a short orphan tail back into the previous segment — but only if it
+        // flowed continuously (no speaker pause). After a pause, even a short final
+        // chunk is a legitimate standalone paragraph.
+        if tail_chars < PARA_MIN_CHARS && !last_break_was_gap && !out.is_empty() {
+            let last = out.last_mut().expect("checked non-empty above");
+            last.text.push(' ');
+            last.text.push_str(cur_text.trim());
+            last.end_ms = cur_end;
+        } else {
+            out.push(NewsSegment {
+                start_ms: cur_start.unwrap_or(0),
+                end_ms: cur_end,
+                text: cur_text.trim().to_string(),
+            });
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -381,19 +485,78 @@ mod tests {
     }
 
     #[test]
-    fn converts_json3_events_to_segments() {
+    fn merges_short_cues_into_paragraphs() {
+        // Build a transcript of 8 short cues totaling ~400 chars across 4 sentences —
+        // should produce 1-2 paragraph segments, not 8.
+        let cues = vec![
+            ("Donald Trump has been very open about", 0, 6000),
+            ("the respect that he has for Xi Jinping.", 3000, 7000),
+            ("The two leaders met in Beijing last week.", 7500, 11000),
+            ("They discussed trade and a new tariff deal.", 11500, 15000),
+            ("The talks lasted three hours.", 15500, 18000),
+            ("Markets responded positively the next morning.", 18500, 22000),
+            ("Asian stocks rose by two percent on average.", 22500, 26000),
+            ("Analysts called it a breakthrough.", 26500, 29000),
+        ];
+        let raw: Vec<NewsSegment> = cues
+            .into_iter()
+            .map(|(t, s, e)| NewsSegment {
+                start_ms: s,
+                end_ms: e,
+                text: t.to_string(),
+            })
+            .collect();
+        let merged = merge_into_paragraphs(raw);
+        assert!(
+            merged.len() < 4,
+            "expected merged segments < 4, got {}: {:#?}",
+            merged.len(),
+            merged
+        );
+        assert_eq!(merged[0].start_ms, 0, "first segment should start at 0");
+        for seg in &merged {
+            assert!(
+                seg.text.chars().count() >= 50,
+                "merged segment too short: {:?}",
+                seg.text
+            );
+        }
+    }
+
+    #[test]
+    fn merge_breaks_on_large_time_gap() {
+        let raw = vec![
+            NewsSegment {
+                start_ms: 0,
+                end_ms: 3000,
+                text: "First paragraph sentence one with some words to reach min length here please.".into(),
+            },
+            NewsSegment {
+                start_ms: 3500,
+                end_ms: 6000,
+                text: "First paragraph sentence two also adding some bulk text to satisfy the limit.".into(),
+            },
+            // Long gap (10s) — should force a paragraph break.
+            NewsSegment {
+                start_ms: 16000,
+                end_ms: 18000,
+                text: "Second paragraph starts here after a long pause in the recording.".into(),
+            },
+        ];
+        let merged = merge_into_paragraphs(raw);
+        assert_eq!(merged.len(), 2, "expected 2 paragraphs after big gap, got {:#?}", merged);
+    }
+
+    #[test]
+    fn converts_json3_events_through_merge() {
         let track = Json3Track {
             events: vec![
                 Json3Event {
                     t_start_ms: 0,
                     d_duration_ms: 1500,
                     segs: vec![
-                        Json3Seg {
-                            utf8: "Hello ".into(),
-                        },
-                        Json3Seg {
-                            utf8: "world".into(),
-                        },
+                        Json3Seg { utf8: "Hello ".into() },
+                        Json3Seg { utf8: "world.".into() },
                     ],
                 },
                 Json3Event {
@@ -404,16 +567,14 @@ mod tests {
                 Json3Event {
                     t_start_ms: 3000,
                     d_duration_ms: 500,
-                    segs: vec![Json3Seg { utf8: "Yes".into() }],
+                    segs: vec![Json3Seg { utf8: "Yes.".into() }],
                 },
             ],
         };
         let segs = json3_to_segments(track);
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0].text, "Hello world");
-        assert_eq!(segs[0].start_ms, 0);
-        assert_eq!(segs[0].end_ms, 1500);
-        assert_eq!(segs[1].text, "Yes");
-        assert_eq!(segs[1].start_ms, 3000);
+        // Short content stays as one final paragraph because PARA_MIN_CHARS isn't reached.
+        assert_eq!(segs.len(), 1);
+        assert!(segs[0].text.contains("Hello world."));
+        assert!(segs[0].text.contains("Yes."));
     }
 }
