@@ -269,7 +269,12 @@ async fn call_study_llm(
             { "role": "user", "content": user_prompt }
         ],
         "response_format": { "type": "json_object" },
-        "temperature": 0.2
+        "temperature": 0.2,
+        // Default DeepSeek output cap is 4096 tokens. A long paragraph-merged
+        // segment with translation + grammar_points + usage_points hits that
+        // ceiling and the response gets truncated mid-JSON, surfacing as
+        // "EOF while parsing a list". 8192 is the deepseek-chat hard cap.
+        "max_tokens": 8192
     });
 
     let res = client
