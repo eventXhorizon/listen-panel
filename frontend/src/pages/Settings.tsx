@@ -707,7 +707,7 @@ function StatusBadge({
   status,
   loadErr,
 }: {
-  status: LlmStatus | null;
+  status: { configured: boolean } | null;
   loadErr: string | null;
 }) {
   if (loadErr) {
