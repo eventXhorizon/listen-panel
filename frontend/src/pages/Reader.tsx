@@ -2168,7 +2168,7 @@ function ShadowingControls({
   loopActive: boolean;
   onStopLoop: () => void;
 }) {
-  const RATES = [0.75, 0.85, 1];
+  const RATES = [0.75, 0.85, 1, 1.25, 1.5];
   const PAUSES = [
     { value: 0, label: '0' },
     { value: 500, label: '0.5s' },
