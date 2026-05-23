@@ -50,7 +50,14 @@ pub struct TtsConfig {
     #[serde(default)]
     pub api_key: String,
     pub base_url: String,
+    /// Legacy single-voice field. Kept for backward compat with older tts.json files —
+    /// the loader copies it into `voice_id_en` if that's empty. Not exposed in the UI.
+    #[serde(default)]
     pub voice_id: String,
+    #[serde(default)]
+    pub voice_id_en: String,
+    #[serde(default)]
+    pub voice_id_ja: String,
     pub model: String,
     pub output_format: String,
 }
@@ -61,10 +68,31 @@ impl Default for TtsConfig {
             provider: TtsProvider::ElevenLabs,
             api_key: String::new(),
             base_url: "https://api.elevenlabs.io".to_string(),
-            voice_id: "JBFqnCBsd6RMkjVDRZzb".to_string(),
+            voice_id: String::new(),
+            voice_id_en: "JBFqnCBsd6RMkjVDRZzb".to_string(),
+            voice_id_ja: "1czwMoQxv9Ni4H7M5hXx".to_string(),
             model: "eleven_multilingual_v2".to_string(),
             output_format: "mp3_44100_128".to_string(),
         }
+    }
+}
+
+impl TtsConfig {
+    /// Pick the voice ID for the given language. Falls back to en, then to the
+    /// legacy `voice_id` field, then to the en default. Never returns empty
+    /// unless every config slot is empty (caller can treat as misconfigured).
+    pub fn voice_for_language(&self, language: &str) -> &str {
+        let primary = match language {
+            "ja" => &self.voice_id_ja,
+            _ => &self.voice_id_en,
+        };
+        if !primary.is_empty() {
+            return primary;
+        }
+        if !self.voice_id_en.is_empty() {
+            return &self.voice_id_en;
+        }
+        &self.voice_id
     }
 }
 
@@ -167,7 +195,7 @@ pub async fn save(cfg: &LlmConfig) -> Result<()> {
 
 pub async fn load_tts() -> SharedTts {
     let path = crate::paths::tts_config_path();
-    let cfg = match tokio::fs::read_to_string(&path).await {
+    let mut cfg = match tokio::fs::read_to_string(&path).await {
         Ok(s) => match serde_json::from_str::<TtsConfig>(&s) {
             Ok(c) => c,
             Err(e) => {
@@ -187,6 +215,18 @@ pub async fn load_tts() -> SharedTts {
             TtsConfig::default()
         }
     };
+    // Backward compat: old configs stored a single `voice_id` for English. If
+    // the new per-language fields are empty, copy the legacy field over and
+    // backfill the JA default.
+    if cfg.voice_id_en.is_empty() && !cfg.voice_id.is_empty() {
+        cfg.voice_id_en = cfg.voice_id.clone();
+    }
+    if cfg.voice_id_en.is_empty() {
+        cfg.voice_id_en = TtsConfig::default().voice_id_en;
+    }
+    if cfg.voice_id_ja.is_empty() {
+        cfg.voice_id_ja = TtsConfig::default().voice_id_ja;
+    }
     Arc::new(RwLock::new(cfg))
 }
 

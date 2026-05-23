@@ -24,7 +24,8 @@ export default function Settings() {
   const [ttsStatus, setTtsStatus] = useState<TtsStatus | null>(null);
   const [ttsApiKey, setTtsApiKey] = useState('');
   const [ttsBaseUrl, setTtsBaseUrl] = useState('');
-  const [ttsVoiceId, setTtsVoiceId] = useState('');
+  const [ttsVoiceIdEn, setTtsVoiceIdEn] = useState('');
+  const [ttsVoiceIdJa, setTtsVoiceIdJa] = useState('');
   const [ttsModel, setTtsModel] = useState('');
   const [ttsOutputFormat, setTtsOutputFormat] = useState('');
   const [showTtsKey, setShowTtsKey] = useState(false);
@@ -101,7 +102,8 @@ export default function Settings() {
         const s = (await res.json()) as TtsStatus;
         setTtsStatus(s);
         setTtsBaseUrl(s.base_url);
-        setTtsVoiceId(s.voice_id);
+        setTtsVoiceIdEn(s.voice_id_en);
+        setTtsVoiceIdJa(s.voice_id_ja);
         setTtsModel(s.model);
         setTtsOutputFormat(s.output_format);
       } catch (e) {
@@ -170,10 +172,17 @@ export default function Settings() {
       }
       if (
         ttsStatus &&
-        ttsVoiceId.trim() &&
-        ttsVoiceId.trim() !== ttsStatus.voice_id
+        ttsVoiceIdEn.trim() &&
+        ttsVoiceIdEn.trim() !== ttsStatus.voice_id_en
       ) {
-        ttsPatch.voice_id = ttsVoiceId.trim();
+        ttsPatch.voice_id_en = ttsVoiceIdEn.trim();
+      }
+      if (
+        ttsStatus &&
+        ttsVoiceIdJa.trim() &&
+        ttsVoiceIdJa.trim() !== ttsStatus.voice_id_ja
+      ) {
+        ttsPatch.voice_id_ja = ttsVoiceIdJa.trim();
       }
       if (ttsStatus && ttsModel.trim() && ttsModel.trim() !== ttsStatus.model) {
         ttsPatch.model = ttsModel.trim();
@@ -501,11 +510,20 @@ export default function Settings() {
                 />
               </Field>
 
-              <Field label="Voice ID">
+              <Field label="英语音色 ID">
                 <input
-                  value={ttsVoiceId}
-                  onChange={(e) => setTtsVoiceId(e.target.value)}
+                  value={ttsVoiceIdEn}
+                  onChange={(e) => setTtsVoiceIdEn(e.target.value)}
                   placeholder="JBFqnCBsd6RMkjVDRZzb"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
+                />
+              </Field>
+
+              <Field label="日语音色 ID">
+                <input
+                  value={ttsVoiceIdJa}
+                  onChange={(e) => setTtsVoiceIdJa(e.target.value)}
+                  placeholder="1czwMoQxv9Ni4H7M5hXx"
                   className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>

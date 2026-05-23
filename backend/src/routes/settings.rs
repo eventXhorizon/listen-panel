@@ -36,7 +36,8 @@ pub struct TtsStatus {
     pub configured: bool,
     pub provider: TtsProvider,
     pub base_url: String,
-    pub voice_id: String,
+    pub voice_id_en: String,
+    pub voice_id_ja: String,
     pub model: String,
     pub output_format: String,
 }
@@ -107,7 +108,8 @@ pub struct UpdateTts {
     /// Empty string or absent leaves the existing key unchanged.
     pub api_key: Option<String>,
     pub base_url: Option<String>,
-    pub voice_id: Option<String>,
+    pub voice_id_en: Option<String>,
+    pub voice_id_ja: Option<String>,
     pub model: Option<String>,
     pub output_format: Option<String>,
 }
@@ -198,7 +200,8 @@ async fn get_tts(State(tts): State<SharedTts>, user: CurrentUser) -> axum::respo
         configured: g.configured(),
         provider: g.provider.clone(),
         base_url: g.base_url.clone(),
-        voice_id: g.voice_id.clone(),
+        voice_id_en: g.voice_id_en.clone(),
+        voice_id_ja: g.voice_id_ja.clone(),
         model: g.model.clone(),
         output_format: g.output_format.clone(),
     })
@@ -227,10 +230,16 @@ async fn put_tts(
                 g.base_url = trimmed.to_string();
             }
         }
-        if let Some(v) = patch.voice_id {
+        if let Some(v) = patch.voice_id_en {
             let trimmed = v.trim();
             if !trimmed.is_empty() {
-                g.voice_id = trimmed.to_string();
+                g.voice_id_en = trimmed.to_string();
+            }
+        }
+        if let Some(v) = patch.voice_id_ja {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                g.voice_id_ja = trimmed.to_string();
             }
         }
         if let Some(m) = patch.model {
@@ -254,7 +263,8 @@ async fn put_tts(
         configured: snapshot.configured(),
         provider: snapshot.provider,
         base_url: snapshot.base_url,
-        voice_id: snapshot.voice_id,
+        voice_id_en: snapshot.voice_id_en,
+        voice_id_ja: snapshot.voice_id_ja,
         model: snapshot.model,
         output_format: snapshot.output_format,
     }))

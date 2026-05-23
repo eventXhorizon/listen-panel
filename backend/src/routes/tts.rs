@@ -133,7 +133,7 @@ async fn cached_elevenlabs_speech(
         }
     }
 
-    let bytes = match elevenlabs_speech(http, cfg, text).await? {
+    let bytes = match elevenlabs_speech(http, cfg, text, language).await? {
         Ok(bytes) => bytes,
         Err(response) => return Ok(response),
     };
@@ -150,11 +150,13 @@ async fn elevenlabs_speech(
     http: &reqwest::Client,
     cfg: &crate::config::TtsConfig,
     text: &str,
+    language: &str,
 ) -> Result<std::result::Result<Bytes, Response>> {
     let base_url = cfg.base_url.trim_end_matches('/');
+    let voice_id = cfg.voice_for_language(language);
     let url = format!(
         "{base_url}/v1/text-to-speech/{}?output_format={}",
-        cfg.voice_id, cfg.output_format
+        voice_id, cfg.output_format
     );
     let res = http
         .post(url)
@@ -237,11 +239,18 @@ fn hash_cache_parts(cfg: &crate::config::TtsConfig, text: &str, language: Option
     let provider = match cfg.provider {
         TtsProvider::ElevenLabs => "eleven_labs",
     };
+    // Use the language-aware voice so EN and JA outputs of the same text cache
+    // to different files. The legacy path (language=None) falls back to the
+    // historical voice_id field for cache-key continuity.
+    let voice = match language {
+        Some(lang) => cfg.voice_for_language(lang),
+        None => cfg.voice_id.as_str(),
+    };
     let mut hasher = Sha256::new();
     for part in [
         provider,
         cfg.base_url.trim_end_matches('/'),
-        cfg.voice_id.as_str(),
+        voice,
         cfg.model.as_str(),
         cfg.output_format.as_str(),
     ] {
