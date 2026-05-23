@@ -717,11 +717,11 @@ export default function Reader() {
   }, [m]);
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      playerHandleRef.current?.setPlaybackRate(playbackRate);
-    }, 1000);
+    // Apply once when the rate changes. Earlier this was on a 1s interval to
+    // re-assert against YouTube's occasional self-reset, but the polling caused
+    // a flood of postMessage errors when the iframe was in a transient state.
+    // If YT resets the rate (rare), the user just re-clicks the pill.
     playerHandleRef.current?.setPlaybackRate(playbackRate);
-    return () => window.clearInterval(id);
   }, [playbackRate]);
 
   useEffect(() => {
