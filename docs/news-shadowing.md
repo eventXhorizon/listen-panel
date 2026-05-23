@@ -216,6 +216,65 @@ fetch('/api/news/_refresh', { method: 'POST' }).then(r => r.json()).then(console
 
 ---
 
+## 10.5 质量评分(LLM 内置打分 + 阈值过滤)
+
+DeepSeek 的 idiom 抽取调用顺带返回:
+
+- `quality` 整数 1-10
+- `quality_reason` 一句中文,说明为什么这个分数
+
+prompt 里给了具体锚点(避免模型主观漂移):
+- **9-10**:NYT Daily / 60 Minutes / NHK 解説 级别 — 长留人话术、专业领域语言、思路完整
+- **7-8**:WSJ / Bloomberg / テレ東BIZ explainer — 清晰、有信息、可学习点充足
+- **5-6**:能看但松散,信息密度低、重复
+- **1-4**:vlog 风、宣传、断章碎念
+
+`GET /api/news` 的过滤条件是 `has_captions = 1 AND (quality IS NULL OR quality >= 7)`。NULL 透传是为了**避免 schema 升级后老数据一夜消失** —— 之后 admin 跑一次 backfill 把它们填满,阈值才生效。
+
+阈值 7 在生产数据下约 95-97% 通过率(我们这 4 家英文 + 4 家日文都是严肃媒体,本身就鲜有 <7 内容)。模型上限实际打到 8,9-10 几乎没见过,说明锚点描述把 9-10 设得足够"高不可攀",好。
+
+### 回填端点
+`POST /api/news/_backfill_quality`(admin only)— 对所有 `quality IS NULL` 的 news_items 重跑 `analyze()`(覆盖 topic/difficulty/idioms 顺手填 quality+reason)。返回 `{scored, kept, dropped, failed}`,触发方式同 `/api/news/_refresh`:
+
+```js
+fetch('/api/news/_backfill_quality', { method: 'POST', credentials: 'same-origin' })
+  .then(r => r.json()).then(console.log)
+```
+
+`view_count` 列从 `videos.list?part=statistics` 拿,目前**只存不排** —— 排序还是 `published_at DESC`(用户优先看到最新)。view_count 作为未来扩展(可作为同 quality 下的 tiebreaker),先存着不亏。
+
+---
+
+## 10.6 时长策略变更
+
+原先 4-15 分钟太严(FT 长 explainer 全掉了)。改成 **3-30 分钟**,然后又改成 **3-60 分钟**,理由:
+
+- 高质量长片(PIVOT 类对谈)值得反复跟读,不该被时长筛掉
+- **质量过滤接管把关**:即便 60 分钟视频通过时长筛,质量分够才进 /news
+
+副作用:对 PIVOT 这种平均 30+ 分钟的频道,合规率本就低,放宽到 60min 也常常只捞 0-1 条。
+
+---
+
+## 10.7 Furigana(振り仮名)— 日语专属
+
+`transcript_segments.text_with_furigana TEXT`(NULL 表示未生成)。导入日语新闻后,后端在 study task 旁边再 spawn 一个 `furigana::generate_for_job`:
+
+- 按 5 段一批送 DeepSeek
+- prompt 要求**只标 JLPT N3 以上的 kanji**(N4-N5 常用字保留素颜),专有名词 / 行业用语 / 难读复合词积极标注
+- 一个词整体一个 ruby:`<ruby>経済産業省<rt>けいざいさんぎょうしょう</rt></ruby>`,不逐字拆
+- 输出**严格 sanitize**:只放行 `<ruby>` 和 `<rt>` 标签,其余 `<>&` 全转义。前端可以放心 `dangerouslySetInnerHTML`
+
+Reader 里日语材料默认开「假名」toggle(localStorage 持久),关掉后回退到纯文本 + 生词高亮。
+
+### 回填端点
+`POST /api/news/_backfill_furigana`(admin only)— 跑所有 youtube_caption JA jobs 里 `text_with_furigana IS NULL` 的段。返回 `{jobs, annotated}`。
+
+### CSS
+`.reader-ruby` 加 line-height 2 防挤压;`<rt>` 0.55em 字号,muted 颜色,low-emphasis 上方小字。
+
+---
+
 ## 11. 给其他语种加的步骤(对日语和将来的语种)
 
 这套架构有 7 个明显的"语言无关"点和 5 个需要按语种定制的点。要加 `ja`:
@@ -239,17 +298,34 @@ fetch('/api/news/_refresh', { method: 'POST' }).then(r => r.json()).then(console
 ### 11.3 实施顺序建议
 1. 重构 `CHANNELS` 加 `language` 字段,后端按 channel 的 language 调用对应 prompt
 2. `GET /api/news` 加 `?language=` 过滤
-3. 前端 `/news` 加语言 toggle(默认跟随用户上次选择)
+3. 前端 `/news` 按语言路由(`/news/en`、`/news/ja`),`/news` redirect 到 `/news/en`
 4. 调试 1-2 个日语频道的字幕抓取(yt-dlp 对日语字幕的覆盖率 + 质量)
 5. 写日语 idiom 抽取 prompt 并 A/B 几条视频看效果
 6. 完整一轮:监控日志,看每个频道的 added/skipped 比例,调整时长筛和频道选择
+
+### 11.4 日语实际经验(已落地)
+
+| 频道 | 字幕覆盖率 | 备注 |
+|---|---|---|
+| **テレ東BIZ** (`@tvtokyobiz`) | 高 | 标题 metadata 里就有,人工字幕齐全 |
+| **日経電子版** (`@nikkei`) | **0%** | Nikkei 不给视频上字幕,全部 `has_captions=0` 进 DB 但列表不显示 |
+| **NewsPicks** | 中高 | 字幕齐 |
+| **PIVOT 公式** | n/a | 内容平均 30-90 分钟,绝大多数被时长筛刷掉(进入率 ~1-2 条/20)|
+
+**坑点**:
+- `--sub-langs en.*` 是 yt-dlp 必须按语言传(原先写死 en,导致日语字幕全部抓不到)
+- 字幕的多字节字符要小心:`out.truncate(BYTE_CAP)` 会在 UTF-8 中间 panic。日语 3 字节/字,15000 字节切位置容易撞到字符中间。修复:walk back 到 `is_char_boundary` 再 truncate
+- channel ID 必须用 `"externalId":"UC..."` 严格匹配(我们 grep 抓 YouTube 频道页 HTML),`channel/UC...` 这种宽泛 regex 会抓到侧栏推荐频道
 
 ---
 
 ## 12. 已知问题 / 后续
 
-- **FT 频道**当前轮经常 0 added——FT 的视频时长两极分化,3-20 分钟窗口偶尔全空。要么换 FT,要么放宽时长
+- **Nikkei 频道**字幕覆盖率 0%(他们不上传字幕到 YouTube)。可以换成 NHK / 朝日 / 東洋経済 之类
+- **PIVOT 频道**内容偏长(30-90 min),即便 60min 窗口也常常进入率低。考虑替换
 - **Bilibili 没接入跟读控件**——`VideoPlayerHandle` 在 Bilibili 上是 no-op,postMessage 协议复杂,留作 V2
 - **yt-dlp 升级风险**——YouTube 改反爬时 yt-dlp 通常 24-48h 内 patch,我们要跟着 update
 - **多用户场景下 idiom 重复**——用户 A 和用户 B 各自导入同一条新闻,各自的 vocab 表都会有相同 8 个 idiom。不严重(单租户场景)
-- **DeepSeek prompt 没做"重点单词"抽取**——用户后来提到要"重点需要掌握的单词",现在 idiom 是多词组合。如果想加单字,需要扩 prompt 或加独立 LLM 调用
+- **DeepSeek prompt 没做"重点单词"抽取**——idiom 是多词组合。如果要单字 vocab 推荐,需要扩 prompt 或加独立 LLM 调用
+- **TTS 提供商**:从 ElevenLabs 切到 Azure Speech。ElevenLabs Free Tier 被反滥用系统封了(无关 credits),换 Azure F0 Tier(500K chars/月免费)。详见 README §5.13
+- **质量评分上限实际只到 8**:模型没给过 9-10。要么放低锚点描述,要么接受 8 就是顶

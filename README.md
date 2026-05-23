@@ -39,7 +39,7 @@ listen-panel/
 │   └── data/                    gitignored
 │       ├── app.db
 │       ├── config.json          DeepSeek 凭据(api_key/base_url/model)
-│       ├── tts.json             TTS 凭据(provider/api_key/base_url/voice_id/model/output_format)
+│       ├── tts.json             TTS 凭据(provider=azure/api_key/region/voice_id_en/voice_id_ja/output_format)
 │       ├── asr.json             远程 ASR worker 配置(base_url/token/model 等)
 │       ├── tts-cache/           TTS 生成音频缓存(有文章上下文时按 material 分目录)
 │       └── uploads/             本地视频 (uuid 命名)
@@ -105,7 +105,7 @@ listen-panel/
 
 **外部依赖**
 - DeepSeek `chat/completions`(JSON mode):用于生词释义和分段分析。**Key 存在数据目录的 `config.json`**(gitignored),前端通过 `POST /api/lookup` 走后端代理,key 不出服务端。lookup 和 study prompt 会按材料语言切换。
-- ElevenLabs Text to Speech:用于生词朗读。**Key 存在数据目录的 `tts.json`**(gitignored),前端通过 `POST /api/tts/speech` 走后端适配层,key 不出服务端。
+- **Azure Speech**(Cognitive Services Text-to-Speech):用于生词朗读。Subscription key 存在数据目录的 `tts.json`(gitignored),前端通过 `POST /api/tts/speech` 走后端适配层,key 不出服务端。**之前用的是 ElevenLabs**,2026-05 切到 Azure(EL Free Tier 被反滥用系统封了,跟 credits 无关)。Azure F0 Tier 每月免费 500K 字符,够生词朗读用很久。
 - 远程 GPU worker:用于视频转写。当前 ASR 仍兼容 `POST /v1/transcribe`;worker 也提供通用 `POST /v1/jobs`、`GET /v1/jobs/:id`、`GET /v1/jobs/:id/result` V1 API,后续可扩展 TTS/OCR/embedding 等 GPU workload。长期规划见 `docs/gpu-compute-platform.md`。
 - YouTube oEmbed / Bilibili `x/web-interface/view` API:用于新建材料时根据链接自动识别视频源并读取标题;Bilibili 会额外读取分 P、aid、cid 和时长,用于外链播放器和 worker 下载定位。Bilibili API 失败时再回退解析视频页 HTML;最终失败时只回退为手动标题或链接本身,不阻塞保存。
 
@@ -198,9 +198,14 @@ listen-panel/
 | material_id | INTEGER | FK 到 materials |
 | start_ms/end_ms | INTEGER | segment 时间戳 |
 | text | TEXT | segment 文本 |
+| text_with_furigana | TEXT? | 日语 ruby HTML(`<ruby>漢字<rt>かんじ</rt></ruby>` 形式)。仅日语材料后端 spawn furigana task 时填充;前端 Reader 在「假名」toggle 打开时优先渲染这个 |
 
 ### `news_items`
-**全局缓存表,不绑用户。** 由后台 fetcher 每 3 小时从 YouTube 拉取 4 个频道(BBC News / Bloomberg Originals / The Economist / Financial Times),已经预先分析好话题、难度、idiom。用户在 `/news` 看到列表,点"加入书架"才会复制到自己的 `materials` 表。
+**全局缓存表,不绑用户。** 由后台 fetcher 每 3 小时从 YouTube 拉取 8 个频道:
+- **英语**:CNBC International、Bloomberg、WSJ、Financial Times
+- **日语**:テレ東BIZ、日経電子版、PIVOT 公式、NewsPicks
+
+每条已经预先分析好话题、难度、idiom、**学习价值评分** (1-10)、view count。日语条目还会在导入后异步生成 furigana 标注。用户在 `/news/en` 或 `/news/ja` 看到列表,点"加入书架"才会复制到自己的 `materials` 表。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -215,6 +220,9 @@ listen-panel/
 | topic | TEXT | CHECK ∈ `finance / politics / tech / culture / other` |
 | difficulty | INTEGER | CHECK 1..5 |
 | has_captions | INTEGER | 0/1;无字幕条目不进列表 |
+| quality | INTEGER? | LLM 给的学习价值评分 1-10。NULL = 未评估(尚未 backfill);列表过滤条件 `quality IS NULL OR quality >= 7` |
+| quality_reason | TEXT? | 一句中文,说明为什么这个 quality 分数 |
+| view_count | INTEGER? | YouTube `videos.list?part=statistics` 拿到的播放数。目前只存不用作排序 |
 | segments_json | TEXT | NewsSegment[] JSON,导入时展开成 `transcript_segments` |
 | idioms_json | TEXT | NewsIdiom[] JSON,导入时落到 `vocab.kind='idiom'` |
 | fetched_at / analyzed_at | TEXT | |
@@ -264,8 +272,8 @@ listen-panel/
 | PUT | `/settings/llm` | 局部更新 `{api_key?, base_url?, model?}`,空字符串字段视为不变;写盘 `<数据目录>/config.json` 同时刷新内存 |
 | POST | `/lookup` | `{word, context, language?}` → 走 DeepSeek 兼容协议 → `{lemma, phonetic, pos, definition_zh, ...}`;未配置 key 直接返 500 + `not configured` 文案 |
 | GET | `/settings/tts` | 返 `{configured, provider, base_url, voice_id, model, output_format}`,**永不返 api_key** |
-| PUT | `/settings/tts` | 局部更新 `{api_key?, base_url?, voice_id?, model?, output_format?}`,空字符串字段视为不变;写盘 `<数据目录>/tts.json` 同时刷新内存 |
-| POST | `/tts/speech` | `{text, material_id?, language?}` → 先查 `<数据目录>/tts-cache/`;传 `material_id` 时按文章目录缓存,文件名和 hash 包含语言,未命中时走 ElevenLabs `text-to-speech/:voice_id`,成功后缓存并返回 `audio/mpeg`;未配置 key 返回 503 |
+| PUT | `/settings/tts` | 局部更新 `{api_key?, region?, voice_id_en?, voice_id_ja?, output_format?}`,空字符串字段视为不变;写盘 `<数据目录>/tts.json` 同时刷新内存 |
+| POST | `/tts/speech` | `{text, material_id?, language?}` → 先查 `<数据目录>/tts-cache/`;按 language 选 voice;未命中时走 Azure Speech SSML 端点 `https://{region}.tts.speech.microsoft.com/cognitiveservices/v1`,成功后缓存返回 `audio/mpeg`;未配置 key/region 返回 503 |
 | GET | `/auth/status` | `{needs_setup, user}`;未登录 user 为 null |
 | POST | `/auth/setup` | 首次初始化管理员账户,并把旧材料归属给该用户 |
 | POST | `/auth/register` | 创建普通账户并登录 |
@@ -283,9 +291,12 @@ listen-panel/
 | POST | `/transcriptions/:id/study` | 按需启动当前转写任务的分段翻译、语法和固定搭配分析 |
 | GET | `/asr/media/:job_id` | 仅 worker 用;local 视频转写时凭 `Authorization: Bearer <一次性token>` 读取原始上传文件 |
 | POST | `/asr/progress/:job_id` | 仅 worker 用;凭同一个一次性 token 回调 `{progress, stage?}` 更新转写进度 |
-| GET | `/news[?source=&topic=&duration=]` | 列出已分析的新闻条目;过滤参数详见 5.x。只返回有字幕的 |
-| POST | `/news/:id/import` | 把这条新闻导入当前用户书架:建 Material(`source_type=youtube`, `text_source=manual_subtitle`)+ 合成 transcription_job(`provider=youtube_caption`, status `succeeded`)+ 展开 segments + idiom 落 vocab(`kind='idiom'`)。幂等:同 yt_video_id 已导入则直接返回旧 Material |
+| GET | `/news[?source=&topic=&duration=&language=]` | 列出已分析的新闻条目。`language=en\|ja` 切换语种;过滤条件还包含 `quality IS NULL OR quality >= 7` |
+| POST | `/news/:id/import` | 把这条新闻导入当前用户书架:建 Material + 合成 transcription_job(`provider=youtube_caption`)+ 展开 segments + idiom 落 vocab(`kind='idiom'`)。导入后自动 spawn study task;日语材料再 spawn furigana task。幂等 |
+| DELETE | `/news/:id` | **admin only。** 全局删除新闻条目 |
 | POST | `/news/_refresh` | **admin only。** 立即触发一次抓取,不等 3 小时;返回 `{added}` |
+| POST | `/news/_backfill_quality` | **admin only。** 对所有 `quality IS NULL` 的 news_items 跑一遍 LLM 评分;返回 `{scored, kept, dropped, failed}` |
+| POST | `/news/_backfill_furigana` | **admin only。** 对所有 youtube_caption JA jobs 里缺 furigana 的 segments 跑一遍 DeepSeek 标注;返回 `{jobs, annotated}` |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -323,7 +334,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - 启动时 `tokio::fs::read_to_string("<数据目录>/config.json")` → `serde_json::from_str` → fallback 到 `Default`(`base_url=https://api.deepseek.com`、`model=deepseek-chat`、`api_key=""`)
 - `PUT /api/settings/llm` 写内存 → `serde_json::to_string_pretty` → 写同目录 `.tmp` → `tokio::fs::rename` 原子替换
 - API key 字段:空字符串 / 未传都视为"保留现有",只有非空字符串才覆盖。这样前端"留空提交"按钮才不会误清
-- `TtsConfig` 单独持久化到 `<数据目录>/tts.json`,默认 `provider=eleven_labs`、`base_url=https://api.elevenlabs.io`、`voice_id=JBFqnCBsd6RMkjVDRZzb`、`model=eleven_multilingual_v2`、`output_format=mp3_44100_128`。保存规则同 LLM,key 不回传前端。
+- `TtsConfig` 单独持久化到 `<数据目录>/tts.json`,默认 `provider=azure`、`region=eastus`、`voice_id_en=en-US-AriaNeural`、`voice_id_ja=ja-JP-NanamiNeural`、`output_format=audio-48khz-192kbitrate-mono-mp3`。保存规则同 LLM,key 不回传前端。`voice_for_language(lang)` 按 material 语言挑 voice。
 - `AsrConfig` 单独持久化到 `<数据目录>/asr.json`,默认 `provider=remote_faster_whisper`、`base_url=http://127.0.0.1:8765`、`backend_base_url=http://127.0.0.1:9527`、`model=large-v3`、`language=en`、`beam_size=5`、`vad_filter=true`、`condition_on_previous_text=false`、`high_accuracy=true`、`timeout_seconds=7200`。`api_token` 可选,空字符串 / 未传都视为保留现有。
 
 ### 4.8 远程 ASR worker 协议
@@ -376,14 +387,21 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - `GET /api/transcriptions/:id/segments` 会把 `transcript_segment_studies` 左连接到 segment 上,前端用 `segment.study` 展示译文、语法和搭配。
 
 ### 4.10 英语新闻自动抓取(`news_fetcher.rs` + `youtube.rs`)
-- 4 个频道写死在 `news_fetcher::CHANNELS`(BBC News、Bloomberg Originals、The Economist、Financial Times),channel ID 是从各家 YouTube `@handle` 解析出来的。要换频道改这个常量后重启。
+- **8 个频道写死**在 `news_fetcher::CHANNELS`,每个带 `language: "en" | "ja"`:CNBC International / Bloomberg / WSJ / Financial Times(英)+ テレ東BIZ / 日経電子版 / PIVOT 公式 / NewsPicks(日)。Channel ID 从各家 YouTube `@handle` 解析。要换频道改这个常量后重启。
+- DeepSeek prompt 按 `channel.language` 切换:英语版要求抽 phrasal verbs/idioms/collocations,日语版让 LLM 自由抽(慣用句/四字熟語/敬語/N1-N2 副助詞/和制英語 等)。两个 prompt 都返回 `{topic, difficulty, quality, quality_reason, idioms[]}`。
 - 启动延迟 45 秒后跑第一轮,之后每 3 小时一轮。空 `YOUTUBE_API_KEY` 时 task 直接返回 + warn,不影响其他功能。
 - 每轮:对每个频道,把 channel id `UC...` 换成 uploads playlist `UU...`,`playlistItems.list` 取最近 10 条 → 跳过 `news_items` 里已有的 → `videos.list` 批量(单次 50 ID,quota 1 unit)拿 metadata → 抓字幕(用 yt-dlp,详见下条)→ 拿到字幕的视频走 DeepSeek 一次拿 `{topic, difficulty, idioms[8]}` → INSERT。
 - **字幕抓取依赖 `yt-dlp` 二进制**(`brew install yt-dlp` 或 `pip install -U yt-dlp`)。早期实现是直连 YouTube `timedtext` 公开接口,2025 年这个接口已经全面 bot-block(返 200 + 空 body),需要 yt-dlp 维护的 client rotation / 签名解码才能拿到字幕。yt-dlp 落盘 `*.en.json3` 后,Rust 端读回用已有的 `json3_to_segments` 解析,数据格式没变。yt-dlp 没装的话 `fetch_captions` 直接 spawn 失败 + warn,该 news item 入库时 `has_captions=0`,前端列表里不展示。
 - DeepSeek prompt 在 `news_fetcher::system_prompt`,JSON mode 严格输出 8 个 idiom(短语动词 / collocations / 习语,带 anchor sentence 和中文释义 / usage note)。无效 topic 兜底 `other`,difficulty 越界 clamp 1-5,空 phrase 过滤。
 - 配额估算:每轮 4 频道 × 3 次请求(playlist + 1 batch videos + 字幕走非 quota 接口)≈ 12 quota units/轮 × 8 轮/天 ≈ 100 units/天,Data API 每天 10000 免费配额,够用。
 - DeepSeek 调用复用现有 `SharedLlm` 配置,跟 `/api/lookup` 共享 key。
-- **手动触发**:`POST /api/news/_refresh`(admin only)立即跑一次 `run_once`,返回 `{added}`,开发期或刚拿到新 key 时用。
+- **质量过滤**:DeepSeek 在 idiom 调用里顺手返回 1-10 的 quality 分(锚点:9-10=NYT Daily 级,7-8=WSJ explainer,5-6=信息密度低,1-4=vlog 风)。`/api/news` 过滤条件 `quality IS NULL OR quality >= 7`(NULL 透传是为了 schema 升级时老数据不一夜消失,跑一次 `_backfill_quality` 之后阈值才生效)。
+- **Furigana**(日语):导入 JA 材料时 spawn 后台 task 跑 `furigana::generate_for_job`,按 5 段一批让 DeepSeek 给非常用 kanji 加 `<ruby>` 标注。HTML 严格 sanitize(只放行 `<ruby>` / `<rt>`)。Reader 用 toggle 控开关。详见 `docs/news-shadowing.md` §10.7。
+- **手动触发**:
+  - `POST /api/news/_refresh`(admin)立即跑一次抓取
+  - `POST /api/news/_backfill_quality`(admin)给 `quality IS NULL` 的项补打分
+  - `POST /api/news/_backfill_furigana`(admin)给 JA 材料补 furigana
+- **细节文档**:`docs/news-shadowing.md`(频道选择理由、yt-dlp 字幕策略、段落合并算法、质量评分、furigana、添加新语种的步骤等)。
 - **YOUTUBE_API_KEY** 通过环境变量传:
   ```bash
   YOUTUBE_API_KEY="AIza..." ./dev.sh
@@ -395,11 +413,12 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 ### 5.1 路由
 | 路径 | 页面 |
 |---|---|
-| `/` | Library 书架 |
+| `/` | Library 书架(顶部 英语 / 日语 tab,默认上次选择) |
 | `/new` | Editor 创建 |
 | `/m/:id` | Reader 阅读+视频 |
 | `/m/:id/edit` | Editor 编辑 |
-| `/news` | News 英语新闻发现页 |
+| `/news` | 重定向到 `/news/en` |
+| `/news/en` `/news/ja` | News 英 / 日新闻发现页 |
 | `/vocab` | 生词本 |
 | `/review` | 复习 |
 | `/settings` | DeepSeek key |
@@ -462,13 +481,11 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   - Base URL(改用兼容 OpenAI 协议的代理时填这里)
   - 模型(默认 `deepseek-chat`)
   - 保存只 PUT 实际改了的字段;成功后清空 key 输入框,状态徽标刷新
-- **ElevenLabs TTS**(走后端 `/api/settings/tts`)
-  - API Key 输入框(隐藏/显示切换);右上角状态徽标 `● 已配置 / ○ 未配置`,从 `GET /api/settings/tts` 读
-  - 已配置时 placeholder 显示 `已配置 ●●●●●● (留空保留现有 key)`,留空提交不覆盖
-  - Base URL(默认 `https://api.elevenlabs.io`)
-  - Voice ID(默认 `JBFqnCBsd6RMkjVDRZzb`,可改成用户 ElevenLabs Voices 里的 voice id)
-  - 模型(默认 `eleven_multilingual_v2`)
-  - 输出格式(默认 `mp3_44100_128`)
+- **Azure Speech TTS**(走后端 `/api/settings/tts`)
+  - API Key 输入框 = Azure subscription key(隐藏/显示切换);状态徽标同 LLM 模式;留空提交不覆盖
+  - Azure Region:`eastus` / `japaneast` 等,跟 Azure portal 里资源的 Location 字段一致
+  - 英语音色 / 日语音色 ID:默认 `en-US-AriaNeural` / `ja-JP-NanamiNeural`,可换成 https://speech.microsoft.com/portal/voicegallery 里任意 Neural voice
+  - 输出格式(默认 `audio-48khz-192kbitrate-mono-mp3`)
 - **远程 ASR Worker**(走后端 `/api/settings/asr`)
   - Worker Base URL:GPU 机器上的 worker 地址,如 `http://192.168.0.50:8765`
   - 健康检查:从 listen-panel 后端请求 worker 的 `/health` 和 `/v1/capabilities`,用于验证局域网、公网或隧道地址是否可达,并显示 device、compute type、capabilities 和延迟
@@ -484,7 +501,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - 首次访问如果没有用户,前端进入 `/setup`,创建第一个管理员账户。该账户会接管迁移前已有的全部 materials/vocab。
 - 后续局域网用户可在 `/register` 创建普通账户。普通账户默认看到空书架,只能访问自己创建的 materials/vocab/local media;local 材料还会校验 `uploads.user_id`,不能手动绑定别人的上传文件名。
 - 后端用 HttpOnly `listen_panel_session` cookie 保存会话 token;数据库只存 token 的 SHA-256 hash。session 默认 30 天过期。
-- 受保护 API:materials/vocab/media/upload/lookup/tts/transcriptions 都要求登录。DeepSeek/ElevenLabs/ASR 设置只允许 admin 访问,避免局域网匿名用户消耗 key 或查看配置状态。
+- 受保护 API:materials/vocab/media/upload/lookup/tts/transcriptions 都要求登录。DeepSeek/Azure/ASR 设置只允许 admin 访问,避免局域网匿名用户消耗 key 或查看配置状态。
 
 ### 5.11 `api.ts`
 - `request<T>(path, init?)`:统一设 `Content-Type: application/json`(除非传了 FormData,但目前 api.ts 不处理上传)、`!ok` 抛带后端 `{error}` 文案的 Error、204 返回 undefined
@@ -501,10 +518,10 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 ### 5.13 生词朗读
 - 生词卡统一使用 `components/SpeakButton.tsx`,已接入 Reader 高亮弹卡、本篇生词抽屉、全局生词本、复习卡。
 - 朗读策略在 `lib/audio.ts`,按 provider 链依次尝试:
-  1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 ElevenLabs,返回 `audio/mpeg`
+  1. `remote-tts`:请求本机后端 `POST /api/tts/speech`,当前由 Rust 适配层代理 **Azure Speech**(SSML)返回 `audio/mpeg`
   2. `dictionary-mp3`:请求 Free Dictionary API (`https://api.dictionaryapi.dev/api/v2/entries/en/<word>`) 找 `phonetics[].audio` 的 mp3
   3. `browser-speech`:前两档不可用时,自动 fallback 到浏览器 `speechSynthesis`
-- ElevenLabs 音频按 `provider/base_url/voice_id/model/output_format/text` 做 SHA-256 hash;有文章上下文时缓存到 `<数据目录>/tts-cache/material-<material_id>/<provider>_<word-or-phrase>_<hash16>.mp3`,没有文章上下文时缓存到 `<数据目录>/tts-cache/<provider>_<word-or-phrase>_<hash16>.mp3`;命中缓存不再请求 ElevenLabs,不消耗 credits。旧版 `<provider>_<hash>.mp3` 文件仍可读取。失败结果不缓存。清缓存直接删 `<数据目录>/tts-cache/`。
+- Azure 音频按 `provider/region/voice/output_format/language/text` 做 SHA-256 hash;有文章上下文时缓存到 `<数据目录>/tts-cache/material-<material_id>/<provider>_<lang>_<word-or-phrase>_<hash16>.mp3`,没有文章上下文时缓存到 `<数据目录>/tts-cache/<provider>_<lang>_<word-or-phrase>_<hash16>.mp3`。命中缓存不再请求 Azure。失败结果不缓存。清缓存直接删 `<数据目录>/tts-cache/`(换 voice 时缓存自动失效,因 voice 在 hash 里)。
 - Free Dictionary 音频 URL 只做内存缓存(`Map<word, audio|null>`),不写数据库、不落盘。
 - 浏览器朗读按语言选择 fallback,英语 `en-US`,日语 `ja-JP`,语速 `0.9`;不同系统/浏览器的声音会不同。Free Dictionary mp3 只在英语材料启用。若后续要替换底层 TTS,优先扩展后端 `tts.rs` provider,保持前端 `remote-tts` 不变。
 
@@ -576,7 +593,13 @@ worker V1 已提供通用 GPU Job API:
 2. 首次进入 `/setup`,创建管理员账户。迁移前已有材料会归到这个账户。
 3. 打开 http://localhost:19527/settings
 4. 如需调整数据目录,在“数据存储”里填写目录,保存后重启。旧数据不会自动搬迁,需要手动复制旧 `backend/data/` 内容。
-5. 填 DeepSeek API key(申请:https://platform.deepseek.com/api_keys)、ElevenLabs API key(申请:https://elevenlabs.io/app/settings/api-keys)和远程 ASR worker 地址→ 保存。**Key/token 落到数据目录的 `*.json`,不入数据库,不回传前端**
+5. 填以下凭据 → 保存。**Key/token 落到数据目录的 `*.json`,不入数据库,不回传前端**
+   - **DeepSeek API key**:申请 https://platform.deepseek.com/api_keys
+   - **Azure Speech**:申请见下方(免费 500K chars/月,日语 voice 极佳)
+     - 注册 Azure 账户 + 免费订阅:https://azure.microsoft.com/free(信用卡仅身份验证,不自动扣费)
+     - 创建 Speech 资源:https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices(选 Free F0 tier、记下 Region 字符串如 `eastus`)
+     - 从资源页 Keys and Endpoint 取 KEY 1 和 Location/Region,贴到 Settings → Azure Speech 那块
+   - **远程 ASR worker 地址**:GPU 机器上的 worker URL,如 `http://192.168.0.50:8765`
 6. 如要启用 `/news` 自动抓取,**先装 `yt-dlp`**(`brew install yt-dlp` 或 `pip install -U yt-dlp`,YouTube 反爬一直在变,要保持 yt-dlp 是最近版本),再把 `YOUTUBE_API_KEY` 写到项目根目录的 `.env` 文件(`dev.sh` 启动时会自动 source):
    ```bash
    cp .env.example .env
