@@ -289,6 +289,58 @@ function formatTimestamp(ms: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+/// Scans localStorage for any video-progress key tagged with this material id.
+/// Returns the saved playback time in seconds, or null if no entry / 0 / corrupt.
+/// We do a prefix scan rather than reconstruct the source-specific key shape
+/// (local / youtube / bilibili) to avoid duplicating the formatting logic that
+/// lives inside VideoPlayer.
+function findVideoProgressSeconds(materialId: number): number | null {
+  if (typeof window === 'undefined') return null;
+  const prefix = `listen-panel:video-progress:${materialId}:`;
+  for (let i = 0; i < window.localStorage.length; i++) {
+    const key = window.localStorage.key(i);
+    if (!key || !key.startsWith(prefix)) continue;
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(key) ?? 'null') as {
+        time?: unknown;
+      } | null;
+      if (typeof parsed?.time === 'number' && Number.isFinite(parsed.time)) {
+        return parsed.time;
+      }
+    } catch {
+      // ignore corrupt entries
+    }
+  }
+  return null;
+}
+
+/// Given a playback time, find the paragraph index whose segments cover it.
+/// Falls back to the first paragraph ahead of the time, or the last paragraph
+/// if the time is past the end. Pass the raw material text — paragraph
+/// splitting is done inside so callers don't need to mirror the heuristic.
+function findParagraphIndexForTime(
+  segments: TranscriptSegment[],
+  materialText: string,
+  targetMs: number,
+): number | null {
+  if (segments.length === 0) return null;
+  let segIdx = segments.findIndex(
+    (s) => s.start_ms <= targetMs && targetMs < s.end_ms,
+  );
+  if (segIdx < 0) segIdx = segments.findIndex((s) => s.start_ms >= targetMs);
+  if (segIdx < 0) segIdx = segments.length - 1;
+  const target = segments[segIdx];
+  const paragraphs = materialText
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const groups = groupSegmentsForParagraphs(segments, paragraphs);
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i].segments.some((s) => s.id === target.id)) return i;
+  }
+  return null;
+}
+
 function canMergeSegment(
   previous: TranscriptSegment | undefined,
   current: TranscriptSegment,
@@ -701,7 +753,35 @@ export default function Reader() {
   useEffect(() => {
     if (!m) return;
     if (restoredScrollForRef.current === m.id) return;
+
+    // Strategy: if the video has a saved playback time AND segments are loaded,
+    // scroll to the paragraph containing that time — keeps the reading position
+    // in sync with where the user stopped watching. Otherwise fall back to the
+    // last raw article scroll position so plain-text materials still restore.
+    const savedSec = findVideoProgressSeconds(m.id);
+    if (savedSec != null && savedSec > 0 && segments.length === 0) {
+      // Segments still loading; defer — effect will re-fire when they arrive.
+      return;
+    }
+
     restoredScrollForRef.current = m.id;
+
+    if (savedSec != null && savedSec > 0) {
+      const paragraphIdx = findParagraphIndexForTime(
+        segments,
+        m.text || '',
+        savedSec * 1000,
+      );
+      if (paragraphIdx != null) {
+        const frame = window.requestAnimationFrame(() => {
+          const el = document.querySelector(
+            `[data-paragraph="${paragraphIdx}"]`,
+          ) as HTMLElement | null;
+          el?.scrollIntoView({ block: 'start', behavior: 'auto' });
+        });
+        return () => window.cancelAnimationFrame(frame);
+      }
+    }
 
     const savedTop = loadArticleScroll(m.id);
     if (savedTop == null) return;
@@ -715,7 +795,7 @@ export default function Reader() {
       window.cancelAnimationFrame(firstFrame);
       if (nextFrame) window.cancelAnimationFrame(nextFrame);
     };
-  }, [m, restoreArticleScroll]);
+  }, [m, segments, restoreArticleScroll]);
 
   useEffect(() => {
     if (!m) return;
