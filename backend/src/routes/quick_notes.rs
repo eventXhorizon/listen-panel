@@ -26,7 +26,7 @@ use crate::language::Language;
 pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/quick-notes", post(create).get(list))
-        .route("/quick-notes/:id", delete(remove))
+        .route("/quick-notes/:id", delete(remove).patch(update))
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +178,106 @@ async fn remove(
         return Ok(StatusCode::NOT_FOUND);
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateReq {
+    /// Only fields present in the JSON are updated; absent fields are left alone.
+    #[serde(default)]
+    pub translation_zh: Option<String>,
+    #[serde(default)]
+    pub highlights: Option<Vec<Highlight>>,
+    #[serde(default)]
+    pub grammar: Option<Vec<GrammarPoint>>,
+    #[serde(default)]
+    pub source: Option<Option<String>>,
+}
+
+async fn update(
+    State(pool): State<SqlitePool>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateReq>,
+) -> Result<Response> {
+    let existing: Option<Row> = sqlx::query_as(
+        "SELECT id, text, language, translation_zh, highlights_json, grammar_json, source, created_at \
+         FROM quick_notes WHERE id = ? AND user_id = ?",
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&pool)
+    .await?;
+
+    let Some(existing) = existing else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "quick note not found" })),
+        )
+            .into_response());
+    };
+
+    let translation_zh = req
+        .translation_zh
+        .map(|s| s.trim().to_string())
+        .unwrap_or(existing.translation_zh);
+
+    let highlights_json = match req.highlights {
+        Some(items) => {
+            let cleaned: Vec<Highlight> = items
+                .into_iter()
+                .filter(|h| !h.phrase.trim().is_empty() && !h.meaning_zh.trim().is_empty())
+                .map(|h| Highlight {
+                    phrase: h.phrase.trim().to_string(),
+                    meaning_zh: h.meaning_zh.trim().to_string(),
+                    usage_note: h
+                        .usage_note
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                })
+                .collect();
+            serde_json::to_string(&cleaned)?
+        }
+        None => existing.highlights_json,
+    };
+
+    let grammar_json = match req.grammar {
+        Some(items) => {
+            let cleaned: Vec<GrammarPoint> = items
+                .into_iter()
+                .filter(|g| !g.point.trim().is_empty() && !g.explanation_zh.trim().is_empty())
+                .map(|g| GrammarPoint {
+                    point: g.point.trim().to_string(),
+                    explanation_zh: g.explanation_zh.trim().to_string(),
+                })
+                .collect();
+            serde_json::to_string(&cleaned)?
+        }
+        None => existing.grammar_json,
+    };
+
+    let source = match req.source {
+        Some(value) => value
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        None => existing.source,
+    };
+
+    let row: Row = sqlx::query_as(
+        "UPDATE quick_notes \
+            SET translation_zh = ?, highlights_json = ?, grammar_json = ?, source = ? \
+            WHERE id = ? AND user_id = ? \
+            RETURNING id, text, language, translation_zh, highlights_json, grammar_json, source, created_at",
+    )
+    .bind(translation_zh)
+    .bind(highlights_json)
+    .bind(grammar_json)
+    .bind(source)
+    .bind(id)
+    .bind(user.id)
+    .fetch_one(&pool)
+    .await?;
+
+    Ok(Json(row.into_note()).into_response())
 }
 
 struct Analysis {

@@ -190,6 +190,21 @@ export function createQuickNote(data: CreateQuickNote): Promise<QuickNote> {
   });
 }
 
+export function updateQuickNote(
+  id: number,
+  patch: {
+    translation_zh?: string;
+    highlights?: { phrase: string; meaning_zh: string; usage_note?: string }[];
+    grammar?: { point: string; explanation_zh: string }[];
+    source?: string | null;
+  },
+): Promise<QuickNote> {
+  return request<QuickNote>(`/api/quick-notes/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
 export async function deleteQuickNote(id: number): Promise<void> {
   await request<void>(`/api/quick-notes/${id}`, { method: 'DELETE' });
 }

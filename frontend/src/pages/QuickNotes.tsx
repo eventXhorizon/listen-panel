@@ -166,7 +166,14 @@ export default function QuickNotes() {
                 </div>
                 {isOpen && (
                   <div className="mt-3 border-t border-border pt-3">
-                    <ResultView note={note} />
+                    <ResultView
+                      note={note}
+                      onUpdated={(updated) =>
+                        setItems((next) =>
+                          next.map((n) => (n.id === updated.id ? updated : n)),
+                        )
+                      }
+                    />
                   </div>
                 )}
               </li>

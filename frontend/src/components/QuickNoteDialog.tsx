@@ -1,7 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createQuickNote } from '../api';
-import type { MaterialLanguage, QuickNote } from '../types';
+import { Pencil, Plus, X } from 'lucide-react';
+import { createQuickNote, updateQuickNote } from '../api';
+import type {
+  MaterialLanguage,
+  QuickNote,
+  QuickNoteGrammar,
+  QuickNoteHighlight,
+} from '../types';
 import {
   Dialog,
   DialogContent,
@@ -139,7 +145,9 @@ export default function QuickNoteDialog({ onClose, onSaved }: Props) {
             </>
           )}
 
-          {result && <ResultView note={result} />}
+          {result && (
+            <ResultView note={result} onUpdated={setResult} />
+          )}
         </div>
 
         <DialogFooter className="border-t border-border px-6 py-3">
@@ -166,7 +174,35 @@ export default function QuickNoteDialog({ onClose, onSaved }: Props) {
   );
 }
 
-export function ResultView({ note }: { note: QuickNote }) {
+interface ResultViewProps {
+  note: QuickNote;
+  /** When provided, the view can be toggled into edit mode and changes are
+   *  persisted via PATCH. Omit for read-only rendering. */
+  onUpdated?: (updated: QuickNote) => void;
+}
+
+export function ResultView({ note, onUpdated }: ResultViewProps) {
+  const [editing, setEditing] = useState(false);
+
+  // Whenever the underlying note changes, exit edit mode (e.g., user
+  // switched between expanded items on the history page).
+  useEffect(() => {
+    setEditing(false);
+  }, [note.id]);
+
+  if (editing && onUpdated) {
+    return (
+      <EditView
+        note={note}
+        onCancel={() => setEditing(false)}
+        onSaved={(updated) => {
+          onUpdated(updated);
+          setEditing(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -239,6 +275,222 @@ export function ResultView({ note }: { note: QuickNote }) {
           </div>
         </div>
       )}
+      {onUpdated && (
+        <div className="flex justify-end pt-1">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Pencil className="size-3" />
+            编辑
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EditView({
+  note,
+  onCancel,
+  onSaved,
+}: {
+  note: QuickNote;
+  onCancel: () => void;
+  onSaved: (updated: QuickNote) => void;
+}) {
+  const [translation, setTranslation] = useState(note.translation_zh);
+  const [highlights, setHighlights] = useState<QuickNoteHighlight[]>(
+    note.highlights,
+  );
+  const [grammar, setGrammar] = useState<QuickNoteGrammar[]>(note.grammar);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateQuickNote(note.id, {
+        translation_zh: translation.trim(),
+        highlights,
+        grammar,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function patchHighlight(i: number, patch: Partial<QuickNoteHighlight>) {
+    setHighlights((arr) =>
+      arr.map((h, j) => (j === i ? { ...h, ...patch } : h)),
+    );
+  }
+  function patchGrammar(i: number, patch: Partial<QuickNoteGrammar>) {
+    setGrammar((arr) => arr.map((g, j) => (j === i ? { ...g, ...patch } : g)));
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="mb-1 text-xs text-muted-foreground">原文(只读)</div>
+        <p className="text-base leading-relaxed text-foreground">{note.text}</p>
+      </div>
+
+      <label className="block">
+        <div className="mb-1 text-xs text-muted-foreground">中文翻译</div>
+        <textarea
+          value={translation}
+          onChange={(e) => setTranslation(e.target.value)}
+          rows={3}
+          className="block w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-1 focus:ring-ring"
+        />
+      </label>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">重点表达</span>
+          <button
+            type="button"
+            onClick={() =>
+              setHighlights((arr) => [
+                ...arr,
+                { phrase: '', meaning_zh: '', usage_note: undefined },
+              ])
+            }
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Plus className="size-3" />
+            添加
+          </button>
+        </div>
+        <ul className="space-y-2">
+          {highlights.map((h, i) => (
+            <li
+              key={i}
+              className="rounded-md border border-border bg-card px-3 py-2.5"
+            >
+              <div className="mb-1 flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setHighlights((arr) => arr.filter((_, j) => j !== i))
+                  }
+                  aria-label="删除"
+                  className="rounded p-0.5 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+              <input
+                value={h.phrase}
+                onChange={(e) => patchHighlight(i, { phrase: e.target.value })}
+                placeholder="原文短语 / 表达"
+                className="mb-2 block w-full rounded border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <input
+                value={h.meaning_zh}
+                onChange={(e) =>
+                  patchHighlight(i, { meaning_zh: e.target.value })
+                }
+                placeholder="中文含义"
+                className="mb-2 block w-full rounded border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <textarea
+                value={h.usage_note ?? ''}
+                onChange={(e) =>
+                  patchHighlight(i, {
+                    usage_note: e.target.value || undefined,
+                  })
+                }
+                placeholder="(可选)用法说明 / 易混淆"
+                rows={2}
+                className="block w-full resize-y rounded border border-input bg-background px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">语法</span>
+          <button
+            type="button"
+            onClick={() =>
+              setGrammar((arr) => [...arr, { point: '', explanation_zh: '' }])
+            }
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Plus className="size-3" />
+            添加
+          </button>
+        </div>
+        <ul className="space-y-2">
+          {grammar.map((g, i) => (
+            <li
+              key={i}
+              className="rounded-md border border-border bg-card px-3 py-2.5"
+            >
+              <div className="mb-1 flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setGrammar((arr) => arr.filter((_, j) => j !== i))
+                  }
+                  aria-label="删除"
+                  className="rounded p-0.5 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+              <input
+                value={g.point}
+                onChange={(e) => patchGrammar(i, { point: e.target.value })}
+                placeholder="语法点名称(如「定语从句」)"
+                className="mb-2 block w-full rounded border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <textarea
+                value={g.explanation_zh}
+                onChange={(e) =>
+                  patchGrammar(i, { explanation_zh: e.target.value })
+                }
+                placeholder="中文说明"
+                rows={2}
+                className="block w-full resize-y rounded border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {error && (
+        <div className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          {saving ? '保存中...' : '保存'}
+        </button>
+      </div>
     </div>
   );
 }
