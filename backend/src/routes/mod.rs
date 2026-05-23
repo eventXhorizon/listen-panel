@@ -1,5 +1,6 @@
 pub mod asr;
 pub mod auth;
+pub mod backup;
 pub mod health;
 pub mod llm;
 pub mod materials;
@@ -23,6 +24,7 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(llm::router())
         .merge(tts::router())
         .merge(settings::router())
+        .merge(backup::router())
         .merge(news::router())
         .with_state(state)
 }

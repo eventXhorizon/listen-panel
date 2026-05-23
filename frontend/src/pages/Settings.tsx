@@ -663,6 +663,22 @@ export default function Settings() {
           </section>
 
           <section className="bg-card border border-border rounded-lg p-5">
+            <h2 className="text-sm font-medium text-foreground mb-2">数据备份</h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              打包当前数据目录(app.db 一致性快照 + uploads/ + tts-cache/ +
+              JSON 配置)为 .tar.gz 下载。配置文件中的 API key / token 会被脱敏成 ***,
+              恢复后需要在设置页重新填写。包含 uploads 时备份可能较大,
+              请使用网速好的环境。
+            </p>
+            <a
+              href="/api/settings/backup"
+              className="inline-flex items-center px-4 py-2 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85"
+            >
+              导出备份 (.tar.gz)
+            </a>
+          </section>
+
+          <section className="bg-card border border-border rounded-lg p-5">
             <h2 className="text-sm font-medium text-foreground mb-4">播放</h2>
             <Field label="本地视频默认音量">
               <div className="flex items-center gap-3">
