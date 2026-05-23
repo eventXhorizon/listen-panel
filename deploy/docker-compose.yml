@@ -1,0 +1,48 @@
+# Production stack for listen-panel.
+#
+# Pulls pre-built images from ghcr.io. Image tag is supplied via IMAGE_TAG in
+# the sibling .env file — bump that and run ./deploy.sh to roll forward.
+#
+# Data lives in DATA_DIR on the host (bind mount), so app.db / uploads /
+# tts-cache are visible and backup-able outside docker.
+
+services:
+  backend:
+    image: ${IMAGE_REPO}/listen-panel-backend:${IMAGE_TAG}
+    container_name: listen-panel-backend
+    restart: unless-stopped
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      LISTEN_PANEL_DATA_DIR: /data
+    volumes:
+      - ${DATA_DIR}:/data
+    networks:
+      - listen-panel
+    # Backend port is intentionally NOT published — the frontend container
+    # reaches it via the internal bridge network. Uncomment if you need to
+    # hit the API directly from the host for debugging.
+    # ports:
+    #   - "127.0.0.1:9527:9527"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9527/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    image: ${IMAGE_REPO}/listen-panel-frontend:${IMAGE_TAG}
+    container_name: listen-panel-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${PUBLISH_PORT:-19527}:80"
+    networks:
+      - listen-panel
+
+networks:
+  listen-panel:
+    driver: bridge

@@ -1,5 +1,6 @@
 pub mod asr;
 pub mod auth;
+pub mod health;
 pub mod llm;
 pub mod materials;
 pub mod media;

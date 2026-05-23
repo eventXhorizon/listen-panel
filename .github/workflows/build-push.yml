@@ -1,0 +1,100 @@
+name: Build & Push
+
+# Builds backend and frontend images and pushes them to ghcr.io.
+#
+# Tagging strategy — every successful build pushes four tags per image:
+#   - <branch>                       (e.g. main, sanitized)
+#   - latest                         (always)
+#   - <YYYYMMDDhhmm>-<short-sha>     ← grab this and paste into deploy/.env
+#   - <YYYYMMDDhhmm>-<run_id>
+#
+# Pulling images from ghcr.io is unauthenticated because the package is set
+# to Public. If you ever flip it to Private you'll need a PAT-based docker
+# login on the server before `docker compose pull` succeeds.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch / tag / SHA to build (default: triggering ref)"
+        required: false
+        default: ""
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Lowercase owner (ghcr requires lowercase)
+        id: owner
+        run: echo "lc=$(echo '${{ env.IMAGE_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Compute tags
+        id: tags
+        run: |
+          BRANCH="${GITHUB_REF_NAME//\//-}"
+          STAMP="$(date -u +'%Y%m%d-%H%M')"
+          SHORT="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          TAG_VERSION="${STAMP}-${SHORT}"
+          TAG_RUN="${STAMP}-${GITHUB_RUN_ID}"
+          {
+            echo "branch=${BRANCH}"
+            echo "version=${TAG_VERSION}"
+            echo "run=${TAG_RUN}"
+          } >> "$GITHUB_OUTPUT"
+          echo
+          echo "### 🟢 Deploy this tag" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "IMAGE_TAG=${TAG_VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-backend:${{ steps.tags.outputs.branch }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-backend:latest
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-backend:${{ steps.tags.outputs.version }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-backend:${{ steps.tags.outputs.run }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-frontend:${{ steps.tags.outputs.branch }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-frontend:latest
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-frontend:${{ steps.tags.outputs.version }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/listen-panel-frontend:${{ steps.tags.outputs.run }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max

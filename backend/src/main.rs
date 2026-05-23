@@ -82,6 +82,7 @@ async fn main() -> Result<()> {
     );
 
     let app = axum::Router::new()
+        .merge(routes::health::router(state.pool.clone()))
         .nest("/api", routes::api_router(state))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
