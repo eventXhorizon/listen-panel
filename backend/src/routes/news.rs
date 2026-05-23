@@ -27,6 +27,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/news/:id/import", post(import))
         .route("/news/_refresh", post(refresh))
         .route("/news/_backfill_quality", post(backfill_quality))
+        .route("/news/_backfill_furigana", post(backfill_furigana))
 }
 
 const LIST_COLS: &str = "id, yt_video_id, source, channel_id, channel_name, title, description, \
@@ -317,6 +318,64 @@ async fn delete_one(
         return Err(sqlx::Error::RowNotFound.into());
     }
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+struct BackfillFuriganaResp {
+    jobs: usize,
+    annotated: usize,
+}
+
+/// Admin endpoint that runs the furigana task over every Japanese news-import
+/// job whose segments still lack `text_with_furigana`. Picks up legacy material
+/// imported before the furigana feature shipped.
+async fn backfill_furigana(
+    State(state): State<crate::AppState>,
+    user: CurrentUser,
+) -> Result<Json<BackfillFuriganaResp>> {
+    if !user.is_admin {
+        return Err(AppError(anyhow::anyhow!(
+            "only admin can backfill furigana"
+        )));
+    }
+    // Find all youtube_caption JA jobs that have at least one un-annotated segment.
+    let jobs: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT j.id \
+         FROM transcription_jobs j \
+         JOIN materials m ON m.id = j.material_id \
+         WHERE m.language = 'ja' AND j.provider = 'youtube_caption' \
+           AND EXISTS ( \
+             SELECT 1 FROM transcript_segments s \
+             WHERE s.job_id = j.id AND s.text_with_furigana IS NULL \
+           )",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let total_jobs = jobs.len();
+    tracing::info!(total_jobs, "furigana backfill: starting");
+    let mut total_annotated = 0usize;
+    for (job_id,) in jobs {
+        match crate::furigana::generate_for_job(&state.pool, &state.http, &state.llm, job_id).await
+        {
+            Ok(n) => {
+                total_annotated += n;
+                tracing::info!(job_id, annotated = n, "furigana backfill: job done");
+            }
+            Err(e) => {
+                tracing::warn!(job_id, "furigana backfill failed: {e:#}");
+            }
+        }
+    }
+    tracing::info!(
+        total_jobs,
+        total_annotated,
+        "furigana backfill: complete"
+    );
+    Ok(Json(BackfillFuriganaResp {
+        jobs: total_jobs,
+        annotated: total_annotated,
+    }))
 }
 
 #[derive(Debug, Serialize)]
