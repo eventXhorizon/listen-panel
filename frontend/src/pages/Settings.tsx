@@ -333,7 +333,7 @@ export default function Settings() {
             设置
           </h1>
           <p className="text-sm text-muted-foreground">
-            只有管理员可以查看和修改 DeepSeek / ElevenLabs 凭据。
+            只有管理员可以查看和修改 DeepSeek / Azure Speech 凭据。
           </p>
         </div>
       </main>
@@ -461,7 +461,7 @@ export default function Settings() {
 
           <section className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
-              <h2 className="text-sm font-medium text-foreground">ElevenLabs TTS</h2>
+              <h2 className="text-sm font-medium text-foreground">Azure Speech TTS</h2>
               <StatusBadge status={ttsStatus} loadErr={ttsLoadErr} />
             </div>
 
@@ -486,12 +486,12 @@ export default function Settings() {
                 <p className="mt-2 text-xs text-muted-foreground">
                   申请地址:
                   <a
-                    href="https://elevenlabs.io/app/settings/api-keys"
+                    href="https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices"
                     target="_blank"
                     rel="noreferrer"
                     className="underline ml-1"
                   >
-                    elevenlabs.io/app/settings/api-keys
+                    Azure Portal → 创建语音服务
                   </a>
                 </p>
               </Field>
