@@ -34,12 +34,12 @@ pub type SharedLlm = Arc<RwLock<LlmConfig>>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TtsProvider {
-    ElevenLabs,
+    Azure,
 }
 
 impl Default for TtsProvider {
     fn default() -> Self {
-        Self::ElevenLabs
+        Self::Azure
     }
 }
 
@@ -47,58 +47,67 @@ impl Default for TtsProvider {
 pub struct TtsConfig {
     #[serde(default)]
     pub provider: TtsProvider,
+    /// Azure Speech subscription key.
     #[serde(default)]
     pub api_key: String,
-    pub base_url: String,
-    /// Legacy single-voice field. Kept for backward compat with older tts.json files —
-    /// the loader copies it into `voice_id_en` if that's empty. Not exposed in the UI.
+    /// Azure region slug, e.g. "eastus" or "japaneast". Drives the endpoint URL.
     #[serde(default)]
-    pub voice_id: String,
+    pub region: String,
     #[serde(default)]
     pub voice_id_en: String,
     #[serde(default)]
     pub voice_id_ja: String,
-    pub model: String,
+    /// Azure audio output spec, e.g. "audio-48khz-192kbitrate-mono-mp3".
+    #[serde(default)]
     pub output_format: String,
 }
 
 impl Default for TtsConfig {
     fn default() -> Self {
         Self {
-            provider: TtsProvider::ElevenLabs,
+            provider: TtsProvider::Azure,
             api_key: String::new(),
-            base_url: "https://api.elevenlabs.io".to_string(),
-            voice_id: String::new(),
-            voice_id_en: "JBFqnCBsd6RMkjVDRZzb".to_string(),
-            voice_id_ja: "1czwMoQxv9Ni4H7M5hXx".to_string(),
-            model: "eleven_multilingual_v2".to_string(),
-            output_format: "mp3_44100_128".to_string(),
+            region: "eastus".to_string(),
+            voice_id_en: "en-US-AriaNeural".to_string(),
+            voice_id_ja: "ja-JP-NanamiNeural".to_string(),
+            output_format: "audio-48khz-192kbitrate-mono-mp3".to_string(),
         }
-    }
-}
-
-impl TtsConfig {
-    /// Pick the voice ID for the given language. Falls back to en, then to the
-    /// legacy `voice_id` field, then to the en default. Never returns empty
-    /// unless every config slot is empty (caller can treat as misconfigured).
-    pub fn voice_for_language(&self, language: &str) -> &str {
-        let primary = match language {
-            "ja" => &self.voice_id_ja,
-            _ => &self.voice_id_en,
-        };
-        if !primary.is_empty() {
-            return primary;
-        }
-        if !self.voice_id_en.is_empty() {
-            return &self.voice_id_en;
-        }
-        &self.voice_id
     }
 }
 
 impl TtsConfig {
     pub fn configured(&self) -> bool {
-        !self.api_key.is_empty()
+        !self.api_key.is_empty() && !self.region.is_empty()
+    }
+
+    /// Pick the voice ID for the given language. Falls back to en when JA is
+    /// unset or language is unknown.
+    pub fn voice_for_language(&self, language: &str) -> &str {
+        match language {
+            "ja" if !self.voice_id_ja.is_empty() => &self.voice_id_ja,
+            _ => &self.voice_id_en,
+        }
+    }
+
+    /// Azure SSML expects a BCP-47 tag in `xml:lang`. The voice ID itself
+    /// starts with the locale (`en-US-AriaNeural` / `ja-JP-NanamiNeural`),
+    /// so we parse the prefix.
+    pub fn xml_lang_for(&self, language: &str) -> &str {
+        let voice = self.voice_for_language(language);
+        // Locale is always "<lang>-<region>" — find the index of the third '-'.
+        let mut dash_count = 0usize;
+        for (i, ch) in voice.char_indices() {
+            if ch == '-' {
+                dash_count += 1;
+                if dash_count == 2 {
+                    return &voice[..i];
+                }
+            }
+        }
+        match language {
+            "ja" => "ja-JP",
+            _ => "en-US",
+        }
     }
 }
 
@@ -215,17 +224,21 @@ pub async fn load_tts() -> SharedTts {
             TtsConfig::default()
         }
     };
-    // Backward compat: old configs stored a single `voice_id` for English. If
-    // the new per-language fields are empty, copy the legacy field over and
-    // backfill the JA default.
-    if cfg.voice_id_en.is_empty() && !cfg.voice_id.is_empty() {
-        cfg.voice_id_en = cfg.voice_id.clone();
+    // Fill in defaults for any fields the loaded JSON doesn't have (covers
+    // both a fresh install and an old ElevenLabs-era tts.json that was wiped
+    // back to defaults because the provider enum changed).
+    let defaults = TtsConfig::default();
+    if cfg.region.is_empty() {
+        cfg.region = defaults.region;
     }
     if cfg.voice_id_en.is_empty() {
-        cfg.voice_id_en = TtsConfig::default().voice_id_en;
+        cfg.voice_id_en = defaults.voice_id_en;
     }
     if cfg.voice_id_ja.is_empty() {
-        cfg.voice_id_ja = TtsConfig::default().voice_id_ja;
+        cfg.voice_id_ja = defaults.voice_id_ja;
+    }
+    if cfg.output_format.is_empty() {
+        cfg.output_format = defaults.output_format;
     }
     Arc::new(RwLock::new(cfg))
 }

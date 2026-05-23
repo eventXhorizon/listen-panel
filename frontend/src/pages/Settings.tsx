@@ -23,10 +23,9 @@ export default function Settings() {
   const [show, setShow] = useState(false);
   const [ttsStatus, setTtsStatus] = useState<TtsStatus | null>(null);
   const [ttsApiKey, setTtsApiKey] = useState('');
-  const [ttsBaseUrl, setTtsBaseUrl] = useState('');
+  const [ttsRegion, setTtsRegion] = useState('');
   const [ttsVoiceIdEn, setTtsVoiceIdEn] = useState('');
   const [ttsVoiceIdJa, setTtsVoiceIdJa] = useState('');
-  const [ttsModel, setTtsModel] = useState('');
   const [ttsOutputFormat, setTtsOutputFormat] = useState('');
   const [showTtsKey, setShowTtsKey] = useState(false);
   const [asrStatus, setAsrStatus] = useState<AsrStatus | null>(null);
@@ -101,10 +100,9 @@ export default function Settings() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const s = (await res.json()) as TtsStatus;
         setTtsStatus(s);
-        setTtsBaseUrl(s.base_url);
+        setTtsRegion(s.region);
         setTtsVoiceIdEn(s.voice_id_en);
         setTtsVoiceIdJa(s.voice_id_ja);
-        setTtsModel(s.model);
         setTtsOutputFormat(s.output_format);
       } catch (e) {
         setTtsLoadErr((e as Error).message);
@@ -165,10 +163,10 @@ export default function Settings() {
       if (ttsApiKey.trim()) ttsPatch.api_key = ttsApiKey.trim();
       if (
         ttsStatus &&
-        ttsBaseUrl.trim() &&
-        ttsBaseUrl.trim() !== ttsStatus.base_url
+        ttsRegion.trim() &&
+        ttsRegion.trim() !== ttsStatus.region
       ) {
-        ttsPatch.base_url = ttsBaseUrl.trim();
+        ttsPatch.region = ttsRegion.trim();
       }
       if (
         ttsStatus &&
@@ -183,9 +181,6 @@ export default function Settings() {
         ttsVoiceIdJa.trim() !== ttsStatus.voice_id_ja
       ) {
         ttsPatch.voice_id_ja = ttsVoiceIdJa.trim();
-      }
-      if (ttsStatus && ttsModel.trim() && ttsModel.trim() !== ttsStatus.model) {
-        ttsPatch.model = ttsModel.trim();
       }
       if (
         ttsStatus &&
@@ -501,38 +496,29 @@ export default function Settings() {
                 </p>
               </Field>
 
-              <Field label="Base URL">
+              <Field label="Azure Region">
                 <input
-                  value={ttsBaseUrl}
-                  onChange={(e) => setTtsBaseUrl(e.target.value)}
-                  placeholder="https://api.elevenlabs.io"
+                  value={ttsRegion}
+                  onChange={(e) => setTtsRegion(e.target.value)}
+                  placeholder="eastus"
                   className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
 
-              <Field label="英语音色 ID">
+              <Field label="英语音色">
                 <input
                   value={ttsVoiceIdEn}
                   onChange={(e) => setTtsVoiceIdEn(e.target.value)}
-                  placeholder="JBFqnCBsd6RMkjVDRZzb"
+                  placeholder="en-US-AriaNeural"
                   className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
 
-              <Field label="日语音色 ID">
+              <Field label="日语音色">
                 <input
                   value={ttsVoiceIdJa}
                   onChange={(e) => setTtsVoiceIdJa(e.target.value)}
-                  placeholder="1czwMoQxv9Ni4H7M5hXx"
-                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
-                />
-              </Field>
-
-              <Field label="模型">
-                <input
-                  value={ttsModel}
-                  onChange={(e) => setTtsModel(e.target.value)}
-                  placeholder="eleven_multilingual_v2"
+                  placeholder="ja-JP-NanamiNeural"
                   className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
@@ -541,7 +527,7 @@ export default function Settings() {
                 <input
                   value={ttsOutputFormat}
                   onChange={(e) => setTtsOutputFormat(e.target.value)}
-                  placeholder="mp3_44100_128"
+                  placeholder="audio-48khz-192kbitrate-mono-mp3"
                   className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>

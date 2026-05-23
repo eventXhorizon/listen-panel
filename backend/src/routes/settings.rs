@@ -35,10 +35,9 @@ pub struct LlmStatus {
 pub struct TtsStatus {
     pub configured: bool,
     pub provider: TtsProvider,
-    pub base_url: String,
+    pub region: String,
     pub voice_id_en: String,
     pub voice_id_ja: String,
-    pub model: String,
     pub output_format: String,
 }
 
@@ -107,10 +106,9 @@ pub struct UpdateLlm {
 pub struct UpdateTts {
     /// Empty string or absent leaves the existing key unchanged.
     pub api_key: Option<String>,
-    pub base_url: Option<String>,
+    pub region: Option<String>,
     pub voice_id_en: Option<String>,
     pub voice_id_ja: Option<String>,
-    pub model: Option<String>,
     pub output_format: Option<String>,
 }
 
@@ -199,10 +197,9 @@ async fn get_tts(State(tts): State<SharedTts>, user: CurrentUser) -> axum::respo
     Json(TtsStatus {
         configured: g.configured(),
         provider: g.provider.clone(),
-        base_url: g.base_url.clone(),
+        region: g.region.clone(),
         voice_id_en: g.voice_id_en.clone(),
         voice_id_ja: g.voice_id_ja.clone(),
-        model: g.model.clone(),
         output_format: g.output_format.clone(),
     })
     .into_response()
@@ -224,10 +221,10 @@ async fn put_tts(
                 g.api_key = trimmed.to_string();
             }
         }
-        if let Some(b) = patch.base_url {
-            let trimmed = b.trim();
+        if let Some(r) = patch.region {
+            let trimmed = r.trim();
             if !trimmed.is_empty() {
-                g.base_url = trimmed.to_string();
+                g.region = trimmed.to_string();
             }
         }
         if let Some(v) = patch.voice_id_en {
@@ -240,12 +237,6 @@ async fn put_tts(
             let trimmed = v.trim();
             if !trimmed.is_empty() {
                 g.voice_id_ja = trimmed.to_string();
-            }
-        }
-        if let Some(m) = patch.model {
-            let trimmed = m.trim();
-            if !trimmed.is_empty() {
-                g.model = trimmed.to_string();
             }
         }
         if let Some(f) = patch.output_format {
@@ -262,10 +253,9 @@ async fn put_tts(
     Ok(Json(TtsStatus {
         configured: snapshot.configured(),
         provider: snapshot.provider,
-        base_url: snapshot.base_url,
+        region: snapshot.region,
         voice_id_en: snapshot.voice_id_en,
         voice_id_ja: snapshot.voice_id_ja,
-        model: snapshot.model,
         output_format: snapshot.output_format,
     }))
     .map(axum::response::IntoResponse::into_response)

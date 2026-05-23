@@ -140,11 +140,10 @@ export interface LlmStatus {
 
 export interface TtsStatus {
   configured: boolean;
-  provider: 'eleven_labs';
-  base_url: string;
+  provider: 'azure';
+  region: string;
   voice_id_en: string;
   voice_id_ja: string;
-  model: string;
   output_format: string;
 }
 

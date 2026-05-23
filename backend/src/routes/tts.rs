@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tokio::fs;
@@ -30,12 +30,6 @@ struct SpeechRequest {
     material_id: Option<i64>,
     #[serde(default)]
     language: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ElevenLabsRequest<'a> {
-    text: &'a str,
-    model_id: &'a str,
 }
 
 async fn speech(
@@ -85,13 +79,13 @@ async fn speech(
         .unwrap_or(Language::English.code());
 
     match cfg.provider {
-        TtsProvider::ElevenLabs => {
-            cached_elevenlabs_speech(&http, &cfg, text, material_id, language).await
+        TtsProvider::Azure => {
+            cached_azure_speech(&http, &cfg, text, material_id, language).await
         }
     }
 }
 
-async fn cached_elevenlabs_speech(
+async fn cached_azure_speech(
     http: &reqwest::Client,
     cfg: &crate::config::TtsConfig,
     text: &str,
@@ -99,11 +93,6 @@ async fn cached_elevenlabs_speech(
     language: &str,
 ) -> Result<Response> {
     let cache_path = cache_path(cfg, text, material_id, language);
-    let legacy_cache_path = if language == Language::English.code() {
-        Some(legacy_cache_path(cfg, text, material_id))
-    } else {
-        None
-    };
     match fs::read(&cache_path).await {
         Ok(bytes) => {
             tracing::debug!(path = %cache_path.display(), "tts cache hit");
@@ -117,23 +106,8 @@ async fn cached_elevenlabs_speech(
             );
         }
     }
-    if let Some(legacy_cache_path) = legacy_cache_path.filter(|path| path != &cache_path) {
-        match fs::read(&legacy_cache_path).await {
-            Ok(bytes) => {
-                tracing::debug!(path = %legacy_cache_path.display(), "tts legacy cache hit");
-                return Ok(audio_response(Bytes::from(bytes)));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                tracing::warn!(
-                    path = %legacy_cache_path.display(),
-                    "failed to read legacy tts cache entry: {e}"
-                );
-            }
-        }
-    }
 
-    let bytes = match elevenlabs_speech(http, cfg, text, language).await? {
+    let bytes = match azure_speech(http, cfg, text, language).await? {
         Ok(bytes) => bytes,
         Err(response) => return Ok(response),
     };
@@ -146,25 +120,35 @@ async fn cached_elevenlabs_speech(
     Ok(audio_response(bytes))
 }
 
-async fn elevenlabs_speech(
+async fn azure_speech(
     http: &reqwest::Client,
     cfg: &crate::config::TtsConfig,
     text: &str,
     language: &str,
 ) -> Result<std::result::Result<Bytes, Response>> {
-    let base_url = cfg.base_url.trim_end_matches('/');
-    let voice_id = cfg.voice_for_language(language);
-    let url = format!(
-        "{base_url}/v1/text-to-speech/{}?output_format={}",
-        voice_id, cfg.output_format
+    let region = cfg.region.trim();
+    if region.is_empty() {
+        return Ok(Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Azure region not configured; set it on the Settings page",
+        )
+            .into_response()));
+    }
+    let url = format!("https://{region}.tts.speech.microsoft.com/cognitiveservices/v1");
+    let voice = cfg.voice_for_language(language);
+    let xml_lang = cfg.xml_lang_for(language);
+    let ssml = format!(
+        "<speak version='1.0' xml:lang='{xml_lang}'><voice name='{voice}'>{}</voice></speak>",
+        escape_xml(text)
     );
+
     let res = http
-        .post(url)
-        .header("xi-api-key", &cfg.api_key)
-        .json(&ElevenLabsRequest {
-            text,
-            model_id: &cfg.model,
-        })
+        .post(&url)
+        .header("Ocp-Apim-Subscription-Key", &cfg.api_key)
+        .header("Content-Type", "application/ssml+xml")
+        .header("X-Microsoft-OutputFormat", &cfg.output_format)
+        .header("User-Agent", "listen-panel")
+        .body(ssml)
         .send()
         .await?;
 
@@ -172,10 +156,10 @@ async fn elevenlabs_speech(
         let status = res.status();
         let body = res.text().await.unwrap_or_default();
         let msg = if body.trim().is_empty() {
-            format!("ElevenLabs returned {status}")
+            format!("Azure Speech returned {status}")
         } else {
             format!(
-                "ElevenLabs returned {status}: {}",
+                "Azure Speech returned {status}: {}",
                 body.chars().take(300).collect::<String>()
             )
         };
@@ -184,6 +168,21 @@ async fn elevenlabs_speech(
     }
 
     Ok(Ok(res.bytes().await?))
+}
+
+fn escape_xml(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\'' => out.push_str("&apos;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn cache_path(
@@ -203,17 +202,6 @@ fn cache_path(
     cache_dir_for_material(material_id).join(filename)
 }
 
-fn legacy_cache_path(
-    cfg: &crate::config::TtsConfig,
-    text: &str,
-    material_id: Option<i64>,
-) -> PathBuf {
-    let provider = tts_provider_name(cfg);
-    let hash = legacy_cache_key_hash(cfg, text);
-    let filename = format!("{provider}_{hash}.mp3");
-    cache_dir_for_material(material_id).join(filename)
-}
-
 fn cache_dir_for_material(material_id: Option<i64>) -> PathBuf {
     match material_id {
         Some(id) => crate::paths::tts_cache_dir().join(format!("material-{id}")),
@@ -223,48 +211,27 @@ fn cache_dir_for_material(material_id: Option<i64>) -> PathBuf {
 
 fn tts_provider_name(cfg: &crate::config::TtsConfig) -> &'static str {
     match cfg.provider {
-        TtsProvider::ElevenLabs => "eleven_labs",
+        TtsProvider::Azure => "azure",
     }
 }
 
 fn cache_key_hash(cfg: &crate::config::TtsConfig, text: &str, language: &str) -> String {
-    hash_cache_parts(cfg, text, Some(Language::normalize(language)))
-}
-
-fn legacy_cache_key_hash(cfg: &crate::config::TtsConfig, text: &str) -> String {
-    hash_cache_parts(cfg, text, None)
-}
-
-fn hash_cache_parts(cfg: &crate::config::TtsConfig, text: &str, language: Option<&str>) -> String {
-    let provider = match cfg.provider {
-        TtsProvider::ElevenLabs => "eleven_labs",
-    };
-    // Use the language-aware voice so EN and JA outputs of the same text cache
-    // to different files. The legacy path (language=None) falls back to the
-    // historical voice_id field for cache-key continuity.
-    let voice = match language {
-        Some(lang) => cfg.voice_for_language(lang),
-        None => cfg.voice_id.as_str(),
-    };
+    let lang = Language::normalize(language);
+    let voice = cfg.voice_for_language(lang);
     let mut hasher = Sha256::new();
     for part in [
-        provider,
-        cfg.base_url.trim_end_matches('/'),
+        tts_provider_name(cfg),
+        cfg.region.as_str(),
         voice,
-        cfg.model.as_str(),
         cfg.output_format.as_str(),
+        lang,
     ] {
         hasher.update(part.as_bytes());
         hasher.update([0]);
     }
-    if let Some(language) = language {
-        hasher.update(language.as_bytes());
-        hasher.update([0]);
-    }
     hasher.update(text.as_bytes());
     hasher.update([0]);
-    let hash = hasher.finalize();
-    format!("{hash:x}")
+    format!("{:x}", hasher.finalize())
 }
 
 fn text_slug(text: &str) -> String {
@@ -341,13 +308,8 @@ mod tests {
         let path = cache_path(&cfg, "spiritual drain", Some(42), "en");
         let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
         assert!(path.to_string_lossy().contains("material-42"));
-        assert!(name.starts_with("eleven_labs_en_spiritual-drain_"));
+        assert!(name.starts_with("azure_en_spiritual-drain_"));
         assert!(name.ends_with(".mp3"));
-
-        let legacy = legacy_cache_path(&cfg, "spiritual drain", Some(42));
-        let legacy_name = legacy.file_name().and_then(|v| v.to_str()).unwrap_or("");
-        assert!(legacy_name.starts_with("eleven_labs_"));
-        assert!(!legacy_name.contains("spiritual-drain"));
     }
 
     #[test]
@@ -355,6 +317,6 @@ mod tests {
         let cfg = crate::config::TtsConfig::default();
         let path = cache_path(&cfg, "こんにちは", Some(42), "ja");
         let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
-        assert!(name.starts_with("eleven_labs_ja_こんにちは_"));
+        assert!(name.starts_with("azure_ja_こんにちは_"));
     }
 }
