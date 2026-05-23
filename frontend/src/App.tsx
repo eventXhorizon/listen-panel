@@ -16,6 +16,7 @@ import Reader from './pages/Reader';
 import News from './pages/News';
 import Vocab from './pages/Vocab';
 import Notes from './pages/Notes';
+import QuickNotes from './pages/QuickNotes';
 import Review from './pages/Review';
 import Settings from './pages/Settings';
 
@@ -37,6 +38,7 @@ export default function App() {
               <Route path="news/:lang" element={<News />} />
               <Route path="vocab" element={<Vocab />} />
               <Route path="notes" element={<Notes />} />
+              <Route path="quick-notes" element={<QuickNotes />} />
               <Route path="review" element={<Review />} />
               <Route path="settings" element={<Settings />} />
             </Route>

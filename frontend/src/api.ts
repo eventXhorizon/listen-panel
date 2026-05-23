@@ -1,6 +1,7 @@
 import type {
   CreateMaterial,
   CreateMaterialNote,
+  CreateQuickNote,
   CreateVocab,
   AsrHealthCheckStatus,
   AuthStatus,
@@ -12,6 +13,7 @@ import type {
   NewsItemSummary,
   NewsSource,
   NewsTopic,
+  QuickNote,
   TranscriptionJob,
   User,
   VocabEntry,
@@ -173,6 +175,23 @@ export function updateNote(
 
 export async function deleteNote(id: number): Promise<void> {
   await request<void>(`/api/notes/${id}`, { method: 'DELETE' });
+}
+
+// Quick notes
+
+export function listQuickNotes(): Promise<QuickNote[]> {
+  return request<QuickNote[]>('/api/quick-notes');
+}
+
+export function createQuickNote(data: CreateQuickNote): Promise<QuickNote> {
+  return request<QuickNote>('/api/quick-notes', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteQuickNote(id: number): Promise<void> {
+  await request<void>(`/api/quick-notes/${id}`, { method: 'DELETE' });
 }
 
 // Auth

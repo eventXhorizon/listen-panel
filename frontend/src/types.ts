@@ -265,3 +265,31 @@ export interface AuthStatus {
   needs_setup: boolean;
   user: User | null;
 }
+
+export interface QuickNoteHighlight {
+  phrase: string;
+  meaning_zh: string;
+  usage_note?: string;
+}
+
+export interface QuickNoteGrammar {
+  point: string;
+  explanation_zh: string;
+}
+
+export interface QuickNote {
+  id: number;
+  text: string;
+  language: MaterialLanguage;
+  translation_zh: string;
+  highlights: QuickNoteHighlight[];
+  grammar: QuickNoteGrammar[];
+  source?: string;
+  created_at: string;
+}
+
+export interface CreateQuickNote {
+  text: string;
+  language: MaterialLanguage;
+  source?: string;
+}

@@ -7,6 +7,7 @@ pub mod materials;
 pub mod media;
 pub mod news;
 pub mod notes;
+pub mod quick_notes;
 pub mod settings;
 pub mod tts;
 pub mod vocab;
@@ -26,5 +27,6 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(settings::router())
         .merge(backup::router())
         .merge(news::router())
+        .merge(quick_notes::router())
         .with_state(state)
 }

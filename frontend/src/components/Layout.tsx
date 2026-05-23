@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, matchPath, useLocation, useNavigate } from 'react-router-dom';
-import { LogOut, Plus, Settings as SettingsIcon, User } from 'lucide-react';
+import { LogOut, Pencil, Plus, Settings as SettingsIcon, User } from 'lucide-react';
 import { useAuth } from '../lib/auth-context';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,12 +12,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import QuickNoteDialog from './QuickNoteDialog';
 
 const NAV_ITEMS = [
   { to: '/', label: '书架', end: true },
   { to: '/news', label: '新闻', end: false },
   { to: '/vocab', label: '生词本', end: false },
   { to: '/notes', label: '笔记', end: false },
+  { to: '/quick-notes', label: '随手记', end: false },
   { to: '/review', label: '复习', end: false },
 ];
 
@@ -32,6 +35,19 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const fullscreen = isFullscreenRoute(location.pathname);
+  const [quickNoteOpen, setQuickNoteOpen] = useState(false);
+
+  // Global Cmd/Ctrl + Shift + J opens the quick-note dialog from any page.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        setQuickNoteOpen(true);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const displayName = auth.user?.display_name ?? auth.user?.username ?? '';
   const avatarInitial = displayName.trim().charAt(0).toUpperCase() || '?';
@@ -115,6 +131,24 @@ export default function Layout() {
       <div className="flex-1 flex flex-col min-h-0">
         <Outlet />
       </div>
+
+      {/* Floating quick-note button. Visible on every page including
+          fullscreen routes like Reader/Editor, so the user can jot down a
+          sentence they saw elsewhere without losing context. */}
+      <button
+        type="button"
+        onClick={() => setQuickNoteOpen(true)}
+        aria-label="随手记 (⇧⌘J)"
+        title="随手记 (⇧⌘J)"
+        className="fixed bottom-5 left-5 z-40 inline-flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground shadow-lg shadow-black/15 transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      >
+        <Pencil className="size-3.5" />
+        随手记
+      </button>
+
+      {quickNoteOpen && (
+        <QuickNoteDialog onClose={() => setQuickNoteOpen(false)} />
+      )}
     </div>
   );
 }
