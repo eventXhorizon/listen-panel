@@ -22,7 +22,8 @@ use crate::study::{SegmentStudyView, parse_study_view};
 const JOB_SELECT_COLS: &str = "id, user_id, material_id, provider, model, language, \
     status, progress, error, study_status, study_error, study_progress, study_stage, \
     created_at, updated_at, completed_at";
-const SEGMENT_SELECT_COLS: &str = "s.id, s.job_id, s.material_id, s.start_ms, s.end_ms, s.text";
+const SEGMENT_SELECT_COLS: &str =
+    "s.id, s.job_id, s.material_id, s.start_ms, s.end_ms, s.text, s.text_with_furigana";
 const PARAGRAPH_GAP_SECONDS: f64 = 1.8;
 const PARAGRAPH_MIN_CHARS: usize = 360;
 const PARAGRAPH_TARGET_CHARS: usize = 700;
@@ -57,6 +58,8 @@ struct TranscriptSegmentWithStudy {
     end_ms: i64,
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    text_with_furigana: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     study: Option<SegmentStudyView>,
 }
 
@@ -68,6 +71,7 @@ struct TranscriptSegmentRow {
     start_ms: i64,
     end_ms: i64,
     text: String,
+    text_with_furigana: Option<String>,
     translation_zh: Option<String>,
     grammar_points: Option<String>,
     usage_points: Option<String>,
@@ -220,6 +224,7 @@ async fn segments(
             start_ms: row.start_ms,
             end_ms: row.end_ms,
             text: row.text,
+            text_with_furigana: row.text_with_furigana,
             study: parse_study_view(
                 row.id,
                 row.translation_zh,

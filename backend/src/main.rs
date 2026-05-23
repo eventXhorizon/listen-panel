@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod furigana;
 mod language;
 mod models;
 mod news_fetcher;

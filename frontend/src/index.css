@@ -155,3 +155,16 @@
     text-rendering: optimizeLegibility;
   }
 }
+
+/* Reader furigana rendering. <ruby> base text is the kanji, <rt> is the small
+ * kana on top. We give <rt> a fraction of the body font size and damp the line
+ * height so a paragraph with ruby doesn't get visually stretched vs one without. */
+.reader-ruby {
+  line-height: 2;
+}
+.reader-ruby ruby rt {
+  font-size: 0.55em;
+  color: var(--muted-foreground);
+  font-weight: 400;
+  margin-bottom: 0.05em;
+}

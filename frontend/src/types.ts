@@ -244,6 +244,8 @@ export interface TranscriptSegment {
   start_ms: number;
   end_ms: number;
   text: string;
+  /** Ruby-annotated HTML for Japanese segments. Falls back to `text` when absent. */
+  text_with_furigana?: string;
   study?: SegmentStudy;
 }
 

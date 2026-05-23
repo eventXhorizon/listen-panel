@@ -275,6 +275,27 @@ async fn import(
         }
     });
 
+    // For Japanese materials, also spawn the furigana annotation task. Runs
+    // in parallel with the study task and writes ruby HTML to
+    // `transcript_segments.text_with_furigana`.
+    if news.language == "ja" {
+        let furi_state = state.clone();
+        let furi_job_id = job_id;
+        tokio::spawn(async move {
+            match crate::furigana::generate_for_job(
+                &furi_state.pool,
+                &furi_state.http,
+                &furi_state.llm,
+                furi_job_id,
+            )
+            .await
+            {
+                Ok(n) => tracing::info!(job_id = furi_job_id, annotated = n, "furigana done"),
+                Err(e) => tracing::warn!(job_id = furi_job_id, "furigana failed: {e:#}"),
+            }
+        });
+    }
+
     Ok(Json(material))
 }
 

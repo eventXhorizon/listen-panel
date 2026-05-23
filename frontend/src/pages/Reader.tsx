@@ -204,6 +204,25 @@ function studyVisibleKey(materialId: number): string {
   return `${STUDY_VISIBLE_PREFIX}${materialId}`;
 }
 
+const FURIGANA_KEY = 'listen-panel:furigana-on';
+
+function loadFuriganaOn(): boolean {
+  try {
+    const raw = localStorage.getItem(FURIGANA_KEY);
+    return raw == null ? true : raw === '1';
+  } catch {
+    return true;
+  }
+}
+
+function saveFuriganaOn(on: boolean) {
+  try {
+    localStorage.setItem(FURIGANA_KEY, on ? '1' : '0');
+  } catch {
+    // best-effort
+  }
+}
+
 function loadStudyVisible(materialId: number): boolean {
   try {
     return window.localStorage.getItem(studyVisibleKey(materialId)) === '1';
@@ -413,6 +432,7 @@ export default function Reader() {
   const [vocab, setVocab] = useState<VocabEntry[]>([]);
   const [leftPct, setLeftPct] = useState(50);
   const [highlightOn, setHighlightOn] = useState(true);
+  const [furiganaOn, setFuriganaOn] = useState<boolean>(() => loadFuriganaOn());
   const [pending, setPending] = useState<PendingAdd | null>(null);
   const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
   const [showVocabPanel, setShowVocabPanel] = useState(false);
@@ -880,6 +900,25 @@ export default function Reader() {
             >
               高亮
             </button>
+            {m.language === 'ja' && (
+              <button
+                onClick={() => {
+                  setFuriganaOn((v) => {
+                    const next = !v;
+                    saveFuriganaOn(next);
+                    return next;
+                  });
+                }}
+                title={furiganaOn ? '关闭假名标注' : '开启假名标注'}
+                className={`inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-xs font-medium transition ${
+                  furiganaOn
+                    ? 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'
+                    : 'border-border bg-card text-foreground/85 hover:border-border hover:bg-accent/50'
+                }`}
+              >
+                假名
+              </button>
+            )}
             <button
               onClick={() => setLeftPct(50)}
               title="重置分栏比例 50:50"
@@ -1124,6 +1163,7 @@ export default function Reader() {
                     language={m.language}
                     vocab={vocab}
                     highlightOn={highlightOn}
+                    furiganaOn={furiganaOn}
                     paragraphStyle={paragraphStyle}
                     showStudy={showStudy}
                     note={notesByTarget.get(
@@ -1553,6 +1593,7 @@ function TranscriptSegmentBlock({
   language,
   vocab,
   highlightOn,
+  furiganaOn,
   paragraphStyle,
   showStudy,
   note,
@@ -1567,6 +1608,7 @@ function TranscriptSegmentBlock({
   language: MaterialLanguage;
   vocab: VocabEntry[];
   highlightOn: boolean;
+  furiganaOn: boolean;
   paragraphStyle: CSSProperties;
   showStudy: boolean;
   note?: MaterialNote;
@@ -1626,9 +1668,29 @@ function TranscriptSegmentBlock({
           }}
         />
       </div>
-      <p className="text-foreground" style={paragraphStyle}>
-        {highlightOn ? highlightText(text, vocab, materialId, language) : text}
-      </p>
+      {(() => {
+        // Furigana mode for Japanese: render server-sanitized ruby HTML.
+        // When the LLM hasn't filled in furigana yet (or any segment is missing
+        // it), fall back to plain text + vocab highlight.
+        const furiganaHtml =
+          furiganaOn && language === 'ja' && segments.every((s) => s.text_with_furigana)
+            ? segments.map((s) => s.text_with_furigana!).join(' ')
+            : null;
+        if (furiganaHtml) {
+          return (
+            <p
+              className="text-foreground reader-ruby"
+              style={paragraphStyle}
+              dangerouslySetInnerHTML={{ __html: furiganaHtml }}
+            />
+          );
+        }
+        return (
+          <p className="text-foreground" style={paragraphStyle}>
+            {highlightOn ? highlightText(text, vocab, materialId, language) : text}
+          </p>
+        );
+      })()}
       {showStudy && studyItems.map(({ segment, study }) => (
         <div
           key={segment.id}
