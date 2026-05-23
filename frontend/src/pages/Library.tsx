@@ -18,7 +18,29 @@ const SOURCE_LABEL: Record<SourceType, string> = {
   bilibili: 'Bilibili',
 };
 
-const LANGUAGE_ORDER: MaterialLanguage[] = ['ja', 'en'];
+const LANG_TABS: { value: MaterialLanguage; label: string }[] = [
+  { value: 'en', label: '英语' },
+  { value: 'ja', label: '日语' },
+];
+
+const LIB_LANG_KEY = 'listen-panel:library-lang';
+
+function loadInitialLang(): MaterialLanguage {
+  try {
+    const v = localStorage.getItem(LIB_LANG_KEY);
+    return v === 'ja' ? 'ja' : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+function saveLang(v: MaterialLanguage) {
+  try {
+    localStorage.setItem(LIB_LANG_KEY, v);
+  } catch {
+    /* best-effort */
+  }
+}
 
 function formatRelative(iso: string): string {
   const d = new Date(iso).getTime();
@@ -38,6 +60,7 @@ export default function Library() {
   const [items, setItems] = useState<Material[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
+  const [language, setLanguage] = useState<MaterialLanguage>(loadInitialLang);
   const [lastOpened, setLastOpened] = useState<Record<number, number>>({});
 
   async function refresh() {
@@ -67,41 +90,37 @@ export default function Library() {
     refresh();
   }
 
-  const grouped = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? items.filter(
-          (m) =>
-            m.title.toLowerCase().includes(q) ||
-            m.text.toLowerCase().includes(q),
-        )
-      : items;
+  // Count items per language (independent of search filter) — used in tab labels.
+  const langCounts = useMemo(() => {
+    const c: Record<MaterialLanguage, number> = { en: 0, ja: 0 };
+    for (const m of items) c[m.language] += 1;
+    return c;
+  }, [items]);
 
-    const byLang = new Map<MaterialLanguage, Material[]>();
-    for (const m of filtered) {
-      const list = byLang.get(m.language) ?? [];
-      list.push(m);
-      byLang.set(m.language, list);
-    }
-    for (const list of byLang.values()) {
-      list.sort((a, b) => {
+  // Visible list for the currently selected language, after search filter,
+  // sorted by recency (lastOpened || updated_at, newest first).
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return items
+      .filter((m) => m.language === language)
+      .filter((m) =>
+        !q ||
+        m.title.toLowerCase().includes(q) ||
+        m.text.toLowerCase().includes(q),
+      )
+      .sort((a, b) => {
         const la = lastOpened[a.id] ?? new Date(a.updated_at).getTime();
         const lb = lastOpened[b.id] ?? new Date(b.updated_at).getTime();
         return lb - la;
       });
-    }
-    return LANGUAGE_ORDER.flatMap((lang) => {
-      const list = byLang.get(lang);
-      return list && list.length > 0 ? [{ lang, items: list }] : [];
-    });
-  }, [items, query, lastOpened]);
+  }, [items, language, query, lastOpened]);
 
-  const totalShown = grouped.reduce((sum, g) => sum + g.items.length, 0);
+  const langTotal = langCounts[language];
 
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-6xl px-6 py-10">
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-3xl font-medium tracking-tight text-foreground">
               我的书架
@@ -110,8 +129,8 @@ export default function Library() {
               {loading
                 ? '加载中…'
                 : query
-                  ? `${totalShown} / ${items.length} 条材料`
-                  : `${items.length} 条材料`}
+                  ? `${visible.length} / ${langTotal} 条 ${languageLabel(language)} 材料`
+                  : `${langTotal} 条 ${languageLabel(language)} 材料`}
             </p>
           </div>
           <div className="flex w-full max-w-sm items-center gap-2 sm:w-auto">
@@ -125,6 +144,30 @@ export default function Library() {
               />
             </div>
           </div>
+        </div>
+
+        <div className="mb-6 flex items-center gap-1 border-b border-border">
+          {LANG_TABS.map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              onClick={() => {
+                setLanguage(t.value);
+                saveLang(t.value);
+              }}
+              className={cn(
+                '-mb-px border-b-2 px-4 py-2 text-sm transition',
+                language === t.value
+                  ? 'border-primary text-foreground font-medium'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t.label}
+              <span className="ml-1.5 text-xs text-muted-foreground/80">
+                {langCounts[t.value]}
+              </span>
+            </button>
+          ))}
         </div>
 
         {loading && <p className="text-sm text-muted-foreground">加载中…</p>}
@@ -141,32 +184,24 @@ export default function Library() {
           </div>
         )}
 
-        {!loading && items.length > 0 && totalShown === 0 && (
+        {!loading && items.length > 0 && langTotal === 0 && (
+          <p className="text-sm text-muted-foreground">
+            没有 {languageLabel(language)} 材料。去 /news/{language} 加几条试试。
+          </p>
+        )}
+
+        {!loading && langTotal > 0 && visible.length === 0 && query && (
           <p className="text-sm text-muted-foreground">没有匹配 “{query}” 的材料。</p>
         )}
 
-        {!loading && grouped.length > 0 && (
-          <div className="space-y-10">
-            {grouped.map((group) => (
-              <section key={group.lang}>
-                <div className="mb-3 flex items-baseline gap-3">
-                  <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-                    {languageLabel(group.lang)}
-                  </h2>
-                  <span className="text-xs text-muted-foreground/70">
-                    {group.items.length}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {group.items.map((m) => (
-                    <MaterialCard
-                      key={m.id}
-                      material={m}
-                      onDelete={(e) => onDelete(e, m.id)}
-                    />
-                  ))}
-                </div>
-              </section>
+        {!loading && visible.length > 0 && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {visible.map((m) => (
+              <MaterialCard
+                key={m.id}
+                material={m}
+                onDelete={(e) => onDelete(e, m.id)}
+              />
             ))}
           </div>
         )}
