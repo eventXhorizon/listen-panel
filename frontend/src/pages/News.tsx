@@ -336,20 +336,6 @@ function NewsCard({
             {TOPIC_LABEL[item.topic]}
           </Badge>
           <span>难度 {item.difficulty}/5</span>
-          {item.quality != null && (
-            <span
-              title={item.quality_reason ?? undefined}
-              className={cn(
-                item.quality >= 8
-                  ? 'text-primary font-medium'
-                  : item.quality >= 7
-                    ? 'text-foreground/80'
-                    : 'text-muted-foreground',
-              )}
-            >
-              · 质量 {item.quality}/10
-            </span>
-          )}
           <span>·</span>
           <span>{formatRelative(item.published_at)}</span>
         </div>
@@ -359,6 +345,12 @@ function NewsCard({
         {item.description && (
           <p className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
             {item.description}
+          </p>
+        )}
+        {item.quality_reason && (
+          <p className="line-clamp-3 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+            <span className="font-medium text-foreground/80">质量 {item.quality}/10 · </span>
+            {item.quality_reason}
           </p>
         )}
         <div className="mt-auto flex items-center gap-2 pt-2">
