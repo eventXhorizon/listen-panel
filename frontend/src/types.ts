@@ -99,6 +99,9 @@ export interface NewsItemSummary {
   topic: NewsTopic;
   difficulty: number;
   has_captions: number; // 0 | 1
+  quality?: number | null;
+  quality_reason?: string | null;
+  view_count?: number | null;
   fetched_at: string;
   analyzed_at?: string | null;
 }

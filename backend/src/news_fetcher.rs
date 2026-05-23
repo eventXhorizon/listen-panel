@@ -24,9 +24,11 @@ const IDIOMS_PER_VIDEO: usize = 8;
 /// Cap transcript length sent to DeepSeek to keep prompts bounded.
 const TRANSCRIPT_CHAR_CAP: usize = 15_000;
 /// Skip videos outside this duration window (in seconds). Keeps the feed focused on
-/// shadowing-friendly lengths and rejects breaking-news clips, shorts, podcasts.
+/// shadowing-friendly lengths and rejects breaking-news clips and shorts. The upper
+/// bound is generous (60 min) so high-quality long-form content can still get in;
+/// the quality filter does the real curation.
 const MIN_DURATION_SEC: i64 = 180; // 3 minutes
-const MAX_DURATION_SEC: i64 = 1800; // 30 minutes
+const MAX_DURATION_SEC: i64 = 3600; // 60 minutes
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelDef {
@@ -215,6 +217,8 @@ async fn ingest_one(
 
     let mut topic = "other".to_string();
     let mut difficulty: i64 = 3;
+    let mut quality: Option<i64> = None;
+    let mut quality_reason: Option<String> = None;
     let mut idioms: Vec<NewsIdiom> = Vec::new();
     let mut analyzed_at: Option<DateTime<Utc>> = None;
 
@@ -224,6 +228,12 @@ async fn ingest_one(
             Ok(a) => {
                 topic = a.topic;
                 difficulty = a.difficulty;
+                quality = Some(a.quality);
+                quality_reason = if a.quality_reason.is_empty() {
+                    None
+                } else {
+                    Some(a.quality_reason)
+                };
                 idioms = a.idioms;
                 analyzed_at = Some(Utc::now());
             }
@@ -241,8 +251,9 @@ async fn ingest_one(
         "INSERT INTO news_items \
            (yt_video_id, source, channel_id, channel_name, title, description, thumbnail_url, \
             published_at, duration_sec, language, topic, difficulty, has_captions, \
+            quality, quality_reason, view_count, \
             segments_json, idioms_json, analyzed_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(yt_video_id) DO NOTHING",
     )
     .bind(&meta.video_id)
@@ -258,6 +269,9 @@ async fn ingest_one(
     .bind(&topic)
     .bind(difficulty)
     .bind(has_captions_int)
+    .bind(quality)
+    .bind(quality_reason.as_deref())
+    .bind(meta.view_count)
     .bind(&segments_json)
     .bind(&idioms_json)
     .bind(analyzed_at)
@@ -267,7 +281,7 @@ async fn ingest_one(
     Ok(())
 }
 
-fn transcript_for_prompt(segments: &[NewsSegment]) -> String {
+pub fn transcript_for_prompt(segments: &[NewsSegment]) -> String {
     let mut out = String::new();
     for seg in segments {
         if !out.is_empty() {
@@ -291,13 +305,15 @@ fn transcript_for_prompt(segments: &[NewsSegment]) -> String {
 }
 
 #[derive(Debug)]
-struct Analysis {
-    topic: String,
-    difficulty: i64,
-    idioms: Vec<NewsIdiom>,
+pub struct Analysis {
+    pub topic: String,
+    pub difficulty: i64,
+    pub quality: i64,
+    pub quality_reason: String,
+    pub idioms: Vec<NewsIdiom>,
 }
 
-async fn analyze(
+pub async fn analyze(
     http: &reqwest::Client,
     llm: &SharedLlm,
     language: &str,
@@ -359,6 +375,10 @@ fn parse_analysis(content: &str) -> Result<Analysis> {
         #[serde(default)]
         difficulty: serde_json::Value,
         #[serde(default)]
+        quality: serde_json::Value,
+        #[serde(default)]
+        quality_reason: String,
+        #[serde(default)]
         idioms: Vec<RawIdiom>,
     }
     #[derive(Deserialize)]
@@ -387,6 +407,14 @@ fn parse_analysis(content: &str) -> Result<Analysis> {
         .or_else(|| raw.difficulty.as_str().and_then(|s| s.parse().ok()))
         .unwrap_or(3)
         .clamp(1, 5);
+    let quality = raw
+        .quality
+        .as_i64()
+        .or_else(|| raw.quality.as_f64().map(|f| f.round() as i64))
+        .or_else(|| raw.quality.as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(5)
+        .clamp(1, 10);
+    let quality_reason = raw.quality_reason.trim().to_string();
 
     let idioms = raw
         .idioms
@@ -407,15 +435,23 @@ fn parse_analysis(content: &str) -> Result<Analysis> {
     Ok(Analysis {
         topic,
         difficulty,
+        quality,
+        quality_reason,
         idioms,
     })
 }
 
 fn english_system_prompt() -> &'static str {
-    "你是一个为中国英语学习者提取地道英语表达的助手。你会收到一段英语新闻视频的标题和字幕原文,需要:\n\
+    "你是一个为中国英语学习者提取地道英语表达 + 评估学习价值的助手。你会收到一段英语新闻视频的标题和字幕原文,需要:\n\
      1. 判断话题(必须是 finance / politics / tech / culture / other 之一)\n\
      2. 评估学习难度(整数 1-5,综合词汇、语速感和句法复杂度)\n\
-     3. 从原文中挑选 8 个最具学习价值的「地道表达」:\n\
+     3. 评估「学习价值」 quality(整数 1-10),标准是「对真心想用日常英语的中级学习者,这段内容值不值得花 10 分钟跟读」 — 综合语言地道度、信息密度、可迁移到日常对话的程度:\n\
+        - 9-10:NYT Daily / 60 Minutes 级别 — 长留人话术、专业领域语言、思路完整、句式多样\n\
+        - 7-8:WSJ / Bloomberg explainer 级别 — 清晰、有信息、可学习点充足\n\
+        - 5-6:能看但松散,信息密度低、重复、内容空泛\n\
+        - 1-4:vlog 风、宣传、断章碎念、闲聊\n\
+     4. 给出 quality_reason(一句中文,说明为什么给这个分)\n\
+     5. 从原文中挑选 8 个最具学习价值的「地道表达」:\n\
         - 优先选短语动词(phrasal verbs)、固定搭配(collocations)、习语(idioms)、行业说法、隐喻用法\n\
         - 避免单个常见单词,避免字面直白的短语\n\
         - phrase 必须是原文中出现过的多词组合\n\
@@ -424,14 +460,20 @@ fn english_system_prompt() -> &'static str {
         - usage_note 可选,提示什么场景常用 / 注意点 / 易混淆\n\
      输出必须是严格的 JSON,不要 markdown 包裹、不要任何额外解释。\n\
      JSON 结构:\n\
-     {\"topic\":\"...\",\"difficulty\":1-5,\"idioms\":[{\"phrase\":\"...\",\"anchor_sentence\":\"...\",\"meaning_zh\":\"...\",\"usage_note\":\"...\"} × 8]}"
+     {\"topic\":\"...\",\"difficulty\":1-5,\"quality\":1-10,\"quality_reason\":\"...\",\"idioms\":[{\"phrase\":\"...\",\"anchor_sentence\":\"...\",\"meaning_zh\":\"...\",\"usage_note\":\"...\"} × 8]}"
 }
 
 fn japanese_system_prompt() -> &'static str {
-    "あなたは中国語话者の日本語学习者向けに、地道な日本語表現を抽出するアシスタントです。日本語ニュース動画のタイトルと字幕原文を受け取り、以下を行ってください:\n\
+    "あなたは中国語话者の日本語学习者向けに、地道な日本語表現の抽出 + 学习価値の評価を行うアシスタントです。日本語ニュース動画のタイトルと字幕原文を受け取り、以下を行ってください:\n\
      1. トピックを判定(必ず finance / politics / tech / culture / other のいずれか)\n\
      2. 学习難易度を整数 1-5 で評価(语汇、话速感、文型の複雑さを総合)\n\
-     3. 原文から日本語学习者にとって最も価値のある「自然な表現」を 8 つ選びます:\n\
+     3.「学习価値」 quality を整数 1-10 で評価。「日常会話で使える日本語を真剣に身につけたい中級学习者にとって、この 10 分間をシャドーイングする価値があるか」— 自然な言い回しの密度、情報量、日常会話への転用しやすさを総合:\n\
+        - 9-10:NHK 解説 / 日経モーニングプラス級 — 専門語彙が豊富、思考が完結、文型のバリエーション豊か\n\
+        - 7-8:テレ東BIZ / NewsPicks explainer 級 — 明瞭、情報あり、学习ポイント十分\n\
+        - 5-6:見られるが散漫、情報密度低、繰り返し、内容が薄い\n\
+        - 1-4:vlog 風、宣伝、断片的なつぶやき、雑談\n\
+     4. quality_reason を一文の中文で記述(なぜその点数なのか)\n\
+     5. 原文から日本語学习者にとって最も価値のある「自然な表現」を 8 つ選びます:\n\
         - 範疇は自由に判断してよい — 慣用句、四字熟語、二字熟語、N1/N2 レベルの副助詞・接続表現、ビジネス用語、敬語表現、和制英語、口語的な省略形、隠喩、コロケーションなど何でもよい\n\
         - 一見すると平凡だが、日本語学习者がぶつかる用法を優先(教科書に出ない自然さ)\n\
         - 単独で覚えても汎用性のある表現を选ぶ\n\
@@ -441,7 +483,7 @@ fn japanese_system_prompt() -> &'static str {
         - usage_note は任意 — 用いる文脈、注意点、よくある誤用、類义表现など\n\
      出力は厳格な JSON のみ、Markdown ラップや追加の説明文を含めないこと。\n\
      JSON 構造:\n\
-     {\"topic\":\"...\",\"difficulty\":1-5,\"idioms\":[{\"phrase\":\"...\",\"anchor_sentence\":\"...\",\"meaning_zh\":\"...\",\"usage_note\":\"...\"} × 8]}"
+     {\"topic\":\"...\",\"difficulty\":1-5,\"quality\":1-10,\"quality_reason\":\"...\",\"idioms\":[{\"phrase\":\"...\",\"anchor_sentence\":\"...\",\"meaning_zh\":\"...\",\"usage_note\":\"...\"} × 8]}"
 }
 
 fn user_prompt(title: &str, transcript: &str) -> String {

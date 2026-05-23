@@ -336,6 +336,20 @@ function NewsCard({
             {TOPIC_LABEL[item.topic]}
           </Badge>
           <span>难度 {item.difficulty}/5</span>
+          {item.quality != null && (
+            <span
+              title={item.quality_reason ?? undefined}
+              className={cn(
+                item.quality >= 8
+                  ? 'text-primary font-medium'
+                  : item.quality >= 7
+                    ? 'text-foreground/80'
+                    : 'text-muted-foreground',
+              )}
+            >
+              · 质量 {item.quality}/10
+            </span>
+          )}
           <span>·</span>
           <span>{formatRelative(item.published_at)}</span>
         </div>

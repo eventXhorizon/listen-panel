@@ -29,6 +29,7 @@ pub struct VideoMetadata {
     pub thumbnail_url: Option<String>,
     pub published_at: DateTime<Utc>,
     pub duration_sec: i64,
+    pub view_count: Option<i64>,
 }
 
 /// Batched `videos.list` (up to 50 IDs per request, splits automatically).
@@ -45,7 +46,7 @@ pub async fn fetch_videos_metadata(
     for chunk in video_ids.chunks(50) {
         let joined = chunk.join(",");
         let url = format!(
-            "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id={joined}&key={api_key}"
+            "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={joined}&key={api_key}"
         );
         let resp: VideosListResponse = client
             .get(&url)
@@ -72,6 +73,10 @@ fn metadata_from_item(item: VideoItem) -> Result<VideoMetadata> {
         .or(item.snippet.thumbnails.medium)
         .or(item.snippet.thumbnails.default)
         .map(|t| t.url);
+    let view_count = item
+        .statistics
+        .and_then(|s| s.view_count)
+        .and_then(|s| s.parse::<i64>().ok());
     Ok(VideoMetadata {
         video_id: item.id,
         channel_id: item.snippet.channel_id,
@@ -81,6 +86,7 @@ fn metadata_from_item(item: VideoItem) -> Result<VideoMetadata> {
         thumbnail_url: thumbnail,
         published_at: item.snippet.published_at,
         duration_sec: parse_iso8601_duration(&item.content_details.duration)?,
+        view_count,
     })
 }
 
@@ -153,6 +159,15 @@ struct VideoItem {
     snippet: VideoSnippet,
     #[serde(rename = "contentDetails")]
     content_details: VideoContentDetails,
+    #[serde(default)]
+    statistics: Option<VideoStatistics>,
+}
+
+#[derive(Deserialize, Default)]
+struct VideoStatistics {
+    /// YouTube returns viewCount as a string. May be absent for private/restricted vids.
+    #[serde(rename = "viewCount", default)]
+    view_count: Option<String>,
 }
 
 #[derive(Deserialize)]

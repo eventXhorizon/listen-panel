@@ -26,15 +26,19 @@ pub fn router() -> Router<crate::AppState> {
         .route("/news/:id", axum::routing::delete(delete_one))
         .route("/news/:id/import", post(import))
         .route("/news/_refresh", post(refresh))
+        .route("/news/_backfill_quality", post(backfill_quality))
 }
 
 const LIST_COLS: &str = "id, yt_video_id, source, channel_id, channel_name, title, description, \
     thumbnail_url, published_at, duration_sec, language, topic, difficulty, has_captions, \
-    fetched_at, analyzed_at";
+    quality, quality_reason, view_count, fetched_at, analyzed_at";
+
+const QUALITY_THRESHOLD: i64 = 7;
 
 const NEWS_FULL_COLS: &str = "id, yt_video_id, source, channel_id, channel_name, title, \
     description, thumbnail_url, published_at, duration_sec, language, topic, difficulty, \
-    has_captions, segments_json, idioms_json, fetched_at, analyzed_at";
+    has_captions, quality, quality_reason, view_count, segments_json, idioms_json, \
+    fetched_at, analyzed_at";
 
 const MATERIAL_COLS: &str = "id, user_id, title, language, source_type, source_ref, text, \
     text_source, notes, created_at, updated_at";
@@ -54,7 +58,11 @@ async fn list(
     _user: CurrentUser,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Vec<NewsItemSummary>>> {
-    let mut conds: Vec<&'static str> = vec!["has_captions = 1"];
+    // Items with NULL quality are kept visible until the backfill endpoint runs
+    // (POST /api/news/_backfill_quality) — that way deploying the schema change
+    // doesn't make the feed disappear.
+    let mut conds: Vec<&'static str> =
+        vec!["has_captions = 1", "(quality IS NULL OR quality >= 7)"];
     let source = q
         .source
         .as_deref()
@@ -293,6 +301,96 @@ async fn delete_one(
 #[derive(Debug, Serialize)]
 struct RefreshResp {
     added: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct BackfillResp {
+    scored: usize,
+    kept: usize,
+    dropped: usize,
+    failed: usize,
+}
+
+/// Admin endpoint that re-runs DeepSeek analysis on every news_item whose
+/// `quality` column is still NULL. Re-uses the existing `analyze()` function
+/// so the prompt and parsing logic stay in one place. Returns counts so the
+/// caller can see how many items passed the threshold.
+async fn backfill_quality(
+    State(pool): State<SqlitePool>,
+    State(http): State<reqwest::Client>,
+    State(llm): State<SharedLlm>,
+    user: CurrentUser,
+) -> Result<Json<BackfillResp>> {
+    if !user.is_admin {
+        return Err(AppError(anyhow::anyhow!("only admin can backfill quality")));
+    }
+    let pending: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT id, yt_video_id, title, language, segments_json, idioms_json \
+         FROM news_items \
+         WHERE quality IS NULL AND has_captions = 1 \
+         ORDER BY published_at DESC",
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    let total = pending.len();
+    tracing::info!(total, "quality backfill: starting");
+    let mut scored = 0usize;
+    let mut kept = 0usize;
+    let mut dropped = 0usize;
+    let mut failed = 0usize;
+
+    for (id, video_id, title, language, segments_json, _idioms_json) in pending {
+        let Ok(segments) = serde_json::from_str::<Vec<NewsSegment>>(&segments_json) else {
+            tracing::warn!(news_id = id, "backfill: bad segments_json, skipping");
+            failed += 1;
+            continue;
+        };
+        let transcript = news_fetcher::transcript_for_prompt(&segments);
+        let analysis = match news_fetcher::analyze(&http, &llm, &language, &title, &transcript).await {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!(news_id = id, video_id, "backfill analyze failed: {e:#}");
+                failed += 1;
+                continue;
+            }
+        };
+
+        let idioms_json = serde_json::to_string(&analysis.idioms).unwrap_or_else(|_| "[]".into());
+        let quality_reason = if analysis.quality_reason.is_empty() {
+            None
+        } else {
+            Some(analysis.quality_reason)
+        };
+        let now = Utc::now();
+
+        sqlx::query(
+            "UPDATE news_items \
+             SET topic = ?, difficulty = ?, quality = ?, quality_reason = ?, \
+                 idioms_json = ?, analyzed_at = ? \
+             WHERE id = ?",
+        )
+        .bind(&analysis.topic)
+        .bind(analysis.difficulty)
+        .bind(analysis.quality)
+        .bind(quality_reason.as_deref())
+        .bind(&idioms_json)
+        .bind(now)
+        .bind(id)
+        .execute(&pool)
+        .await?;
+
+        scored += 1;
+        if analysis.quality >= QUALITY_THRESHOLD {
+            kept += 1;
+        } else {
+            dropped += 1;
+        }
+        tracing::info!(news_id = id, quality = analysis.quality, "backfill scored");
+    }
+
+    tracing::info!(scored, kept, dropped, failed, "quality backfill: done");
+    Ok(Json(BackfillResp { scored, kept, dropped, failed }))
 }
 
 /// Dev/admin trigger that runs the news fetcher once on demand.
