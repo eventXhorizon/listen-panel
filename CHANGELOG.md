@@ -7,7 +7,99 @@
 
 ## [Unreleased]
 
-(暂无未归档条目)
+### 2026-05-23 文档大整理
+- README、docs/features.md、docs/maintaining.md、docs/news-shadowing.md、CHANGELOG.md 同步到当前实现状态。**约定**:CHANGELOG 记决策 / 为什么,README 记现状,features.md 记怎么用,maintaining.md 记改起来怎么改。
+
+### 随手记可编辑(2026-05-23)
+- PATCH `/api/quick-notes/:id` 接受 `translation_zh / highlights / grammar / source`,**只更新提供的字段**;数组项前后端各 trim + drop 空项;`source: null` 才清空。
+- **Why 可编辑而不是"重新生成"**:LLM 偶尔抽偏,用户改一两行的代价比重新跑一轮 + 改正确的差不多,且重跑会丢前次的判定。
+
+### 随手记功能落地(2026-05-23)
+- 表 `quick_notes(user_id, text, language, translation_zh, highlights_json, grammar_json, source, created_at)`;`idx_quick_notes_user_created` 复合索引。
+- 入口:Layout 左下角浮按钮(`position: fixed` 全页可见,Reader 全屏也在)+ 全局 `⇧⌘J` / `⇧⌃J` 快捷键。挂在 Layout 而非各页面是为了「看到一句话立刻记」不被路由打断。
+- LLM 调用:`temperature=0.3` / `max_tokens=4000` / 输入 4000 char 上限。失败返 502 不丢草稿。
+- **Why 跟生词本分开**:生词本绑材料,要先看视频才有数据;随手记是 app 外的备忘册,跟材料无关、永久保留,跟"听完整素材"的工作流性质不同。混在一起反而难找。
+
+### 跟读速度档加 1.25 / 1.5(2026-05-23)
+- 原档:0.75 / 0.85 / 1。新增 1.25 / 1.5。
+- **Why 不挑 1.2 / 1.3**:跟 YouTube 原生支持的 0.25 step 对齐,YT iframe `setPlaybackRate(1.25)` 不会被取整丢档。1.5 是听力练熟的合理上限,2.0 信息密度过高无法吸收。
+
+### 段落↔视频时间同步(2026-05-23)
+- Reader 进入时:优先读 `listen-panel:video-progress:<materialId>:*`,反查 segment 所在段落 → `scrollIntoView({block:'start'})`。无视频进度或无 segments 时 fallback 到旧的 `listen-panel:article-scroll:<id>` scrollTop 策略。
+- **Why segment 反查优先**:旧策略只恢复 scrollTop,视频续播在 8:32 但文章在最顶端,用户感觉是 bug。
+- **Why fallback 而不是单一策略**:纯文本材料没 segments;旧材料没视频进度;一刀切会让某类材料丢恢复。
+
+### 数据备份导出(2026-05-23)
+- `GET /api/settings/backup`(admin only)→ 流式 `.tar.gz`:`app.db`(VACUUM INTO 一致性快照)+ `uploads/` + `tts-cache/` + JSON 配置(key 脱敏)。
+- **Why VACUUM INTO 而不是 cp app.db**:`cp` 会撕开运行中后端的写事务,恢复时可能 `database disk image is malformed`。`VACUUM INTO` SQLite 自身保证一致性。
+- **Why 流式 + spawn_blocking 而不是先全建后再发**:几个 GB 不应吃内存;tar 自身没 async API,blocking 跑工作线程不卡 runtime。
+- **Why open-fd-after-unlink**:tarball 临时文件 open 后立即 `remove_file`,内核保留 inode 给已开的 fd。客户端断开 / panic 都不会留垃圾在 `$TMPDIR`。
+- **Why JSON key 脱敏**:用户可能把备份扔进 git / 网盘 / 朋友,key 泄露成本高,脱敏后还能看到字段存在,恢复时知道要重填。
+
+### Library 改成语言 tab(2026-05-23)
+- 之前:英日材料混在一个网格,按更新时间排。
+- 现在:顶部 `英语 / 日语` 两 tab,localStorage 记上次。
+- **Why**:用户当下基本只想看一种语言,长列表里夹另一语言影响节奏。混显需求几乎不存在,切换又便宜。
+
+### 新闻卡片显示质量评语(2026-05-23)
+- 不再放进 hover tooltip,直接显示在卡片底部:`质量 8/10 · <reason>`。
+- **Why 不用 tooltip**:用户要的是"为什么打这个分",hover 才看会错过;直接显示让筛选高质量素材时有理由可循。
+
+### LLM 质量评分 + view count(2026-05-23)
+- `news_items` 加 `quality (1-10) / quality_reason / view_count`。DeepSeek 在 idiom 分析里顺手返回质量分(锚点:9-10=NYT Daily / NHK 解説,7-8=WSJ explainer,5-6=松散,1-4=vlog)。`/api/news` 过滤条件 `quality IS NULL OR quality >= 7`。
+- **Why 锚点描述**:不给 LLM 锚点,质量分聚集 5-6,区分度低。给锚点后实际通过率 ~97%(主要是 7-8 居多,9-10 极少),模型态度变审慎。
+- **Why NULL 透传**:升级时老 news 未评分,直接全砍掉太粗暴;backfill admin 端点跑完才严格生效。
+- **Why time-ordered + quality 过滤,而不是按质量排序**:用户要"最新且够好",纯按 quality 排会让 3 天前的 9 分老视频压住今天的 7 分新视频,违背新闻消费习惯。
+
+### Furigana 服务端 LLM 标注(2026-05-23)
+- 表 `transcript_segments` 加 `text_with_furigana TEXT?`。导入 JA 材料时后端 spawn `furigana::generate_for_job`,DeepSeek 按 5 段一批生成 `<ruby>漢字<rt>かんじ</rt></ruby>` HTML。
+- 严格 sanitize:白名单只放行 `<ruby>` `</ruby>` `<rt>` `</rt>`,其余 HTML 字符 escape。
+- **Why 服务端预生成而不是前端调用**:前端调 LLM 暴露 key + 每次 Reader 打开等几秒 + 重复消耗。服务端一次性生成,客户端零延迟。
+- **Why 仅 N3+ kanji**:N4/N5 常用字大部分日语学习者已认,标注反成噪音;阈值由 prompt 指定。
+- **Why sanitize 白名单**:服务端 LLM 输出走 `dangerouslySetInnerHTML`,不 sanitize 等于把 prompt injection 当 XSS payload 渲染。白名单比 strip-tags 更保险(不会因为 LLM 在 ruby 里嵌入 `<script>` 而漏过)。
+- 老 JA 材料补:`POST /api/news/_backfill_furigana`(admin)。
+
+### Azure Speech 替换 ElevenLabs(2026-05-23)
+- 之前:ElevenLabs voice cloning 质量极好但 Free Tier 反滥用系统会无差别 401 `detected_unusual_activity`,跟 credits 余额无关。换 voice ID、换 IP 都无效。
+- 现在:Azure F0 Tier(每月 500K chars 免费),`en-US-AriaNeural` + `ja-JP-NanamiNeural`。
+- **Why Azure 而不是 OpenAI TTS / Kokoro**:OpenAI TTS 日语 voice 太少;Kokoro 本地跑要 GPU + 部署成本;Azure F0 配额对单租户朗读够用很久,日语 Nanami 评价稳定。
+- **配置迁移**:`TtsConfig.provider` 改 `azure`,字段去掉 `base_url/model`,加 `region / voice_id_en / voice_id_ja`。老 `tts.json` 解析失败时 fallback 默认值,用户重填 key 即可。
+- **Why 不留 ElevenLabs fallback**:维护两个 provider 增加 cache key 复杂度,EL 反滥用问题不解决保留也无意义。要回切就当一次性事件处理。
+
+### 多字节字符截断 panic 修复(2026-05-23)
+- `news_fetcher::transcript_for_prompt` 原本 `out.truncate(15000)`(byte 索引)。日语 UTF-8 1 字符 = 3 bytes,15000 byte 切到 codepoint 中间 → Rust `assertion failed: self.is_char_boundary(new_len)` 直接 panic。
+- 修复:`while cut > 0 && !out.is_char_boundary(cut) { cut -= 1; } out.truncate(cut);` 找回 char 边界再切。
+- **教训**:`str::truncate` 对所有"按字节数限长"的场景都是雷区,加测试 case 含 multibyte("あ".repeat(8000) = 24000 bytes)。
+
+### setPlaybackRate 改 useEffect 单次下发(2026-05-23)
+- 早期 `setInterval(1000ms)` 反复下发 `setPlaybackRate(rate)` 防 YT 自重置回 1。
+- 问题:YouTube iframe 在 buffering / 切换源时收 postMessage 会刷 36 万 + 个错误,**浏览器卡死**(用户截图 359558 errors 才发现)。
+- 修复:`useEffect(() => playerHandleRef.current?.setPlaybackRate(rate), [rate])` 只在切档时下发。YT 偶尔自重置回 1× 让用户再点一下 pill,代价远小于轮询。
+- **Why 不监听 YT 的 onStateChange**:复杂度爆炸;实际 YT 自重置不常见,用户感知不强。
+
+### study `max_tokens=8192`(2026-05-23)
+- 现象:某些长段被合并后,翻译分析失败 `EOF while parsing a list at line 70 column 1`。
+- 根因:DeepSeek 默认 `max_tokens=4096`。一段长文本的 translation + grammar_points + usage_points JSON 输出能撞顶,截断成无效 JSON。
+- 修复:`study.rs::call_study_llm` 写死 `max_tokens=8192`(`deepseek-chat` 硬上限)。
+- 备选:缩短每批段数 / 单段字符上限。当前规模(每批 ≤8 段 / ≤5000 字符)+ 8192 token 够用。
+
+### YouTube 字幕按材料语言抓(2026-05-23)
+- `youtube.rs::fetch_captions` 之前硬编码 `--sub-langs en.*`。日语视频抓字幕全失败 `has_captions=0`。
+- 修复:`fetch_captions` 接 `language: &str` 参数,`let sub_langs = format!("{language}.*");` 让 yt-dlp 拉对应语种字幕(含变种 `en-US/ en-GB/ ja-JP` 等)。
+
+### 8 频道扩展(2026-05-23)
+- 之前 4 个英语频道。现在 4 EN(CNBC International / Bloomberg / WSJ / FT)+ 4 JA(テレ東BIZ / 日経電子版 / PIVOT / NewsPicks)。
+- `ChannelDef` 加 `language: &'static str` 字段。
+- **频道 ID 怎么查**:`curl ... | grep -oE '"externalId":"UC[A-Za-z0-9_-]+"'`。**别用** `channel/UC...` 路径正则,会抓到侧栏推荐频道。
+- 已知:Nikkei 字幕覆盖率近 0(老视频几乎都没字幕),PIVOT 多 >60min 长视频,后续可能换。WBS 早期 ID `UCPTVd32fJj668E64Xg4zs1A` 是 squatter,正确 ID `UCkKVQ_GNjd8FbAuT6xDcWgg`(`@tvtokyobiz`)。
+
+### 时长窗口 3-60 分钟(2026-05-23)
+- 之前 3-30 min。扩到 3-60 min 是为了让"质量值得反复观看"的长 explainer 也进来。
+- 字幕抓取在 60 min 视频上 yt-dlp 仍稳定,DeepSeek transcript 用 char cap + char_boundary 截断兜底。
+
+### 加 Docker + GitHub Actions CI(2026-05-23)
+- `deploy/` 加 Dockerfile + compose;`.github/workflows/` CI 跑 cargo build + npm build + cargo test。
+- **Why 现在加而不是更早**:多设备同步需求(笔记本 + 服务器)开始浮现,容器化是最小代价的 reproducible 部署。
 
 ## 2026-05-03
 

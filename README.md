@@ -32,7 +32,10 @@ listen-panel/
 │   │       ├── tts.rs           /api/tts/speech,代理到 TTS provider
 │   │       ├── auth.rs          /api/auth/* 本地账户与 session
 │   │       ├── asr.rs           /api/*/transcriptions,远程 ASR worker 适配
-│   │       ├── news.rs          /api/news 列表 + 导入 + 手动 refresh
+│   │       ├── news.rs          /api/news 列表 + 导入 + 手动 refresh + backfill
+│   │       ├── quick_notes.rs   /api/quick-notes CRUD + LLM 分析
+│   │       ├── backup.rs        /api/settings/backup 整目录 .tar.gz 流式导出
+│   │       ├── health.rs        /api/health 探针(无认证)
 │   │       └── settings.rs      GET/PUT /api/settings/llm/tts/asr
 │   ├── news_fetcher.rs          每 3h 拉取 BBC/Bloomberg/Economist/FT 上传 + DeepSeek 分析
 │   └── youtube.rs               YouTube Data API + 字幕抓取(JSON3)
@@ -53,19 +56,23 @@ listen-panel/
 │       ├── types.ts             DTO
 │       ├── index.css
 │       ├── components/
-│       │   ├── Layout.tsx       顶栏
+│       │   ├── Layout.tsx       顶栏 + 全局浮动「随手记」按钮 + ⇧⌘J 快捷键
 │       │   ├── VideoPlayer.tsx  三种源统一封装
 │       │   ├── SelectionPopup.tsx
 │       │   ├── AddVocabDialog.tsx
+│       │   ├── QuickNoteDialog.tsx 随手记输入 + 分析结果 + 编辑
+│       │   ├── SpeakButton.tsx  词卡 / 短语朗读按钮
 │       │   └── VocabPanel.tsx
 │       ├── pages/
-│       │   ├── Library.tsx      书架
+│       │   ├── Library.tsx      书架(英 / 日语 tab,localStorage 记上次选择)
 │       │   ├── Editor.tsx       新建/编辑(含拖放上传)
-│       │   ├── Reader.tsx       左文右视频主页 + 跟读控件
-│       │   ├── News.tsx         英语新闻发现 + 一键加入书架
+│       │   ├── Reader.tsx       左文右视频主页 + 跟读控件 + 段落↔视频时间同步
+│       │   ├── News.tsx         /news/:lang 英 / 日新闻发现 + 一键加入书架
 │       │   ├── Vocab.tsx        全局生词本
+│       │   ├── Notes.tsx        段落 / segment 级笔记
+│       │   ├── QuickNotes.tsx   随手记列表 + 搜索 + 语言筛选
 │       │   ├── Review.tsx       翻卡复习
-│       │   └── Settings.tsx     DeepSeek/TTS/ASR 设置
+│       │   └── Settings.tsx     DeepSeek/Azure TTS/ASR 设置 + 数据目录 + 备份导出
 │       └── lib/
 │           ├── settings.ts      localStorage 设置
 │           ├── llm.ts           DeepSeek lookupWord
@@ -211,7 +218,7 @@ listen-panel/
 |---|---|---|
 | id | INTEGER PK | |
 | yt_video_id | TEXT UNIQUE | YouTube 11 位 ID |
-| source | TEXT | CHECK ∈ `bbc / bloomberg / economist / ft` |
+| source | TEXT | 8 个固定值之一:`cnbc / bloomberg / wsj / ft / wbs / nikkei / pivot / newspicks`(早期 CHECK 已 drop,改换频道只需改代码常量) |
 | channel_id / channel_name | TEXT | YouTube 频道信息 |
 | title / description / thumbnail_url | TEXT | |
 | published_at | TEXT | YouTube `publishedAt` |
@@ -238,6 +245,23 @@ listen-panel/
 | grammar_points | TEXT | JSON 数组,每项含 `title/explanation_zh/evidence?/tip_zh?` |
 | usage_points | TEXT | JSON 数组,每项含 `phrase/meaning_zh/note_zh?/example?` |
 | created_at/updated_at | TEXT | |
+
+### `quick_notes`
+"随手记":用户在 app 外看到的一句话(IM / 文章 / 视频),通过浮动按钮或 `⇧⌘J` 粘到 app,DeepSeek 跑翻译+重点表达+语法点,落库长期保留,可后续编辑。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | |
+| user_id | INTEGER | FK 到 users,ON DELETE CASCADE,严格按 owner 隔离 |
+| text | TEXT | 用户粘的原句 |
+| language | TEXT | `en` / `ja`,提交时选 |
+| translation_zh | TEXT | LLM 给的中文翻译,可编辑 |
+| highlights_json | TEXT | JSON 数组,每项含 `phrase / meaning_zh / usage_note?`;编辑时空白项自动过滤 |
+| grammar_json | TEXT | JSON 数组,每项含 `point / explanation_zh`;编辑时空白项自动过滤 |
+| source | TEXT? | 用户填的"哪里看到的",URL 或备注 |
+| created_at | TEXT | |
+
+索引 `idx_quick_notes_user_created (user_id, created_at DESC)`。
 
 ## 4. 后端实现细节
 
@@ -297,6 +321,12 @@ listen-panel/
 | POST | `/news/_refresh` | **admin only。** 立即触发一次抓取,不等 3 小时;返回 `{added}` |
 | POST | `/news/_backfill_quality` | **admin only。** 对所有 `quality IS NULL` 的 news_items 跑一遍 LLM 评分;返回 `{scored, kept, dropped, failed}` |
 | POST | `/news/_backfill_furigana` | **admin only。** 对所有 youtube_caption JA jobs 里缺 furigana 的 segments 跑一遍 DeepSeek 标注;返回 `{jobs, annotated}` |
+| GET | `/quick-notes` | 当前用户的随手记列表,按 `created_at DESC`,上限 500 条 |
+| POST | `/quick-notes` | `{text, language?, source?}` → DeepSeek 跑翻译 + 重点表达 + 语法点(JSON mode、temperature=0.3、输入 char 上限 4000)→ 存库返回 |
+| PATCH | `/quick-notes/:id` | 局部更新 `{translation_zh?, highlights?, grammar?, source?}`;空字段不动,`source: null` 才会清空;`highlights/grammar` 数组自动 trim + drop 空项 |
+| DELETE | `/quick-notes/:id` | 204,仅 owner 可删 |
+| GET | `/settings/backup` | **admin only。** 整目录打包成 `.tar.gz` 流式下载:`app.db`(`VACUUM INTO` 一致性快照)+ `uploads/` + `tts-cache/` + 三个 JSON 配置(`api_key/token/secret` 字段值改写为 `"***"`)。临时文件 open 后立即 unlink,客户端断开也不留垃圾 |
+| GET | `/health` | 轻量探针(无 `/api/` 前缀,直接挂在 router root):返 `{status:"ok", db_ok:bool}`。给 Docker / k8s 健康检查用,不要求登录 |
 
 ### 4.3 错误处理
 `AppError(anyhow::Error)`,blanket `From<E: Into<anyhow::Error>>`。`IntoResponse` 实现:
@@ -386,7 +416,7 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - 如果 LLM key 未配置,`study_status` 置为 `skipped`;如果讲解调用失败,`study_status` 置为 `failed` 并记录 `study_error`。这些失败不影响原文转写成功。
 - `GET /api/transcriptions/:id/segments` 会把 `transcript_segment_studies` 左连接到 segment 上,前端用 `segment.study` 展示译文、语法和搭配。
 
-### 4.10 英语新闻自动抓取(`news_fetcher.rs` + `youtube.rs`)
+### 4.10 新闻自动抓取(`news_fetcher.rs` + `youtube.rs`)
 - **8 个频道写死**在 `news_fetcher::CHANNELS`,每个带 `language: "en" | "ja"`:CNBC International / Bloomberg / WSJ / Financial Times(英)+ テレ東BIZ / 日経電子版 / PIVOT 公式 / NewsPicks(日)。Channel ID 从各家 YouTube `@handle` 解析。要换频道改这个常量后重启。
 - DeepSeek prompt 按 `channel.language` 切换:英语版要求抽 phrasal verbs/idioms/collocations,日语版让 LLM 自由抽(慣用句/四字熟語/敬語/N1-N2 副助詞/和制英語 等)。两个 prompt 都返回 `{topic, difficulty, quality, quality_reason, idioms[]}`。
 - 启动延迟 45 秒后跑第一轮,之后每 3 小时一轮。空 `YOUTUBE_API_KEY` 时 task 直接返回 + warn,不影响其他功能。
@@ -408,6 +438,23 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
   ```
   申请地址:Google Cloud Console → APIs & Services → YouTube Data API v3,免费配额 10k units/天。当前只做单租户,key 不进数据库不进设置页。
 
+### 4.11 随手记(`routes/quick_notes.rs`)
+- 用户在 app 外看到一句话(IM、文章、视频弹幕),用 `⇧⌘J` / `⇧⌃J` 或左下角浮按钮打开 QuickNoteDialog。
+- 提交时 `POST /api/quick-notes` → 后端调 DeepSeek `chat/completions`(JSON mode、`temperature=0.3`、`max_tokens=4000`),system prompt 走 `language::Language::quick_note_system_prompt()`,要求严格 JSON `{ translation_zh, highlights[], grammar[] }`。失败时返 502,前端继续显示输入框不丢草稿。
+- 落库后可用 `PATCH /api/quick-notes/:id` 改翻译 / 表达 / 语法。空字段不动,只更新填了的字段;数组项整体替换(传新数组,空白项前端 + 后端各 trim 一次)。`source` 单独支持显式 `null` 清空。
+- 列表 `GET /api/quick-notes` 严格按 `user_id` 过滤,上限 500 条,`ORDER BY created_at DESC`。
+
+### 4.12 数据备份导出(`routes/backup.rs`)
+- `GET /api/settings/backup` admin only,流式下载 `listen-panel-backup-YYYYMMDD-HHMMSS.tar.gz`。
+- 步骤:
+  1. SQLite `VACUUM INTO '<tmp>/listen-panel-snapshot-<uuid>.db'` 拿一致性快照。比直接 `cp app.db` 安全:不会撕开运行中后端的写事务。
+  2. `tokio::task::spawn_blocking` 里跑 `tar + gzip`(`tar` crate 没有 async API),把 snapshot 改名 `app.db` 进 tarball 根,然后 `uploads/`、`tts-cache/`、`config.json`、`tts.json`、`asr.json` 依次塞入。
+  3. JSON 配置先 in-memory 走 `redact_secrets`:递归扫所有 key,key 名小写后含 `key/token/secret` 的非空字符串值改写为 `"***"`,数字、bool 和结构键不动。空字符串保留(便于看出原本没填 vs 被脱敏)。
+  4. 写完 tarball 临时文件 → 用 `tokio::fs::File::open` 拿到 fd → 立即 `remove_file`(open-fd-after-unlink trick):内核保留 inode 给已开的 fd,客户端断开/panic 都不会留垃圾。
+  5. `Body::from_stream(ReaderStream::new(file))` 边读边发,大文件不吃内存。
+- **不含**:`backups/` 子目录(避免递归)、运行时日志、Cargo 构建产物。
+- 解恢复办法:停服务 → 解压 → 用 `app.db` 覆盖数据目录 → 把空白的 `api_key/token/secret` 字段重新填回 → 启动。
+
 ## 5. 前端实现细节
 
 ### 5.1 路由
@@ -420,20 +467,24 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 | `/news` | 重定向到 `/news/en` |
 | `/news/en` `/news/ja` | News 英 / 日新闻发现页 |
 | `/vocab` | 生词本 |
+| `/notes` | 笔记列表 |
+| `/quick-notes` | 随手记列表 + 搜索 + 语言筛选 |
 | `/review` | 复习 |
-| `/settings` | DeepSeek key |
+| `/settings` | DeepSeek / Azure / ASR / 数据目录 / 备份导出 |
 
 ### 5.2 全局布局(`Layout.tsx`)
 - 容器 `h-screen flex flex-col overflow-hidden` —— **整页定长**,避免子页 overflow 触发不到
-- 顶栏 `h-14`,Logo + 三个 NavLink + 设置 + `+ 新建`
+- 顶栏 `h-14`,Logo + 六个 NavLink(书架 / 新闻 / 生词本 / 笔记 / 随手记 / 复习)+ `+ 新建` + 账户下拉(设置 / 退出登录)
 - 子页通过 `<Outlet />` 渲染,内层用 `flex-1 overflow-y-auto` 自管滚动
+- **左下角浮动「随手记」按钮**:`position: fixed` 全页可见(包括 Reader / Editor 全屏路由)。挂在 Layout 而非各页是为了"看到一句话就立刻记下"不被当前路由打断。
+- **全局快捷键 `⇧⌘J` / `⇧⌃J`**:`window.addEventListener('keydown')` 监听 `metaKey || ctrlKey + shiftKey + key==='j'`,任意页面唤出 QuickNoteDialog。`e.preventDefault()` 防止与浏览器默认行为冲突
 
 ### 5.3 Reader(`pages/Reader.tsx`)
 - 上方子标题栏:返回 / 标题 / `□ 高亮生词` 开关 / `生词 (N)` 按钮 / 分栏比例 / 均分 / 编辑
 - 主区两列,中间 1px 分隔条 `cursor-col-resize`,鼠标拖拽改 `leftPct`(28-78% 区间)
 - 左:`<article ref={articleRef}>`,如果 `materials.text` 已按空行分成多段,优先按文本段落渲染;否则使用转写 segments 分组渲染;没有 segments 时按 `materials.text` 的 `\n\n` 分段回退。开高亮时,每段走 `highlightText()` 渲染
 - 转写完成后顶栏出现 `翻译分析` 按钮。默认关闭,不触发 LLM;点击后才生成并显示中文译文、语法点、固定用法/固定搭配。分析中会显示等待提示、当前批次、百分比进度和已完成段数;已完成批次会先出现在正文里。再次点击会隐藏分析内容,不会删除已生成结果。
-- 左侧文章滚动容器按 `materialId` 把 `scrollTop` 存到 `localStorage`(`listen-panel:article-scroll:<id>`),切走页面或刷新后回到上次阅读位置
+- **段落↔视频时间同步**:进入 Reader 时优先读 `listen-panel:video-progress:<materialId>:*`(VideoPlayer 自管的播放进度),用 `findParagraphIndexForTime(segments, text, ms)` 把当时间的 segment 反查到所在段落,`scrollIntoView({ block:'start' })`。这样合上电脑→重开,左边段落和右边视频帧是对齐的,不会出现"视频回到原位但文章在最上面"的错位。没有视频进度或无 segments 时回退到旧的 `listen-panel:article-scroll:<id>` 纯 scrollTop 恢复策略。`beforeunload` + `visibilitychange=hidden` 都会保存当前 scrollTop。
 - 右:`<VideoPlayer>`
 - 同时挂 `<SelectionPopup>`、`<AddVocabDialog>`(条件渲染)、`<VocabPanel>`(条件渲染)
 
@@ -530,7 +581,8 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - 点"加入书架并跟读"→ `POST /api/news/:id/import` → 拿到新 Material → `navigate('/m/' + id)` 直接跳 Reader。同一 yt_video_id 已导入则返回旧 Material(幂等)。
 - **VocabPanel** 顶部新增 `生词 / 地道表达` 两 tab,显示各自计数;idiom tab 多渲染一行 `example_zh`(usage_note)。
 - **idiom 高亮**:`lib/highlight.tsx` 检测 `entry.kind === 'idiom'`,渲染 dotted-underline + 同主题色,区分于生词的纯背景高亮。多词 idiom 因为 `englishHighlights` 已经用 `\b(...)\b` 正则 + 长度倒序匹配,内部空格自动正确处理,不需要专门支持。
-- **Reader 跟读控件**(`ShadowingControls`):toolbar 加速度选择(0.75 / 0.85 / 1×)+ 句末停顿(0 / 0.5 / 1 / 2 秒);每段时间戳旁多一个 `↻ 循环` 按钮,点了变成 `● 循环中`。循环逻辑:`setInterval(100ms)` 轮询 `getCurrentTime`,过 `end_ms` 就 `pause` → 等 `endPauseMs` → `seekTo(start_ms)` → `play`,`loopBusyRef` 防重入。
+- **Reader 跟读控件**(`ShadowingControls`):toolbar 加速度选择(0.75 / 0.85 / 1 / 1.25 / 1.5×,前两档慢练复读、后两档已熟材料快听)+ 句末停顿(0 / 0.5 / 1 / 2 秒);每段时间戳旁多一个 `↻ 循环` 按钮,点了变成 `● 循环中`。循环逻辑:`setInterval(100ms)` 轮询 `getCurrentTime`,过 `end_ms` 就 `pause` → 等 `endPauseMs` → `seekTo(start_ms)` → `play`,`loopBusyRef` 防重入。
+- 加速度通过 `useEffect(() => playerHandleRef.current?.setPlaybackRate(rate), [rate])` 只在切换时下发一次;**早期实现是 1 秒轮询防 YouTube 自重置**,但在 iframe 处于 buffering / 切换源时会触发 36 万 + postMessage 错误把浏览器卡到崩。如果偶尔 YT 自动回到 1×,用户再点一下 pill 即可,代价远小于轮询。
 - **VideoPlayer 暴露 handle**:新导出 `VideoPlayerHandle = { play, pause, seekTo, setPlaybackRate, getCurrentTime }`,Reader 通过 `handleRef` prop 拿到。LocalVideo 走原生 `<video>` API,YouTubeVideo 走 iframe API(`playVideo / pauseVideo / seekTo / setPlaybackRate / getCurrentTime`),Bilibili 暂返 no-op handle。
 - 注意:YouTube `setPlaybackRate(0.85)` 可能被取整到 0.75 或 1(YouTube 只保证 0.25/0.5/0.75/1/1.25/1.5/1.75/2),本地视频精确。
 
@@ -539,6 +591,25 @@ PUT 同值(只改 title 之类)走 COALESCE 保留旧值,`row.source_ref == old.
 - ASR 创建任务时优先使用材料语言,全局 ASR `language` 只作为旧材料或手动测试的 fallback。
 - 生词保存时记录语言;查词 prompt、分段翻译分析 prompt、朗读 fallback 和高亮匹配都会按语言切换。
 - 日语 V1 使用精确文本高亮,没有做完整词形还原和分词点击。详细方案和后续路线见 `docs/multilingual-language-adapters.md`。
+
+### 5.16 Library 语言 tab(`pages/Library.tsx`)
+- 顶部 `英语 / 日语` 两个 pill。点击切换 → `setLanguage(value)` + `saveLang(value)` 写入 `localStorage['listen-panel:library-lang']`。下次进 Library 用上次的选择。第一次访问默认 `'en'`。
+- 每个 tab 标题旁带该语言的材料数(`langCounts[lang]`)。过滤逻辑就是 `materials.filter(m => m.language === language)`。
+- **Why 强制按语言切而不是混显**:之前书架英日混排,长列表里日语夹几条英语很影响节奏,而练听力的用户当下基本只想看一种语言。混显的需求几乎不存在,切换又便宜。
+
+### 5.17 随手记(`pages/QuickNotes.tsx` + `components/QuickNoteDialog.tsx`)
+- **触发**:左下角浮按钮("✏ 随手记")或 `⇧⌘J` / `⇧⌃J` 全局快捷键(挂在 `Layout.tsx`,任意路由可用,包括 Reader / Editor 等全屏页)。
+- **QuickNoteDialog 三态**:
+  - **InputView**:粘原句 + 选语言 + 可选出处 → `createQuickNote(text, language, source)`,后端跑 LLM(2-5 秒)
+  - **ResultView**:显示翻译、重点表达、语法点;右上角"编辑"切到 EditView,"再记一条"清空回 InputView
+  - **EditView**:翻译可改;高亮和语法以行编辑,支持增删行;空白行自动 trim 掉再 PATCH
+- **列表页 `/quick-notes`**:卡片网格,顶部全部 / EN / 日本語 三个 tab + 搜索框(本地 `filter` 在 text / translation 字段上模糊匹配)。卡片默认折叠(只显示前两行),点"展开"完整看;每张卡有删除按钮。
+- **跟生词本的区别**:生词本是「材料里高亮过的词」的索引,要先看视频才有数据;随手记是「app 外看到的句子」的备忘册,跟材料无关、永久保留、可拿来做长期复盘语料。
+
+### 5.18 设置页:Azure / ASR / 数据目录 / 备份(`pages/Settings.tsx`)
+- 已有的 DeepSeek / Azure / ASR / 默认音量在 §5.9 列过,此处补两个新区块:
+  - **数据存储**:管理员可见。显示当前数据目录、来源(env / config / default),填新目录 → PUT `/api/settings/data-dir` 写 `backend/data-dir.json`,**重启后生效**。若设了 `LISTEN_PANEL_DATA_DIR` 环境变量,UI 只展示不可改。
+  - **导出备份**:管理员可见。一个 `<a href="/api/settings/backup" download>` 链接,后端按需打包流式返回。说明文字提醒解压后 `api_key/token/secret` 字段都是 `"***"`,恢复时需要重填。
 
 ## 6. 启动方式
 
@@ -608,13 +679,18 @@ worker V1 已提供通用 GPU Job API:
    ```
    申请见 https://console.cloud.google.com/ → APIs & Services → 启用 YouTube Data API v3 → 创建 API 密钥。`.env` 已经 gitignored,key 不会进仓库。不设也没事,新闻页就是空的。设了之后启动 45s 后开始第一轮抓取,然后每 3h 一轮。要立刻跑一次:`curl -X POST http://localhost:9527/api/news/_refresh -H 'Cookie: listen_panel_session=...'`(admin only)。
 7. 回到书架,新建第一条材料
+8. **日常用法速查**:
+   - `⇧⌘J` / `⇧⌃J`(macOS / Win-Linux):任意页面唤出「随手记」,粘一句话 → LLM 给翻译 + 重点表达 + 语法
+   - 选词加生词:Reader 左栏选中 → 浮出"+ 加为生词"
+   - 全局复习:`/review`,翻卡 + cloze 上下文
+   - 定期备份:Settings → 「导出备份 (.tar.gz)」,文件含 `app.db` 一致性快照 + uploads + tts-cache,密钥字段已脱敏
 
 ## 7. 已知限制 / 待办
 
 ### 已知小毛刺(行为正确,品味略差,不阻塞)
 - 上传时给坏扩展 / `/api/media/..` 路径穿越,后端返 **500** 而非 400(请求被正确拒绝,只是状态码不规范)
 - 高亮 V1 只匹配实际词形(存 "running" 不会高亮 "ran";日语也只做精确表记匹配),没做词形还原
-- 生词朗读 V1 优先走本地 TTS 缓存,缓存未命中才请求 ElevenLabs 并消耗 credits;未配置、额度不足、网络失败时英语退回 Free Dictionary mp3 与浏览器 `speechSynthesis`,日语直接退回浏览器 `speechSynthesis`
+- 生词朗读 V1 优先走本地 TTS 缓存,缓存未命中才请求 **Azure Speech**(F0 Tier 每月 500K chars 免费)生成并落盘缓存;未配置、额度耗尽、网络失败时英语退回 Free Dictionary mp3 与浏览器 `speechSynthesis`,日语直接退回浏览器 `speechSynthesis`
 - ASR V1 不内置 GPU worker,只定义远程 worker 协议;worker 崩溃、网络断开或超时会把 job 标记为 failed。V1 没有取消任务和进度回传。
 - 账户系统 V1 没有密码找回/管理员重置 UI。忘记密码只能本地操作 SQLite 或后续补 admin 用户管理页
 - 复习无 SRS 算法,只是随机抽 + 三档手判 mastery
@@ -625,7 +701,7 @@ worker V1 已提供通用 GPU Job API:
 - 字幕联动 / SRT 解析 + AB 循环(V2)
 - ASR V2:worker 进度回调、任务取消、字幕优先策略状态展示、segments 时间轴 UI
 - Axum 兼托管 `frontend/dist/`,做单二进制部署
-- "导出 / 备份"按钮(导出 SQLite 到 .json)
+- ~~"导出 / 备份"按钮~~ ✅ 2026-05-23 落地为 `.tar.gz` 流式导出
 
 ## 8. 维护者备忘
 
