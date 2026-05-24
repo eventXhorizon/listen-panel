@@ -6,8 +6,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::config::SharedLlm;
+use crate::config::{LlmConfig, SharedLlm};
 use crate::language::Language;
+use crate::llm_call::{LlmProvider, call_chat_completions};
 use crate::models::TranscriptSegment;
 
 const STUDY_TIMEOUT_SECONDS: u64 = 120;
@@ -115,7 +116,6 @@ pub async fn generate_segment_studies_for_job(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(STUDY_TIMEOUT_SECONDS))
         .build()?;
-    let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
     let language = load_job_language(pool, job_id).await?;
 
     for (index, chunk) in chunks.into_iter().enumerate() {
@@ -148,8 +148,7 @@ pub async fn generate_segment_studies_for_job(
             .await?;
             return Ok(());
         }
-        let response =
-            call_study_llm(&client, &url, &cfg.api_key, &cfg.model, language, chunk).await?;
+        let (provider, response) = call_study_llm(&client, &cfg, language, chunk).await?;
         persist_study_batch(pool, job_id, material_id, chunk, response).await?;
         let completed_after = completed_before + chunk.len();
         if pause_requested(pool, job_id).await? {
@@ -162,7 +161,17 @@ pub async fn generate_segment_studies_for_job(
             return Ok(());
         }
 
-        let stage = format!("已完成第 {completed_after}/{total_segments} 段");
+        // When we get pushed off DeepSeek onto the fallback we annotate the
+        // stage so the user knows what's serving them mid-job.
+        let stage = match provider {
+            LlmProvider::Primary => {
+                format!("已完成第 {completed_after}/{total_segments} 段")
+            }
+            LlmProvider::Fallback => format!(
+                "已完成第 {completed_after}/{total_segments} 段 · {} 兜底",
+                LlmProvider::Fallback.label_zh()
+            ),
+        };
         update_study_progress(
             pool,
             job_id,
@@ -244,12 +253,10 @@ pub fn parse_study_view(
 
 async fn call_study_llm(
     client: &reqwest::Client,
-    url: &str,
-    api_key: &str,
-    model: &str,
+    cfg: &LlmConfig,
     language: Language,
     segments: &[TranscriptSegment],
-) -> Result<StudyBatchResponse> {
+) -> Result<(LlmProvider, StudyBatchResponse)> {
     let prompt_segments = segments
         .iter()
         .enumerate()
@@ -263,7 +270,6 @@ async fn call_study_llm(
     let user_prompt = language.study_user_prompt(&serde_json::to_string(&prompt_segments)?);
 
     let body = json!({
-        "model": model,
         "messages": [
             { "role": "system", "content": language.study_system_prompt() },
             { "role": "user", "content": user_prompt }
@@ -277,30 +283,8 @@ async fn call_study_llm(
         "max_tokens": 8192
     });
 
-    let res = client
-        .post(url)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await
-        .context("segment study LLM request failed")?;
-
-    if !res.status().is_success() {
-        let status = res.status();
-        let text = res.text().await.unwrap_or_default();
-        let trimmed = text.chars().take(500).collect::<String>();
-        return Err(anyhow!("segment study LLM returned {status}: {trimmed}"));
-    }
-
-    let raw: serde_json::Value = res.json().await.context("invalid LLM response JSON")?;
-    let content = raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| anyhow!("segment study LLM response missing message.content"))?;
-    let parsed = parse_batch_response(content)?;
+    let outcome = call_chat_completions(client, cfg, body, "segment study").await?;
+    let parsed = parse_batch_response(&outcome.content)?;
 
     if parsed.segments.len() != segments.len() {
         return Err(anyhow!(
@@ -309,7 +293,7 @@ async fn call_study_llm(
             segments.len()
         ));
     }
-    Ok(parsed)
+    Ok((outcome.provider, parsed))
 }
 
 async fn persist_study_batch(

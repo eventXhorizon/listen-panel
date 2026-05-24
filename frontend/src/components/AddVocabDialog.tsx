@@ -5,6 +5,7 @@ import { createVocab } from '../api';
 import type { MaterialLanguage } from '../types';
 import { languageAdapter } from '../lib/languages';
 import SpeakButton from './SpeakButton';
+import ProviderBadge from './ProviderBadge';
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,7 @@ export default function AddVocabDialog({
   const [exampleZh, setExampleZh] = useState('');
   const [contextEdit, setContextEdit] = useState(context);
   const [saving, setSaving] = useState(false);
+  const [provider, setProvider] = useState<'primary' | 'fallback' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +59,7 @@ export default function AddVocabDialog({
         setDefinitionZh(r.definition_zh ?? '');
         setDefinitionEn(r.definition_en ?? '');
         setExampleZh(r.example_zh ?? '');
+        setProvider(r.provider ?? null);
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -143,6 +146,7 @@ export default function AddVocabDialog({
 
           {!loading && !error && (
             <>
+              {provider && <ProviderBadge provider={provider} />}
               <div className="grid grid-cols-3 gap-3">
                 <Field label="原形" value={lemma} onChange={setLemma} />
                 <Field label="词性" value={pos} onChange={setPos} />

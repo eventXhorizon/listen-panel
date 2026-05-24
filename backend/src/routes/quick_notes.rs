@@ -22,6 +22,7 @@ use crate::auth::CurrentUser;
 use crate::config::SharedLlm;
 use crate::error::{AppError, Result};
 use crate::language::Language;
+use crate::llm_call::{LlmProvider, call_chat_completions};
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -63,6 +64,12 @@ pub struct QuickNote {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub created_at: String,
+    /// Only set on the immediate create response — tells the UI whether
+    /// the primary (DeepSeek) answered or whether we fell back to the
+    /// configured backup provider. Omitted on list/update responses (the
+    /// row in DB doesn't remember).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<LlmProvider>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -88,6 +95,7 @@ impl Row {
             grammar: serde_json::from_str(&self.grammar_json).unwrap_or_default(),
             source: self.source,
             created_at: self.created_at,
+            provider: None,
         }
     }
 }
@@ -122,7 +130,7 @@ async fn create(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let analysis = analyze(&http, &llm, language, text).await?;
+    let (provider, analysis) = analyze(&http, &llm, language, text).await?;
 
     let highlights_json = serde_json::to_string(&analysis.highlights)?;
     let grammar_json = serde_json::to_string(&analysis.grammar)?;
@@ -143,7 +151,9 @@ async fn create(
     .fetch_one(&pool)
     .await?;
 
-    Ok(Json(row.into_note()).into_response())
+    let mut note = row.into_note();
+    note.provider = Some(provider);
+    Ok(Json(note).into_response())
 }
 
 async fn list(
@@ -291,16 +301,9 @@ async fn analyze(
     llm: &SharedLlm,
     language: Language,
     text: &str,
-) -> Result<Analysis> {
+) -> Result<(LlmProvider, Analysis)> {
     let cfg = llm.read().await.clone();
-    if !cfg.configured() {
-        return Err(AppError(anyhow::anyhow!(
-            "DeepSeek API key not configured; set it on the Settings page"
-        )));
-    }
-    let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
     let body = json!({
-        "model": cfg.model,
         "messages": [
             { "role": "system", "content": language.quick_note_system_prompt() },
             { "role": "user",   "content": language.quick_note_user_prompt(text) },
@@ -309,33 +312,14 @@ async fn analyze(
         "temperature": 0.3
     });
 
-    let res = http
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send()
+    let outcome = call_chat_completions(http, &cfg, body, "quick-note")
         .await
-        .context("DeepSeek request")?;
+        .map_err(AppError)?;
 
-    if !res.status().is_success() {
-        let status = res.status();
-        let body = res.text().await.unwrap_or_default();
-        let trimmed: String = body.chars().take(300).collect();
-        return Err(AppError(anyhow::anyhow!("DeepSeek {status}: {trimmed}")));
-    }
-
-    let raw: serde_json::Value = res.json().await.context("DeepSeek json envelope")?;
-    let content = raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| AppError(anyhow::anyhow!("DeepSeek response missing message.content")))?;
-
-    parse_analysis(content)
-        .with_context(|| format!("parse DeepSeek analysis: {content}"))
-        .map_err(AppError)
+    let analysis = parse_analysis(&outcome.content)
+        .with_context(|| format!("parse quick-note analysis: {}", outcome.content))
+        .map_err(AppError)?;
+    Ok((outcome.provider, analysis))
 }
 
 fn parse_analysis(content: &str) -> anyhow::Result<Analysis> {

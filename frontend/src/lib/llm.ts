@@ -1,4 +1,4 @@
-import type { MaterialLanguage } from '../types';
+import type { LlmProvider, MaterialLanguage } from '../types';
 
 export interface LookupResult {
   lemma: string;
@@ -7,6 +7,8 @@ export interface LookupResult {
   definition_zh: string;
   definition_en?: string;
   example_zh?: string;
+  /** Which LLM provider produced this result (DeepSeek primary vs configured fallback). */
+  provider?: LlmProvider;
 }
 
 export async function lookupWord(

@@ -6,6 +6,7 @@ import type {
   AsrHealthCheckStatus,
   AsrStatus,
   DataDirStatus,
+  LlmHealthStatus,
   LlmStatus,
   TtsStatus,
   WorkerEndpointProbe,
@@ -21,6 +22,16 @@ export default function Settings() {
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [show, setShow] = useState(false);
+  // Fallback (e.g. Gemini) — used only when primary times out / 5xx.
+  const [fbApiKey, setFbApiKey] = useState('');
+  const [fbBaseUrl, setFbBaseUrl] = useState('');
+  const [fbModel, setFbModel] = useState('');
+  const [showFb, setShowFb] = useState(false);
+  // Per-provider health-check state: result of "测试" button.
+  const [primaryHealth, setPrimaryHealth] = useState<LlmHealthStatus | null>(null);
+  const [fallbackHealth, setFallbackHealth] = useState<LlmHealthStatus | null>(null);
+  const [primaryProbing, setPrimaryProbing] = useState(false);
+  const [fallbackProbing, setFallbackProbing] = useState(false);
   const [ttsStatus, setTtsStatus] = useState<TtsStatus | null>(null);
   const [ttsApiKey, setTtsApiKey] = useState('');
   const [ttsRegion, setTtsRegion] = useState('');
@@ -63,6 +74,17 @@ export default function Settings() {
         setStatus(s);
         setBaseUrl(s.base_url);
         setModel(s.model);
+        // Pre-fill the fallback fields with sensible defaults the first time
+        // (when nothing's been saved yet) so the form is ready to test with
+        // just a pasted key. Already-configured users keep their saved values.
+        //
+        // Default to Google's OpenAI-compatible Gemini endpoint. It supports
+        // response_format: json_object, and its key is easy to get from
+        // aistudio.google.com.
+        setFbBaseUrl(
+          s.fallback_base_url || 'https://generativelanguage.googleapis.com/v1beta/openai',
+        );
+        setFbModel(s.fallback_model || 'gemini-2.5-flash');
       } catch (e) {
         setLoadErr((e as Error).message);
       }
@@ -142,6 +164,23 @@ export default function Settings() {
       if (status && model.trim() && model.trim() !== status.model) {
         patch.model = model.trim();
       }
+      // Fallback fields. Empty string for base_url / model clears them (so the
+      // user can disable the fallback by emptying the URL); key uses the same
+      // "empty preserves existing" rule as primary.
+      //
+      // Subtle: we pre-fill `fbBaseUrl`/`fbModel` with Gemini defaults on
+      // load so the test button works without retyping — but only persist
+      // those defaults when the user actually has a fallback key (else we'd
+      // silently save defaults into config.json for users who never wanted
+      // fallback at all).
+      if (fbApiKey.trim()) patch.fallback_api_key = fbApiKey.trim();
+      const hasFallbackIntent = fbApiKey.trim() !== '' || status?.fallback_configured;
+      if (hasFallbackIntent && status && fbBaseUrl !== status.fallback_base_url) {
+        patch.fallback_base_url = fbBaseUrl.trim();
+      }
+      if (hasFallbackIntent && status && fbModel !== status.fallback_model) {
+        patch.fallback_model = fbModel.trim();
+      }
 
       if (Object.keys(patch).length > 0) {
         const res = await fetch('/api/settings/llm', {
@@ -157,6 +196,9 @@ export default function Settings() {
         const s = (await res.json()) as LlmStatus;
         setStatus(s);
         setApiKey('');
+        setFbApiKey('');
+        setFbBaseUrl(s.fallback_base_url);
+        setFbModel(s.fallback_model);
       }
 
       const ttsPatch: Record<string, string> = {};
@@ -314,6 +356,54 @@ export default function Settings() {
     }
   }
 
+  // Probe a given provider with the values currently in the form. Blank
+  // fields fall through to the saved config on the backend, so a user who
+  // wants to test the already-saved key can just click without retyping.
+  async function probeLlm(which: 'primary' | 'fallback') {
+    const isPrimary = which === 'primary';
+    if (isPrimary) {
+      setPrimaryProbing(true);
+      setPrimaryHealth(null);
+    } else {
+      setFallbackProbing(true);
+      setFallbackHealth(null);
+    }
+    try {
+      const body = isPrimary
+        ? { which, api_key: apiKey.trim(), base_url: baseUrl.trim(), model: model.trim() }
+        : {
+            which,
+            api_key: fbApiKey.trim(),
+            base_url: fbBaseUrl.trim(),
+            model: fbModel.trim(),
+          };
+      const res = await fetch('/api/settings/llm/health-check', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result = (await res.json()) as LlmHealthStatus;
+      if (isPrimary) setPrimaryHealth(result);
+      else setFallbackHealth(result);
+    } catch (e) {
+      const fallback: LlmHealthStatus = {
+        ok: false,
+        which,
+        base_url: '',
+        model: '',
+        latency_ms: 0,
+        json_mode_ok: false,
+        error: (e as Error).message,
+      };
+      if (isPrimary) setPrimaryHealth(fallback);
+      else setFallbackHealth(fallback);
+    } finally {
+      if (isPrimary) setPrimaryProbing(false);
+      else setFallbackProbing(false);
+    }
+  }
+
   const keyPlaceholder = status?.configured
     ? '已配置 ●●●●●● (留空保留现有 key)'
     : 'sk-...';
@@ -456,6 +546,83 @@ export default function Settings() {
                   className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
                 />
               </Field>
+
+              <LlmHealthRow
+                label="测试 DeepSeek"
+                onProbe={() => probeLlm('primary')}
+                probing={primaryProbing}
+                health={primaryHealth}
+              />
+            </div>
+          </section>
+
+          <section className="bg-card border border-border rounded-lg p-5">
+            <div className="flex items-baseline justify-between mb-4">
+              <h2 className="text-sm font-medium text-foreground">兜底 LLM(Gemini 等)</h2>
+              <StatusBadge
+                status={
+                  status
+                    ? { configured: status.fallback_configured }
+                    : null
+                }
+                loadErr={loadErr}
+              />
+            </div>
+            <p className="mb-4 text-xs text-muted-foreground">
+              DeepSeek 超时 / 5xx / 限流时自动切到这里。所有 3 项填齐才生效;空 Base URL 会关闭兜底。
+            </p>
+
+            <div className="space-y-5">
+              <Field label="API Key">
+                <div className="flex gap-2">
+                  <input
+                    type={showFb ? 'text' : 'password'}
+                    value={fbApiKey}
+                    onChange={(e) => setFbApiKey(e.target.value)}
+                    placeholder={
+                      status?.fallback_configured
+                        ? '已配置 ●●●●●● (留空保留现有 key)'
+                        : 'Google AI Studio 的 API key'
+                    }
+                    className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowFb((s) => !s)}
+                    className="px-3 py-2 rounded-md border border-border text-xs hover:bg-accent/50"
+                  >
+                    {showFb ? '隐藏' : '显示'}
+                  </button>
+                </div>
+              </Field>
+
+              <Field label="Base URL">
+                <input
+                  value={fbBaseUrl}
+                  onChange={(e) => setFbBaseUrl(e.target.value)}
+                  placeholder="https://generativelanguage.googleapis.com/v1beta/openai"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  必须是兼容 OpenAI <code>chat/completions</code> + <code>response_format: json_object</code> 的端点。Gemini 用 <code>https://generativelanguage.googleapis.com/v1beta/openai</code>(申请 key:<a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">aistudio.google.com/apikey</a>)。
+                </p>
+              </Field>
+
+              <Field label="模型">
+                <input
+                  value={fbModel}
+                  onChange={(e) => setFbModel(e.target.value)}
+                  placeholder="gemini-2.5-flash"
+                  className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-border"
+                />
+              </Field>
+
+              <LlmHealthRow
+                label="测试兜底"
+                onProbe={() => probeLlm('fallback')}
+                probing={fallbackProbing}
+                health={fallbackHealth}
+              />
             </div>
           </section>
 
@@ -866,4 +1033,72 @@ function dataDirSourceLabel(source: DataDirStatus['source']) {
   if (source === 'env') return '环境变量';
   if (source === 'config') return '本地配置';
   return '默认目录';
+}
+
+function LlmHealthRow({
+  label,
+  onProbe,
+  probing,
+  health,
+}: {
+  label: string;
+  onProbe: () => void;
+  probing: boolean;
+  health: LlmHealthStatus | null;
+}) {
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onProbe}
+          disabled={probing}
+          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs hover:bg-accent/50 disabled:opacity-50"
+        >
+          {probing ? '请求中...' : label}
+        </button>
+        <span className="text-xs text-muted-foreground">
+          用一个最小请求验证 key + 模型 + JSON mode 是否可用
+        </span>
+      </div>
+      {health && (
+        <div className="mt-3 space-y-1 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            {health.ok ? (
+              <span className="rounded border border-success/30 bg-success/10 px-2 py-0.5 text-success">
+                ● 通
+              </span>
+            ) : (
+              <span className="rounded border border-destructive/30 bg-destructive/5 px-2 py-0.5 text-destructive">
+                ○ 失败
+              </span>
+            )}
+            <span className="text-muted-foreground">
+              延迟 <span className="font-mono">{health.latency_ms}ms</span>
+              {health.status != null && (
+                <>
+                  {' · '}HTTP <span className="font-mono">{health.status}</span>
+                </>
+              )}
+              {health.ok && (
+                <>
+                  {' · '}
+                  {health.json_mode_ok ? 'JSON mode ✓' : 'JSON mode ✗ (模型未返回合法 JSON,app 会失败)'}
+                </>
+              )}
+            </span>
+          </div>
+          {health.error && (
+            <div className="break-all text-destructive">{health.error}</div>
+          )}
+          {health.content_preview && (
+            <div className="break-all text-muted-foreground">
+              <span className="text-muted-foreground/70">返回预览: </span>
+              <span className="font-mono">{health.content_preview}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

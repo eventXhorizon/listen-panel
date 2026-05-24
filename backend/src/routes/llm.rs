@@ -9,6 +9,7 @@ use crate::auth::CurrentUser;
 use crate::config::SharedLlm;
 use crate::error::{AppError, Result};
 use crate::language::Language;
+use crate::llm_call::{LlmProvider, call_chat_completions};
 
 pub fn router() -> Router<crate::AppState> {
     Router::new().route("/lookup", post(lookup))
@@ -23,7 +24,7 @@ pub struct LookupReq {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LookupResp {
+pub struct LookupCore {
     pub lemma: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phonetic: Option<String>,
@@ -36,6 +37,16 @@ pub struct LookupResp {
     pub example_zh: Option<String>,
 }
 
+/// Wire format: lookup fields + which provider answered. Provider tag is
+/// surfaced in the UI so the user can see when DeepSeek is down and they're
+/// reading fallback output.
+#[derive(Debug, Serialize)]
+pub struct LookupResp {
+    #[serde(flatten)]
+    pub core: LookupCore,
+    pub provider: LlmProvider,
+}
+
 async fn lookup(
     State(http): State<reqwest::Client>,
     State(llm): State<SharedLlm>,
@@ -45,11 +56,10 @@ async fn lookup(
     let cfg = llm.read().await.clone();
     if !cfg.configured() {
         return Err(AppError(anyhow::anyhow!(
-            "DeepSeek API key not configured; set it on the Settings page"
+            "LLM API key not configured; set it on the Settings page"
         )));
     }
 
-    let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
     let language = req
         .language
         .as_deref()
@@ -57,7 +67,6 @@ async fn lookup(
         .unwrap_or(Language::English);
 
     let body = json!({
-        "model": cfg.model,
         "messages": [
             { "role": "system", "content": language.lookup_system_prompt() },
             { "role": "user", "content": language.lookup_user_prompt(&req.word, &req.context) }
@@ -66,39 +75,20 @@ async fn lookup(
         "temperature": 0.3
     });
 
-    let res = http
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send()
+    let outcome = call_chat_completions(&http, &cfg, body, "lookup")
         .await
-        .map_err(anyhow::Error::from)?;
+        .map_err(AppError)?;
 
-    if !res.status().is_success() {
-        let status = res.status();
-        let text = res.text().await.unwrap_or_default();
-        let trimmed: String = text.chars().take(200).collect();
+    let core: LookupCore = serde_json::from_str(&outcome.content)
+        .map_err(|e| anyhow::anyhow!("LLM returned invalid JSON: {e}"))?;
+
+    if core.definition_zh.is_empty() {
         return Err(AppError(anyhow::anyhow!(
-            "DeepSeek API {status}: {trimmed}"
+            "LLM response missing definition_zh"
         )));
     }
-
-    let raw: serde_json::Value = res.json().await.map_err(anyhow::Error::from)?;
-    let content = raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| anyhow::anyhow!("DeepSeek response missing message.content"))?;
-
-    let parsed: LookupResp = serde_json::from_str(content)
-        .map_err(|e| anyhow::anyhow!("DeepSeek returned invalid JSON: {e}"))?;
-
-    if parsed.definition_zh.is_empty() {
-        return Err(AppError(anyhow::anyhow!(
-            "DeepSeek response missing definition_zh"
-        )));
-    }
-    Ok(Json(parsed))
+    Ok(Json(LookupResp {
+        core,
+        provider: outcome.provider,
+    }))
 }

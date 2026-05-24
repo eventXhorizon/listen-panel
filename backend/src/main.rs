@@ -4,6 +4,7 @@ mod db;
 mod error;
 mod furigana;
 mod language;
+mod llm_call;
 mod models;
 mod news_fetcher;
 mod paths;

@@ -8,16 +8,18 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::auth::{self, CurrentUser};
 use crate::config::{self, AsrProvider, SharedAsr, SharedLlm, SharedTts, TtsProvider};
 use crate::error::Result;
+use crate::llm_call::salvage_json;
 use crate::paths::DataDirStatus;
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/settings/llm", get(get_llm).put(put_llm))
+        .route("/settings/llm/health-check", post(check_llm_health))
         .route("/settings/tts", get(get_tts).put(put_tts))
         .route("/settings/asr/health-check", post(check_asr_health))
         .route("/settings/asr", get(get_asr).put(put_asr))
@@ -29,6 +31,11 @@ pub struct LlmStatus {
     pub configured: bool,
     pub base_url: String,
     pub model: String,
+    /// Whether the fallback provider (used only when primary times out / 5xx)
+    /// has all three of api_key/base_url/model set.
+    pub fallback_configured: bool,
+    pub fallback_base_url: String,
+    pub fallback_model: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +107,11 @@ pub struct UpdateLlm {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    /// Same semantics for the fallback provider. Setting all three lights up
+    /// fallback; clearing the key disables it (no longer "configured").
+    pub fallback_api_key: Option<String>,
+    pub fallback_base_url: Option<String>,
+    pub fallback_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +156,9 @@ async fn get_llm(State(llm): State<SharedLlm>, user: CurrentUser) -> axum::respo
         configured: g.configured(),
         base_url: g.base_url.clone(),
         model: g.model.clone(),
+        fallback_configured: g.fallback_configured(),
+        fallback_base_url: g.fallback_base_url.clone(),
+        fallback_model: g.fallback_model.clone(),
     })
     .into_response()
 }
@@ -176,15 +191,36 @@ async fn put_llm(
                 g.model = trimmed.to_string();
             }
         }
+        // Fallback fields: same "empty string preserves existing" semantics for
+        // the key (so the form can hide it after first save), but base_url and
+        // model just track whatever the form sends so you can edit / clear them.
+        if let Some(k) = patch.fallback_api_key {
+            let trimmed = k.trim();
+            if !trimmed.is_empty() {
+                g.fallback_api_key = trimmed.to_string();
+            }
+        }
+        if let Some(b) = patch.fallback_base_url {
+            g.fallback_base_url = b.trim().to_string();
+        }
+        if let Some(m) = patch.fallback_model {
+            g.fallback_model = m.trim().to_string();
+        }
         g.clone()
     };
 
     config::save(&snapshot).await?;
 
+    // Capture the booleans before moving any owned strings out of snapshot.
+    let configured = snapshot.configured();
+    let fallback_configured = snapshot.fallback_configured();
     Ok(Json(LlmStatus {
-        configured: snapshot.configured(),
+        configured,
         base_url: snapshot.base_url,
         model: snapshot.model,
+        fallback_configured,
+        fallback_base_url: snapshot.fallback_base_url,
+        fallback_model: snapshot.fallback_model,
     }))
     .map(axum::response::IntoResponse::into_response)
 }
@@ -570,4 +606,339 @@ fn worker_summary_from_capabilities(value: &Value) -> Option<WorkerSummary> {
             })
             .unwrap_or_default(),
     })
+}
+
+// ─────────────────────────── LLM health check ───────────────────────────
+//
+// "Does this key + base_url + model actually return a usable response?"
+// Used by the test buttons next to each provider block in Settings. The
+// form sends whatever the user has currently typed; blank fields fall back
+// to the saved config so the user can verify the live config too.
+
+#[derive(Debug, Deserialize)]
+pub struct CheckLlmHealth {
+    /// Which of the two slots in `LlmConfig` to test.
+    pub which: LlmHealthTarget,
+    /// Empty string or absent → use the saved key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Empty string or absent → use the saved base_url.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Empty string or absent → use the saved model.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmHealthTarget {
+    Primary,
+    Fallback,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LlmHealthStatus {
+    pub ok: bool,
+    pub which: LlmHealthTarget,
+    pub base_url: String,
+    pub model: String,
+    pub latency_ms: u128,
+    /// HTTP status from the upstream, when we got a response at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// Whether the model returned a value that parses as JSON. Useful: a
+    /// provider can be reachable but not support `response_format`, in which
+    /// case it'll return free text and the app's JSON-mode calls will fail.
+    pub json_mode_ok: bool,
+    /// First ~200 chars of `choices[0].message.content`, for sanity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_preview: Option<String>,
+    /// Populated when the call failed at any stage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+async fn check_llm_health(
+    State(llm): State<SharedLlm>,
+    State(http): State<reqwest::Client>,
+    user: CurrentUser,
+    Json(req): Json<CheckLlmHealth>,
+) -> Result<Json<LlmHealthStatus>> {
+    if !user.is_admin {
+        return Ok(Json(LlmHealthStatus {
+            ok: false,
+            which: req.which,
+            base_url: String::new(),
+            model: String::new(),
+            latency_ms: 0,
+            status: None,
+            json_mode_ok: false,
+            content_preview: None,
+            error: Some("admin only".to_string()),
+        }));
+    }
+
+    // Resolve the three credentials. Empty strings fall back to the saved
+    // config so the user can probe their live config without retyping the
+    // key — same convention as the ASR health check.
+    let saved = llm.read().await.clone();
+    let (saved_key, saved_url, saved_model) = match req.which {
+        LlmHealthTarget::Primary => (saved.api_key, saved.base_url, saved.model),
+        LlmHealthTarget::Fallback => (
+            saved.fallback_api_key,
+            saved.fallback_base_url,
+            saved.fallback_model,
+        ),
+    };
+    let key = req
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(saved_key);
+    let url = req
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(saved_url);
+    let model = req
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(saved_model);
+
+    if key.is_empty() || url.is_empty() || model.is_empty() {
+        return Ok(Json(LlmHealthStatus {
+            ok: false,
+            which: req.which,
+            base_url: url,
+            model,
+            latency_ms: 0,
+            status: None,
+            json_mode_ok: false,
+            content_preview: None,
+            error: Some(
+                "missing fields — fill key, base_url and model (or save them) first".to_string(),
+            ),
+        }));
+    }
+
+    let endpoint = format!("{}/chat/completions", url.trim_end_matches('/'));
+    let started = Instant::now();
+
+    // First attempt: with `response_format: json_object`. This is what the
+    // app actually uses in production, so passing here means "really works."
+    //
+    // Why the verbose system prompt: a casual prompt like "reply with JSON"
+    // makes some providers (notably Gemini's OpenAI-compat) ignore the
+    // response_format flag and prefix the JSON with "Here is the JSON
+    // requested: …", which fails JSON parsing. The real app's prompts have
+    // strong JSON-only framing — we mirror that here so the test reflects
+    // production behavior, not an artificially loose test.
+    let json_body = json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a JSON-only API. Output a single valid JSON object and \
+                            nothing else — no markdown fences, no commentary, no leading or \
+                            trailing prose. Exactly one JSON object."
+            },
+            {
+                "role": "user",
+                "content": "Return this JSON object: {\"ok\": true}"
+            }
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0,
+        // 32 was too tight for Gemini: it spent the budget on "Here is the
+        // JSON requested: ```" before reaching the `{`. 256 is comfortably
+        // larger than any salvage-worthy prose prefix while still keeping
+        // the probe cheap.
+        "max_tokens": 256,
+    });
+    let first = probe_once(&http, &endpoint, &key, &json_body).await;
+
+    // Categorize: if the provider explicitly rejected `response_format` /
+    // `json_object`, the API itself may be fine but JSON mode is unsupported.
+    // Retry once without response_format to confirm that distinction.
+    let response_format_rejected = matches!(
+        &first,
+        ProbeOutcome::Http { status, body }
+            if *status == 400 && body_mentions_response_format(body)
+    );
+
+    if response_format_rejected {
+        let plain_body = json!({
+            "model": model,
+            "messages": [
+                { "role": "user", "content": "Reply with the string ok." }
+            ],
+            "temperature": 0,
+            "max_tokens": 256,
+        });
+        let retry = probe_once(&http, &endpoint, &key, &plain_body).await;
+        let latency_ms = started.elapsed().as_millis();
+        return Ok(Json(match retry {
+            ProbeOutcome::Ok { status, content } => LlmHealthStatus {
+                // API itself works, but app calls *will* break because we
+                // need JSON mode for every prompt. Surface as not-ok so the
+                // user doesn't save this provider thinking it's wired up.
+                ok: false,
+                which: req.which,
+                base_url: url,
+                model,
+                latency_ms,
+                status: Some(status),
+                json_mode_ok: false,
+                content_preview: content.map(|s| s.chars().take(200).collect()),
+                error: Some(
+                    "API 通,但模型不支持 response_format: json_object — 本应用所有调用都依赖 \
+                     JSON mode,这个 provider 不能直接当兜底。换支持 json_object 的 provider \
+                     (推荐 Gemini,或 Kimi / 通义千问 / 火山方舟托管的 DeepSeek)。"
+                        .to_string(),
+                ),
+            },
+            ProbeOutcome::Http { status, body } => LlmHealthStatus {
+                ok: false,
+                which: req.which,
+                base_url: url,
+                model,
+                latency_ms,
+                status: Some(status),
+                json_mode_ok: false,
+                content_preview: None,
+                error: Some(format!("retry without response_format also failed: HTTP {status}: {body}")),
+            },
+            ProbeOutcome::Network(e) => LlmHealthStatus {
+                ok: false,
+                which: req.which,
+                base_url: url,
+                model,
+                latency_ms,
+                status: None,
+                json_mode_ok: false,
+                content_preview: None,
+                error: Some(format!("retry network: {e}")),
+            },
+        }));
+    }
+
+    // Not the "response_format unsupported" case — report the first attempt's
+    // result directly.
+    let latency_ms = started.elapsed().as_millis();
+    Ok(Json(match first {
+        ProbeOutcome::Ok { status, content } => {
+            // Preview shows the raw model output (with any prose) so the
+            // user can see what the model actually said. But `json_mode_ok`
+            // reflects whether the cleanup we apply in production can
+            // extract valid JSON — that's the relevant signal for "will
+            // the app work with this provider."
+            let preview = content
+                .as_ref()
+                .map(|s| s.chars().take(200).collect::<String>());
+            let json_mode_ok = content
+                .as_deref()
+                .map(|s| serde_json::from_str::<Value>(&salvage_json(s)).is_ok())
+                .unwrap_or(false);
+            LlmHealthStatus {
+                ok: true,
+                which: req.which,
+                base_url: url,
+                model,
+                latency_ms,
+                status: Some(status),
+                json_mode_ok,
+                content_preview: preview,
+                error: None,
+            }
+        }
+        ProbeOutcome::Http { status, body } => LlmHealthStatus {
+            ok: false,
+            which: req.which,
+            base_url: url,
+            model,
+            latency_ms,
+            status: Some(status),
+            json_mode_ok: false,
+            content_preview: None,
+            error: Some(if body.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                format!("HTTP {status}: {body}")
+            }),
+        },
+        ProbeOutcome::Network(e) => LlmHealthStatus {
+            ok: false,
+            which: req.which,
+            base_url: url,
+            model,
+            latency_ms,
+            status: None,
+            json_mode_ok: false,
+            content_preview: None,
+            error: Some(format!("network: {e}")),
+        },
+    }))
+}
+
+enum ProbeOutcome {
+    /// 2xx with parsed content (or no content found).
+    Ok {
+        status: u16,
+        content: Option<String>,
+    },
+    /// Non-2xx HTTP with an upstream error body (trimmed).
+    Http { status: u16, body: String },
+    /// Failed to even get an HTTP response (timeout / connect / DNS / decode).
+    Network(String),
+}
+
+async fn probe_once(
+    http: &reqwest::Client,
+    endpoint: &str,
+    api_key: &str,
+    body: &Value,
+) -> ProbeOutcome {
+    let res = match http.post(endpoint).bearer_auth(api_key).json(body).send().await {
+        Ok(r) => r,
+        Err(e) => return ProbeOutcome::Network(format!("{e}")),
+    };
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return ProbeOutcome::Http {
+            status: status.as_u16(),
+            body: text.chars().take(400).collect(),
+        };
+    }
+    let raw: Value = match res.json().await {
+        Ok(v) => v,
+        Err(e) => return ProbeOutcome::Network(format!("response decode: {e}")),
+    };
+    let content = raw
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|s| s.as_str())
+        .map(str::to_string);
+    ProbeOutcome::Ok {
+        status: status.as_u16(),
+        content,
+    }
+}
+
+/// Heuristic match for "this provider doesn't grok our response_format value."
+/// Different providers phrase the error differently — we just look for either
+/// keyword and trust the retry-without-`response_format` to confirm.
+fn body_mentions_response_format(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("response_format") || lower.contains("json_object")
 }

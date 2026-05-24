@@ -11,6 +11,15 @@ pub struct LlmConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
+    /// Backup provider used only when the primary times out, hits a 5xx, or
+    /// gets rate-limited. Defaults to empty so existing single-provider configs
+    /// keep working untouched.
+    #[serde(default)]
+    pub fallback_api_key: String,
+    #[serde(default)]
+    pub fallback_base_url: String,
+    #[serde(default)]
+    pub fallback_model: String,
 }
 
 impl Default for LlmConfig {
@@ -19,6 +28,9 @@ impl Default for LlmConfig {
             api_key: String::new(),
             base_url: "https://api.deepseek.com".to_string(),
             model: "deepseek-chat".to_string(),
+            fallback_api_key: String::new(),
+            fallback_base_url: String::new(),
+            fallback_model: String::new(),
         }
     }
 }
@@ -26,6 +38,12 @@ impl Default for LlmConfig {
 impl LlmConfig {
     pub fn configured(&self) -> bool {
         !self.api_key.is_empty()
+    }
+
+    pub fn fallback_configured(&self) -> bool {
+        !self.fallback_api_key.is_empty()
+            && !self.fallback_base_url.is_empty()
+            && !self.fallback_model.is_empty()
     }
 }
 

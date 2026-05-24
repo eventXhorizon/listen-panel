@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Pencil, Plus, X } from 'lucide-react';
 import { createQuickNote, updateQuickNote } from '../api';
+import ProviderBadge from './ProviderBadge';
 import type {
   MaterialLanguage,
   QuickNote,
@@ -205,6 +206,10 @@ export function ResultView({ note, onUpdated }: ResultViewProps) {
 
   return (
     <div className="space-y-4">
+      {/* `provider` is only set on the immediate create response, so this
+          badge only appears right after a fresh analysis (not in the history
+          list, where the DB doesn't remember which provider answered). */}
+      {note.provider && <ProviderBadge provider={note.provider} />}
       <div>
         <div className="mb-1 text-xs text-muted-foreground">原文</div>
         <p className="text-base leading-relaxed text-foreground">{note.text}</p>

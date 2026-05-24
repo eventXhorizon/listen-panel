@@ -7,13 +7,14 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::SqlitePool;
 
 use crate::config::SharedLlm;
+use crate::llm_call::{LlmProvider, call_chat_completions};
 use crate::models::{NewsIdiom, NewsSegment};
 use crate::youtube::{self, VideoMetadata};
 
@@ -321,17 +322,12 @@ pub async fn analyze(
     transcript: &str,
 ) -> Result<Analysis> {
     let cfg = llm.read().await.clone();
-    if !cfg.configured() {
-        return Err(anyhow!("DeepSeek API key not configured"));
-    }
-    let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
     let system = if language == "ja" {
         japanese_system_prompt()
     } else {
         english_system_prompt()
     };
     let body = json!({
-        "model": cfg.model,
         "messages": [
             { "role": "system", "content": system },
             { "role": "user",   "content": user_prompt(title, transcript) },
@@ -340,31 +336,11 @@ pub async fn analyze(
         "temperature": 0.3,
     });
 
-    let res = http
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send()
-        .await
-        .context("DeepSeek request")?;
-
-    if !res.status().is_success() {
-        let status = res.status();
-        let text = res.text().await.unwrap_or_default();
-        let trimmed: String = text.chars().take(300).collect();
-        return Err(anyhow!("DeepSeek {status}: {trimmed}"));
+    let outcome = call_chat_completions(http, &cfg, body, "news analyze").await?;
+    if outcome.provider == LlmProvider::Fallback {
+        tracing::info!("news analyze served via {}", outcome.provider.label_zh());
     }
-
-    let raw: serde_json::Value = res.json().await.context("DeepSeek json envelope")?;
-    let content = raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| anyhow!("DeepSeek response missing message.content"))?;
-
-    parse_analysis(content)
+    parse_analysis(&outcome.content)
 }
 
 fn parse_analysis(content: &str) -> Result<Analysis> {

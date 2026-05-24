@@ -10,12 +10,13 @@
 //! everything else is escaped, so the frontend can safely use
 //! `dangerouslySetInnerHTML`.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::SqlitePool;
 
 use crate::config::SharedLlm;
+use crate::llm_call::{LlmProvider, call_chat_completions};
 
 /// Send 5 segments per call — keeps each request small enough that DeepSeek
 /// finishes quickly while amortizing the prompt overhead.
@@ -77,10 +78,6 @@ async fn annotate_batch(
     segments: &[(i64, String)],
 ) -> Result<Vec<(i64, String)>> {
     let cfg = llm.read().await.clone();
-    if !cfg.configured() {
-        return Err(anyhow!("DeepSeek API key not configured"));
-    }
-    let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
 
     let items: Vec<serde_json::Value> = segments
         .iter()
@@ -89,7 +86,6 @@ async fn annotate_batch(
     let user_msg = serde_json::to_string(&json!({ "segments": items }))?;
 
     let body = json!({
-        "model": cfg.model,
         "messages": [
             { "role": "system", "content": system_prompt() },
             { "role": "user",   "content": user_msg },
@@ -98,29 +94,10 @@ async fn annotate_batch(
         "temperature": 0.2,
     });
 
-    let res = http
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send()
-        .await
-        .context("DeepSeek furigana request")?;
-
-    if !res.status().is_success() {
-        let status = res.status();
-        let text = res.text().await.unwrap_or_default();
-        let trimmed: String = text.chars().take(300).collect();
-        return Err(anyhow!("DeepSeek {status}: {trimmed}"));
+    let outcome = call_chat_completions(http, &cfg, body, "furigana").await?;
+    if outcome.provider == LlmProvider::Fallback {
+        tracing::info!("furigana served via {}", outcome.provider.label_zh());
     }
-
-    let raw: serde_json::Value = res.json().await.context("DeepSeek envelope")?;
-    let content = raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| anyhow!("DeepSeek response missing message.content"))?;
 
     #[derive(Deserialize)]
     struct Resp {
@@ -133,8 +110,8 @@ async fn annotate_batch(
         #[serde(default)]
         html: String,
     }
-    let parsed: Resp =
-        serde_json::from_str(content).with_context(|| format!("parse furigana JSON: {content}"))?;
+    let parsed: Resp = serde_json::from_str(&outcome.content)
+        .with_context(|| format!("parse furigana JSON: {}", outcome.content))?;
 
     Ok(parsed
         .segments

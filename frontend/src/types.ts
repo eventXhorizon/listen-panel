@@ -136,6 +136,29 @@ export interface LlmStatus {
   configured: boolean;
   base_url: string;
   model: string;
+  fallback_configured: boolean;
+  fallback_base_url: string;
+  fallback_model: string;
+}
+
+/**
+ * Which provider answered a given LLM query. Surfaced on `/api/lookup`
+ * responses and the immediate response from `POST /api/quick-notes` so the
+ * UI can show a "DeepSeek" / "Gemini 兜底" badge.
+ */
+export type LlmProvider = 'primary' | 'fallback';
+
+/** Result of `POST /api/settings/llm/health-check`. */
+export interface LlmHealthStatus {
+  ok: boolean;
+  which: 'primary' | 'fallback';
+  base_url: string;
+  model: string;
+  latency_ms: number;
+  status?: number;
+  json_mode_ok: boolean;
+  content_preview?: string;
+  error?: string;
 }
 
 export interface TtsStatus {
@@ -286,6 +309,12 @@ export interface QuickNote {
   grammar: QuickNoteGrammar[];
   source?: string;
   created_at: string;
+  /**
+   * Only present on the immediate create response — tells the dialog whether
+   * the primary (DeepSeek) or the configured fallback produced the analysis.
+   * The DB doesn't remember, so list/get responses omit this field.
+   */
+  provider?: LlmProvider;
 }
 
 export interface CreateQuickNote {
