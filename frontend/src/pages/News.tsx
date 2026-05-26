@@ -67,18 +67,27 @@ const TOPIC_LABEL: Record<NewsTopic, string> = {
   other: '其他',
 };
 
-function formatRelative(iso: string): string {
-  const d = new Date(iso).getTime();
-  if (!Number.isFinite(d)) return '';
-  const diff = Date.now() - d;
-  const minutes = Math.round(diff / 60_000);
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days} 天前`;
-  return new Date(iso).toLocaleDateString();
+/** Format `published_at` as YYYY-MM-DD so cards show the actual date —
+ *  cleaner than relative ("3 天前") when many items publish in the same
+ *  window, and makes the DESC sort visually verifiable.
+ *  For very recent items (today / yesterday) we still show a relative
+ *  tag, since "今天" reads more naturally than the raw date.
+ */
+function formatPublishedAt(iso: string): string {
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return '';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const diffDays = Math.floor((today - new Date(iso).setHours(0, 0, 0, 0)) / dayMs);
+  if (diffDays === 0) return '今天';
+  if (diffDays === 1) return '昨天';
+  // YYYY-MM-DD in the user's local timezone.
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function formatDuration(sec: number): string {
@@ -129,7 +138,16 @@ export default function News() {
       duration: duration === 'all' ? undefined : duration,
     })
       .then((next) => {
-        if (!cancelled) setItems(next);
+        if (cancelled) return;
+        // Defensive: backend already ORDER BY published_at DESC, but if
+        // that ever drifts (caching, partial reads, future endpoint
+        // changes) the page should still show newest first.
+        const sorted = [...next].sort(
+          (a, b) =>
+            new Date(b.published_at).getTime() -
+            new Date(a.published_at).getTime(),
+        );
+        setItems(sorted);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -337,7 +355,9 @@ function NewsCard({
           </Badge>
           <span>难度 {item.difficulty}/5</span>
           <span>·</span>
-          <span>{formatRelative(item.published_at)}</span>
+          <span className="font-mono tabular-nums" title={item.published_at}>
+            {formatPublishedAt(item.published_at)}
+          </span>
         </div>
         <h3 className="line-clamp-2 text-[15px] font-medium leading-snug text-foreground">
           {item.title}
