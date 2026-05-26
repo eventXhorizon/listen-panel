@@ -11,6 +11,7 @@ import {
 import type {
   ClozeBlankResult,
   ClozeBlankStatus,
+  ClozeCategory,
   ClozeDifficulty,
   ClozeExercise,
   ClozeExerciseSummary,
@@ -442,6 +443,16 @@ function PracticeView({
   const [grade, setGrade] = useState<ClozeGradeResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  // Skeleton hints (first letter + underscores per word) anchor each blank
+  // to one answer. Toggle off for a true hard-mode where only the category
+  // is visible. Persists across exercises via localStorage.
+  const [skeletonOn, setSkeletonOn] = useState<boolean>(() => {
+    const v = localStorage.getItem('cloze-skeleton-on');
+    return v == null ? true : v === '1';
+  });
+  useEffect(() => {
+    localStorage.setItem('cloze-skeleton-on', skeletonOn ? '1' : '0');
+  }, [skeletonOn]);
 
   useEffect(() => {
     let cancelled = false;
@@ -518,6 +529,16 @@ function PracticeView({
               ({Math.round(grade.score * 100)}%)
             </span>
           )}
+          <label className="inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={skeletonOn}
+              onChange={(e) => setSkeletonOn(e.target.checked)}
+              className="accent-primary"
+              disabled={!!grade}
+            />
+            首字母提示
+          </label>
           <Button variant="ghost" size="sm" onClick={onReset}>
             重置
           </Button>
@@ -560,11 +581,12 @@ function PracticeView({
           setAnswers={setAnswers}
           grade={grade}
           revealed={revealed}
+          skeletonOn={skeletonOn}
           disabled={!!grade || submitting}
         />
       </article>
 
-      {grade && <GradeReport grade={grade} />}
+      {grade && <GradeReport grade={grade} blanks={exercise.blanks} />}
     </div>
   );
 }
@@ -578,6 +600,7 @@ function ClozeText({
   setAnswers,
   grade,
   revealed,
+  skeletonOn,
   disabled,
 }: {
   text: string;
@@ -586,6 +609,7 @@ function ClozeText({
   setAnswers: (next: string[]) => void;
   grade: ClozeGradeResult | null;
   revealed: boolean;
+  skeletonOn: boolean;
   disabled: boolean;
 }) {
   // Split text into [text, blankIdx, text, blankIdx, ...] segments.
@@ -621,8 +645,10 @@ function ClozeText({
               refs.current[blankIdx] = el;
             }}
             value={value}
-            placeholder={blank.hint ?? `#${blankIdx + 1}`}
             answer={blank.answer}
+            category={blank.category}
+            hint={blank.hint}
+            skeletonOn={skeletonOn}
             revealed={revealed}
             result={result}
             disabled={disabled}
@@ -637,8 +663,13 @@ function ClozeText({
 
 interface BlankInputProps {
   value: string;
-  placeholder: string;
   answer: string;
+  category: ClozeCategory;
+  hint?: string;
+  /** When on, placeholder shows a "t____ d___" skeleton anchored to the
+   *  answer (and the LLM hint is rendered below). When off, only the
+   *  category label is visible — the input is a true blank slate. */
+  skeletonOn: boolean;
   revealed: boolean;
   result: ClozeBlankResult | null;
   disabled: boolean;
@@ -647,14 +678,27 @@ interface BlankInputProps {
 }
 
 const BlankInput = forwardRef<HTMLInputElement, BlankInputProps>(function BlankInput(
-  { value, placeholder, answer, revealed, result, disabled, onChange, onEnter },
+  {
+    value,
+    answer,
+    category,
+    hint,
+    skeletonOn,
+    revealed,
+    result,
+    disabled,
+    onChange,
+    onEnter,
+  },
   ref,
 ) {
   const status: ClozeBlankStatus | 'idle' = result?.status ?? 'idle';
   const showAnswer = revealed && !result;
-  // Visible width is sized to the answer length so the layout doesn't give
-  // too much away on short answers but doesn't squeeze longer phrases.
+  // Width matches the answer length so the user can also count letters.
+  // The skeleton (if on) further pins the answer down character-by-character.
   const widthCh = Math.max(6, Math.min(answer.length + 2, 22));
+  const placeholder = skeletonOn ? buildSkeleton(answer) : categoryLabel(category);
+  const showHintLine = skeletonOn && hint && !result;
   return (
     <span className="inline-flex flex-col items-stretch align-baseline">
       <input
@@ -673,6 +717,9 @@ const BlankInput = forwardRef<HTMLInputElement, BlankInputProps>(function BlankI
         style={{ width: `${widthCh}ch` }}
         className={cn(
           'mx-1 inline-block rounded border-b-2 bg-transparent px-1.5 py-0.5 text-center text-sm font-medium outline-none transition',
+          // The placeholder needs its own color so it stands out from a typed
+          // answer; native CSS already dims it but we add a touch.
+          'placeholder:font-normal placeholder:tracking-wider placeholder:text-muted-foreground/70',
           status === 'idle' &&
             !showAnswer &&
             'border-foreground/40 focus:border-primary',
@@ -685,6 +732,14 @@ const BlankInput = forwardRef<HTMLInputElement, BlankInputProps>(function BlankI
           status === 'empty' && 'border-destructive/60 text-muted-foreground',
         )}
       />
+      {showHintLine && (
+        <span className="mt-0.5 flex items-center justify-center gap-1 text-[10px] leading-3 text-muted-foreground">
+          <span className="rounded bg-accent/60 px-1 py-px text-[9px] text-foreground/60">
+            {categoryLabel(category)}
+          </span>
+          <span className="truncate">{hint}</span>
+        </span>
+      )}
       {result && result.status !== 'correct' && (
         <span className="mt-0.5 text-center text-[10px] font-normal leading-3 text-muted-foreground">
           ✓ {result.correct_answer}
@@ -694,55 +749,68 @@ const BlankInput = forwardRef<HTMLInputElement, BlankInputProps>(function BlankI
   );
 });
 
-function GradeReport({ grade }: { grade: ClozeGradeResult }) {
+function GradeReport({
+  grade,
+  blanks,
+}: {
+  grade: ClozeGradeResult;
+  blanks: ClozeExercise['blanks'];
+}) {
   return (
     <div className="mt-6 rounded-lg border border-border bg-card p-4">
       <h3 className="mb-3 text-sm font-medium text-foreground">详细讲解</h3>
       <ul className="space-y-2.5">
-        {grade.results.map((r) => (
-          <li
-            key={r.index}
-            className="flex items-start gap-3 rounded-md bg-accent/30 p-2.5 text-sm"
-          >
-            <span
-              className={cn(
-                'mt-0.5 inline-block w-6 shrink-0 rounded text-center text-[11px] font-medium',
-                r.status === 'correct' && 'bg-emerald-100 text-emerald-700',
-                r.status === 'close' && 'bg-amber-100 text-amber-800',
-                r.status === 'wrong' && 'bg-destructive/15 text-destructive',
-                r.status === 'empty' &&
-                  'bg-muted text-muted-foreground',
-              )}
+        {grade.results.map((r) => {
+          const cat = blanks[r.index]?.category;
+          return (
+            <li
+              key={r.index}
+              className="flex items-start gap-3 rounded-md bg-accent/30 p-2.5 text-sm"
             >
-              #{r.index + 1}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-baseline gap-1.5">
-                <span className="text-xs text-muted-foreground">你的:</span>
-                <span
-                  className={cn(
-                    r.status === 'correct' && 'text-emerald-700',
-                    r.status === 'wrong' && 'text-destructive line-through',
-                    r.status === 'empty' && 'text-muted-foreground italic',
-                  )}
-                >
-                  {r.user_answer || '(空)'}
-                </span>
-                {r.status !== 'correct' && (
-                  <>
-                    <span className="text-xs text-muted-foreground">正确:</span>
-                    <span className="font-medium text-foreground">
-                      {r.correct_answer}
-                    </span>
-                  </>
+              <span
+                className={cn(
+                  'mt-0.5 inline-block w-6 shrink-0 rounded text-center text-[11px] font-medium',
+                  r.status === 'correct' && 'bg-emerald-100 text-emerald-700',
+                  r.status === 'close' && 'bg-amber-100 text-amber-800',
+                  r.status === 'wrong' && 'bg-destructive/15 text-destructive',
+                  r.status === 'empty' && 'bg-muted text-muted-foreground',
                 )}
+              >
+                #{r.index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-1.5">
+                  {cat && (
+                    <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-foreground/70">
+                      {categoryLabel(cat)}
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground">你的:</span>
+                  <span
+                    className={cn(
+                      r.status === 'correct' && 'text-emerald-700',
+                      r.status === 'wrong' && 'text-destructive line-through',
+                      r.status === 'empty' && 'text-muted-foreground italic',
+                    )}
+                  >
+                    {r.user_answer || '(空)'}
+                  </span>
+                  {r.status !== 'correct' && (
+                    <>
+                      <span className="text-xs text-muted-foreground">正确:</span>
+                      <span className="font-medium text-foreground">
+                        {r.correct_answer}
+                      </span>
+                    </>
+                  )}
+                </div>
+                <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                  {r.explanation_zh}
+                </div>
               </div>
-              <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                {r.explanation_zh}
-              </div>
-            </div>
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -796,4 +864,53 @@ function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+/** First letter of each word + underscores for the remaining letters.
+ *  Non-letter chars (apostrophes, hyphens) are kept as-is.
+ *
+ *  Examples:
+ *    "turned"      → "t_____"
+ *    "turned down" → "t_____ d___"
+ *    "haven't"     → "h___'_"
+ *    "in"          → "i_"
+ */
+function buildSkeleton(answer: string): string {
+  return answer
+    .split(/(\s+)/) // keep whitespace as separator tokens
+    .map((tok) => {
+      if (/^\s+$/.test(tok)) return tok;
+      let out = '';
+      let seenFirstLetter = false;
+      for (const ch of tok) {
+        if (/[A-Za-z]/.test(ch)) {
+          if (!seenFirstLetter) {
+            out += ch.toLowerCase();
+            seenFirstLetter = true;
+          } else {
+            out += '_';
+          }
+        } else {
+          out += ch;
+        }
+      }
+      return out;
+    })
+    .join('');
+}
+
+const CATEGORY_LABELS: Record<ClozeCategory, string> = {
+  word: '词',
+  phrase: '短语动词',
+  idiom: '习语',
+  collocation: '搭配',
+  preposition: '介词',
+  article: '冠词',
+  connective: '连词',
+  verb_form: '动词形式',
+  modal: '情态',
+};
+
+function categoryLabel(c: ClozeCategory): string {
+  return CATEGORY_LABELS[c] ?? '其他';
 }

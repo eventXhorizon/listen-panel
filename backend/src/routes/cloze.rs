@@ -428,8 +428,20 @@ fn validate_and_clean(raw: GenerateLlmOutput) -> anyhow::Result<CleanedGen> {
 }
 
 fn normalize_category(c: &str) -> String {
-    match c.to_ascii_lowercase().as_str() {
-        "word" | "phrase" | "idiom" | "collocation" => c.to_ascii_lowercase(),
+    // Accept all currently supported tags. Unknown LLM outputs fall back to
+    // 'word' so a bad category never breaks rendering — the explanation_zh
+    // still carries the real meaning.
+    let lc = c.to_ascii_lowercase();
+    match lc.as_str() {
+        // Lexical
+        "word" | "phrase" | "idiom" | "collocation"
+        // Grammar
+        | "preposition" | "article" | "connective" | "verb_form" | "modal" => lc,
+        // Common LLM synonyms — quietly map to our canonical tag.
+        "phrasal" | "phrasal_verb" | "phrasal verb" => "phrase".to_string(),
+        "conjunction" | "connector" => "connective".to_string(),
+        "tense" | "verb form" | "verb-form" => "verb_form".to_string(),
+        "modal_verb" | "modal verb" => "modal".to_string(),
         _ => "word".to_string(),
     }
 }

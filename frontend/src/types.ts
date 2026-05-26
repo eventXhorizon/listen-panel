@@ -355,7 +355,18 @@ export interface PolishResult {
 
 // ---- Cloze (fill-in-the-blank) practice ----
 
-export type ClozeCategory = 'word' | 'phrase' | 'idiom' | 'collocation';
+export type ClozeCategory =
+  // Lexical
+  | 'word'
+  | 'phrase'
+  | 'idiom'
+  | 'collocation'
+  // Grammar — common pain points for Chinese-native English learners
+  | 'preposition'
+  | 'article'
+  | 'connective'
+  | 'verb_form'
+  | 'modal';
 export type ClozeDifficulty = 'easy' | 'normal' | 'hard';
 export type ClozeBlankStatus = 'correct' | 'close' | 'wrong' | 'empty';
 
