@@ -5,6 +5,10 @@ import type {
   CreateVocab,
   AsrHealthCheckStatus,
   AuthStatus,
+  ClozeDifficulty,
+  ClozeExercise,
+  ClozeExerciseSummary,
+  ClozeGradeResult,
   JobWithSegments,
   Material,
   MaterialLanguage,
@@ -13,6 +17,7 @@ import type {
   NewsItemSummary,
   NewsSource,
   NewsTopic,
+  PolishResult,
   QuickNote,
   TranscriptionJob,
   User,
@@ -278,6 +283,73 @@ export function pauseTranscriptionStudy(id: number): Promise<TranscriptionJob> {
 
 export function getTranscriptionSegments(id: number): Promise<JobWithSegments> {
   return request<JobWithSegments>(`/api/transcriptions/${id}/segments`);
+}
+
+// Writing practice
+
+export function polishWriting(data: {
+  text: string;
+  translate_enabled?: boolean;
+}): Promise<PolishResult> {
+  return request<PolishResult>('/api/writing/polish', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function listWritingHistory(): Promise<PolishResult[]> {
+  return request<PolishResult[]>('/api/writing/history');
+}
+
+export async function deleteWritingDraft(id: number): Promise<void> {
+  await request<void>(`/api/writing/history/${id}`, { method: 'DELETE' });
+}
+
+// Cloze practice
+
+export function listClozeCandidates(filters?: {
+  topic?: NewsTopic;
+  source?: NewsSource;
+  difficulty?: number;
+}): Promise<NewsItemSummary[]> {
+  const params = new URLSearchParams();
+  if (filters?.topic) params.set('topic', filters.topic);
+  if (filters?.source) params.set('source', filters.source);
+  if (filters?.difficulty != null) params.set('difficulty', String(filters.difficulty));
+  const qs = params.toString();
+  return request<NewsItemSummary[]>(`/api/cloze/news${qs ? `?${qs}` : ''}`);
+}
+
+export function createClozeExercise(data: {
+  news_id: number;
+  difficulty?: ClozeDifficulty;
+}): Promise<ClozeExercise> {
+  return request<ClozeExercise>('/api/cloze/exercises', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function listClozeExercises(): Promise<ClozeExerciseSummary[]> {
+  return request<ClozeExerciseSummary[]>('/api/cloze/exercises');
+}
+
+export function getClozeExercise(id: number): Promise<ClozeExercise> {
+  return request<ClozeExercise>(`/api/cloze/exercises/${id}`);
+}
+
+export function gradeClozeExercise(
+  id: number,
+  answers: string[],
+): Promise<ClozeGradeResult> {
+  return request<ClozeGradeResult>(`/api/cloze/exercises/${id}/grade`, {
+    method: 'POST',
+    body: JSON.stringify({ answers }),
+  });
+}
+
+export async function deleteClozeExercise(id: number): Promise<void> {
+  await request<void>(`/api/cloze/exercises/${id}`, { method: 'DELETE' });
 }
 
 // Settings

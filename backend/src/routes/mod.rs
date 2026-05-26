@@ -1,6 +1,7 @@
 pub mod asr;
 pub mod auth;
 pub mod backup;
+pub mod cloze;
 pub mod health;
 pub mod llm;
 pub mod materials;
@@ -11,6 +12,7 @@ pub mod quick_notes;
 pub mod settings;
 pub mod tts;
 pub mod vocab;
+pub mod writing;
 
 use axum::Router;
 
@@ -28,5 +30,7 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(backup::router())
         .merge(news::router())
         .merge(quick_notes::router())
+        .merge(writing::router())
+        .merge(cloze::router())
         .with_state(state)
 }

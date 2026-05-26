@@ -23,7 +23,7 @@ use crate::config::LlmConfig;
 
 /// Which provider actually produced the response. Surfaced to the UI so the
 /// user can tell when DeepSeek is down and they're seeing fallback output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LlmProvider {
     Primary,

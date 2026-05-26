@@ -72,6 +72,42 @@ impl Language {
     }
 }
 
+/// Writing-practice helpers. The polish + translate flow is English-only — it
+/// is a port of the better-phrase Claude Code hook, which only targets English
+/// (the "polish my English" + "translate my Chinese to English" loop). If we
+/// ever want a Japanese writing mode it gets its own prompts; we don't fall
+/// back to English ones.
+pub fn writing_polish_system_prompt() -> &'static str {
+    EN_WRITING_POLISH_SYSTEM_PROMPT
+}
+
+pub fn writing_translate_system_prompt() -> &'static str {
+    EN_WRITING_TRANSLATE_SYSTEM_PROMPT
+}
+
+pub fn writing_polish_user_prompt(text: &str) -> String {
+    format!("user input:\n{text}")
+}
+
+pub fn writing_translate_user_prompt(text: &str) -> String {
+    format!("中文原文:\n{text}")
+}
+
+/// Cloze (fill-in-the-blank) generation. English-only for the same reason:
+/// the source is `news_items` which is curated English news.
+pub fn cloze_generate_system_prompt() -> &'static str {
+    EN_CLOZE_GENERATE_SYSTEM_PROMPT
+}
+
+pub fn cloze_generate_user_prompt(transcript: &str, difficulty: &str) -> String {
+    let guidance = match difficulty {
+        "easy" => "难度档 = easy:用词通俗,空位主要选高频实义词(动词/名词),目标 8-10 个空。",
+        "hard" => "难度档 = hard:保留地道表达,空位优先短语动词/习语/固定搭配,目标 12-15 个空。",
+        _ => "难度档 = normal:平衡选词,目标 10-12 个空。",
+    };
+    format!("transcript:\n{transcript}\n\n{guidance}")
+}
+
 pub const EN_LOOKUP_SYSTEM_PROMPT: &str = "你是英语词汇学习助手。给定一个英语词或短语,以及它所在的英文句子,返回 JSON,字段如下:\n\
 {\n\
   \"lemma\": \"原形(动词原形 / 名词单数 / 短语规范形式)\",\n\
@@ -167,6 +203,54 @@ pub const JA_QUICK_NOTE_SYSTEM_PROMPT: &str = "あなたは中国人日本語学
 - grammar 选 1-2 个值得讲的语法点;简单到不必讲就返回 []。\n\
 - 所有 phrase 必须在原文中真实出现。\n\
 - usage_note 可选;没必要就别写。";
+
+pub const EN_WRITING_POLISH_SYSTEM_PROMPT: &str = "你是英文写作教练。用户给一段英文,你帮中文母语者改得更地道。\n\
+严格 JSON,不要 markdown 代码块。格式:\n\
+{\n\
+  \"tips\": [\n\
+    {\"original\":\"原句中的片段(必须在原文中存在)\",\"corrected\":\"改后的写法\",\"explanation_zh\":\"一句话中文解释为什么这么改\"}\n\
+  ],\n\
+  \"rewrite\": \"把整段输入改写成自然、流畅、native 风格的英文\"\n\
+}\n\
+要求:\n\
+- tips 最多 4-5 条,挑最有学习价值的。优先级:语法 > 用词 > 句式 > 拼写 > 标点。\n\
+- 已经写得很好就返回 tips: [] (但 rewrite 仍然给一个更地道的版本)。\n\
+- 重点标出中式英语模式:缺冠词、错介词、very 修饰动词、open the light 这类直译。\n\
+- rewrite 必须是整段重写,追求自然流畅,不是逐句打补丁。\n\
+- 不要润色非英文部分:如果输入夹杂中文,只针对英文部分给 tips,中文原样保留在 rewrite 中或忽略。";
+
+pub const EN_WRITING_TRANSLATE_SYSTEM_PROMPT: &str = "你是中译英助手。用户给一段中文,翻成地道英文。\n\
+严格 JSON,不要 markdown 代码块。格式:\n\
+{\n\
+  \"translation\": \"自然的英文译文\"\n\
+}\n\
+要求:\n\
+- 写出 native speaker 会用的英文,不是逐字硬翻。\n\
+- 根据上下文判断 register:邮件正式、聊天口语、技术笔记技术口吻。\n\
+- 只给译文,不要解释、不要 alternatives。";
+
+pub const EN_CLOZE_GENERATE_SYSTEM_PROMPT: &str = "你是英语阅读教学助手。给定一段新闻视频字幕原文,你要完成两件事:\n\
+1. 把它精简改写成一段连贯、自然、150-300 词的简洁英文文章,保留核心信息和地道表达\n\
+2. 从精简后的文章里挑出 8-15 个最有学习价值的【语言点】挖空,优先级:\n\
+   - 短语动词 (phrasal verbs)\n\
+   - 固定搭配 (collocations) / 习语 (idioms)\n\
+   - 高频或主题相关的关键名词/动词/形容词\n\
+\n\
+在文章中用 {{0}} {{1}} {{2}} ... 占位被挖掉的内容,索引从 0 连续递增,不能跳号、不能重复。\n\
+严格 JSON,不要 markdown 代码块,格式:\n\
+{\n\
+  \"simplified_text\": \"... He {{0}} the proposal yesterday and {{1}} the team to ...\",\n\
+  \"blanks\": [\n\
+    {\"answer\":\"turned down\",\"category\":\"phrase\",\"hint\":\"phrasal verb, 2 words\",\"explanation_zh\":\"turn down = 拒绝(同义 reject),后接 offer/proposal/invitation 等\"},\n\
+    {\"answer\":\"urged\",\"category\":\"word\",\"hint\":\"v. past tense\",\"explanation_zh\":\"urge sb. to do sth. = 力劝某人做某事,比 ask 强烈\"}\n\
+  ]\n\
+}\n\
+硬性要求:\n\
+- blanks 数组长度必须严格等于 simplified_text 中 {{N}} 出现次数,且 N 从 0 起严格连续\n\
+- 每个 answer 必须能完美填回对应占位的位置,大小写/时态/单复数都对得上\n\
+- category 必须是: 'word' | 'phrase' | 'idiom' | 'collocation'\n\
+- hint 简短(< 30 字符),给出回忆线索而不是直接给答案\n\
+- explanation_zh 一句话,讲清核心意思和典型用法";
 
 #[cfg(test)]
 mod tests {

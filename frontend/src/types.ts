@@ -322,3 +322,94 @@ export interface CreateQuickNote {
   language: MaterialLanguage;
   source?: string;
 }
+
+// ---- Writing practice ----
+
+/** What the local detector decided to do with the input. */
+export type WritingAction = 'polish' | 'translate' | 'skip';
+
+export interface PolishTip {
+  original: string;
+  corrected: string;
+  explanation_zh: string;
+}
+
+/**
+ * Result of one writing-practice submission. The `action` tag discriminates
+ * which fields are populated:
+ *   - 'polish'    → tips + rewrite  (and id, created_at, provider)
+ *   - 'translate' → translation     (and id, created_at, provider)
+ *   - 'skip'      → only skip_reason  (no DB row was created)
+ */
+export interface PolishResult {
+  action: WritingAction;
+  id: number | null;
+  original: string;
+  tips?: PolishTip[];
+  rewrite?: string;
+  translation?: string;
+  provider?: LlmProvider;
+  created_at?: string;
+  skip_reason?: string;
+}
+
+// ---- Cloze (fill-in-the-blank) practice ----
+
+export type ClozeCategory = 'word' | 'phrase' | 'idiom' | 'collocation';
+export type ClozeDifficulty = 'easy' | 'normal' | 'hard';
+export type ClozeBlankStatus = 'correct' | 'close' | 'wrong' | 'empty';
+
+export interface ClozeBlank {
+  answer: string;
+  category: ClozeCategory;
+  hint?: string;
+  explanation_zh: string;
+}
+
+export interface ClozeLastAttempt {
+  answers: string[];
+  score: number; // 0.0..1.0
+  graded_at: string;
+}
+
+export interface ClozeExercise {
+  id: number;
+  news_id: number;
+  source_title: string;
+  source_topic: NewsTopic;
+  source_language: MaterialLanguage;
+  difficulty: ClozeDifficulty;
+  simplified_text: string;
+  blanks: ClozeBlank[];
+  last_attempt?: ClozeLastAttempt | null;
+  created_at: string;
+  /** Only set on the create response. */
+  provider?: LlmProvider;
+}
+
+export interface ClozeExerciseSummary {
+  id: number;
+  news_id: number;
+  source_title: string;
+  source_topic: NewsTopic;
+  source_language: MaterialLanguage;
+  difficulty: ClozeDifficulty;
+  blank_count: number;
+  last_attempt?: ClozeLastAttempt | null;
+  created_at: string;
+}
+
+export interface ClozeBlankResult {
+  index: number;
+  user_answer: string;
+  correct_answer: string;
+  status: ClozeBlankStatus;
+  explanation_zh: string;
+}
+
+export interface ClozeGradeResult {
+  results: ClozeBlankResult[];
+  score: number; // 0.0..1.0
+  correct_count: number;
+  total_count: number;
+}

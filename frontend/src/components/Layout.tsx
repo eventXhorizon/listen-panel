@@ -20,6 +20,8 @@ const NAV_ITEMS = [
   { to: '/vocab', label: '生词本', end: false },
   { to: '/notes', label: '笔记', end: false },
   { to: '/quick-notes', label: '随手记', end: false },
+  { to: '/writing', label: '写作', end: false },
+  { to: '/cloze', label: '填空', end: false },
   { to: '/review', label: '复习', end: false },
 ];
 

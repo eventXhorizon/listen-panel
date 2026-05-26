@@ -19,6 +19,8 @@ import Notes from './pages/Notes';
 import QuickNotes from './pages/QuickNotes';
 import Review from './pages/Review';
 import Settings from './pages/Settings';
+import Writing from './pages/Writing';
+import Cloze from './pages/Cloze';
 
 export default function App() {
   return (
@@ -40,6 +42,8 @@ export default function App() {
               <Route path="notes" element={<Notes />} />
               <Route path="quick-notes" element={<QuickNotes />} />
               <Route path="review" element={<Review />} />
+              <Route path="writing" element={<Writing />} />
+              <Route path="cloze" element={<Cloze />} />
               <Route path="settings" element={<Settings />} />
             </Route>
           </Route>
