@@ -96,6 +96,10 @@ pub struct ModelEssay {
     /// 'llm' | 'web' | 'manual'
     pub source: String,
     pub source_url: Option<String>,
+    /// Optional YouTube (or other) link to the speech being delivered.
+    /// Only meaningful for `style = 'speech'`, but the column is
+    /// generic so users can attach video to any essay if they want.
+    pub video_url: Option<String>,
     pub style: String,
     pub topic: Option<String>,
     pub body: String,
@@ -108,6 +112,11 @@ pub struct ModelEssay {
     /// on list/get since the DB doesn't remember.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<LlmProvider>,
+    /// True when the create-by-URL request hit an essay this user already
+    /// had under the same `source_url`. UI uses it to show "已经在你的范文里"
+    /// instead of misleading "导入成功". Only ever set on /fetch responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub was_existing: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +127,7 @@ pub struct ModelEssaySummary {
     pub language: String,
     pub source: String,
     pub source_url: Option<String>,
+    pub video_url: Option<String>,
     pub style: String,
     pub topic: Option<String>,
     pub word_count: i64,
@@ -132,6 +142,7 @@ struct EssayRow {
     language: String,
     source: String,
     source_url: Option<String>,
+    video_url: Option<String>,
     style: String,
     topic: Option<String>,
     body: String,
@@ -150,6 +161,7 @@ impl EssayRow {
             language: self.language,
             source: self.source,
             source_url: self.source_url,
+            video_url: self.video_url,
             style: self.style,
             topic: self.topic,
             body: self.body,
@@ -160,6 +172,7 @@ impl EssayRow {
                 .unwrap_or_default(),
             created_at: self.created_at,
             provider: None,
+            was_existing: None,
         }
     }
 
@@ -171,6 +184,7 @@ impl EssayRow {
             language: self.language,
             source: self.source,
             source_url: self.source_url,
+            video_url: self.video_url,
             style: self.style,
             topic: self.topic,
             word_count: self.word_count,
@@ -253,6 +267,7 @@ async fn generate(
             language: "en".to_string(),
             source: "llm".to_string(),
             source_url: None,
+            video_url: None,
             style: style.to_string(),
             topic: Some(topic.to_string()),
             body: cleaned.body,
@@ -291,6 +306,11 @@ pub struct FetchReq {
     /// Optional style tag override (so classics can be tagged correctly).
     #[serde(default)]
     pub style: Option<String>,
+    /// Optional YouTube (or other) link to the speech being delivered.
+    /// Classics import passes this through when the entry is a known
+    /// speech with a canonical video.
+    #[serde(default)]
+    pub video_url: Option<String>,
 }
 
 async fn fetch_from_url(
@@ -314,6 +334,53 @@ async fn fetch_from_url(
             Json(json!({ "error": "url must start with http:// or https://" })),
         )
             .into_response());
+    }
+
+    // Dedup: if this user already imported this exact URL, return the
+    // existing essay instead of burning another LLM call and creating a
+    // duplicate row. Triggered by accidental double-clicks on the
+    // classics-import buttons and by re-imports after the user forgets
+    // they already have a piece. Marked `was_existing: true` so the UI
+    // could show a hint, but we still return the same shape so the
+    // caller's navigation logic is unchanged.
+    let existing: Option<EssayRow> = sqlx::query_as(&format!(
+        "SELECT {ESSAY_SELECT_COLS} \
+         FROM model_essays \
+         WHERE user_id = ? AND source = 'web' AND source_url = ? \
+         ORDER BY created_at DESC LIMIT 1"
+    ))
+    .bind(user.id)
+    .bind(url)
+    .fetch_optional(&pool)
+    .await?;
+    if let Some(row) = existing {
+        // If the caller passes a video_url and the existing row didn't
+        // have one (older import), patch it on so subsequent visits show
+        // the video link. Cheap one-row UPDATE.
+        let id = row.id;
+        let row = if row.video_url.is_none() {
+            if let Some(v) = req.video_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                sqlx::query("UPDATE model_essays SET video_url = ? WHERE id = ? AND user_id = ?")
+                    .bind(v)
+                    .bind(id)
+                    .bind(user.id)
+                    .execute(&pool)
+                    .await?;
+                sqlx::query_as::<_, EssayRow>(&format!(
+                    "SELECT {ESSAY_SELECT_COLS} FROM model_essays WHERE id = ?"
+                ))
+                .bind(id)
+                .fetch_one(&pool)
+                .await?
+            } else {
+                row
+            }
+        } else {
+            row
+        };
+        let mut essay = row.into_full();
+        essay.was_existing = Some(true);
+        return Ok(Json(essay).into_response());
     }
 
     // Use a fresh client with a sane UA so static blogs (PG) and most
@@ -386,6 +453,12 @@ async fn fetch_from_url(
             language: "en".to_string(),
             source: "web".to_string(),
             source_url: Some(url.to_string()),
+            video_url: req
+                .video_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             style: style.to_string(),
             topic: None,
             body: cleaned.body,
@@ -414,6 +487,10 @@ pub struct ManualReq {
     pub source_url: Option<String>,
     #[serde(default)]
     pub style: Option<String>,
+    /// Optional YouTube link — useful when the user pastes the text of a
+    /// speech they want to also listen to.
+    #[serde(default)]
+    pub video_url: Option<String>,
 }
 
 async fn manual(
@@ -482,6 +559,12 @@ async fn manual(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
+            video_url: req
+                .video_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             style: style.to_string(),
             topic: None,
             body: cleaned.body,
@@ -515,12 +598,13 @@ async fn list(
     user: CurrentUser,
 ) -> Result<Json<Vec<ModelEssaySummary>>> {
     let rows: Vec<EssayRow> = sqlx::query_as(
-        "SELECT id, title, author, language, source, source_url, style, topic, \
-                body, word_count, language_points_json, structure_notes_json, created_at \
+        &format!(
+        "SELECT {ESSAY_SELECT_COLS} \
          FROM model_essays \
          WHERE user_id = ? \
          ORDER BY created_at DESC \
-         LIMIT 200",
+         LIMIT 200"
+    ),
     )
     .bind(user.id)
     .fetch_all(&pool)
@@ -533,11 +617,9 @@ async fn get_one(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Response> {
-    let row: Option<EssayRow> = sqlx::query_as(
-        "SELECT id, title, author, language, source, source_url, style, topic, \
-                body, word_count, language_points_json, structure_notes_json, created_at \
-         FROM model_essays WHERE id = ? AND user_id = ?",
-    )
+    let row: Option<EssayRow> = sqlx::query_as(&format!(
+        "SELECT {ESSAY_SELECT_COLS} FROM model_essays WHERE id = ? AND user_id = ?"
+    ))
     .bind(id)
     .bind(user.id)
     .fetch_optional(&pool)
@@ -573,17 +655,29 @@ pub struct Classic {
     pub url: &'static str,
     pub style: &'static str,
     pub blurb: &'static str,
+    /// Optional YouTube (or other) link to the speech being delivered.
+    /// Set for the speeches where the original delivery is available; None
+    /// for written essays and pre-recording-era speeches (Gettysburg, TR).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_url: Option<&'static str>,
 }
 
 /// Hand-picked, non-paywalled classics worth memorizing. UI shows these
 /// with 一键导入 buttons that POST to /essays/fetch with the URL + author.
+///
+/// Curation rule of thumb: short enough that "可以背" is realistic, written
+/// well enough that you'd actually want to, hosted somewhere stable and
+/// without a paywall. PG / Wikisource / .gov / harvard.edu / a16z / amazon
+/// PR sites have all proven reliable to plain `curl`-style fetches.
 const CLASSICS: &[Classic] = &[
+    // --- Paul Graham essays (paulgraham.com is pure static HTML) ---
     Classic {
         title: "Do Things That Don't Scale",
         author: "Paul Graham",
         url: "http://paulgraham.com/ds.html",
         style: "paul_graham",
         blurb: "PG 的经典创业 essay。短句、反直觉、直接 — 学怎么把抽象观点说得具体。",
+        video_url: None,
     },
     Classic {
         title: "How to Do Great Work",
@@ -591,20 +685,41 @@ const CLASSICS: &[Classic] = &[
         url: "http://paulgraham.com/greatwork.html",
         style: "paul_graham",
         blurb: "怎么做出顶尖工作。结构松散但每段都密集,适合学 sentence-level rhythm。",
+        video_url: None,
     },
+    Classic {
+        title: "Maker's Schedule, Manager's Schedule",
+        author: "Paul Graham",
+        url: "http://paulgraham.com/makersschedule.html",
+        style: "paul_graham",
+        blurb: "为什么打断 maker 那么贵。最短最锐利的 PG essay 之一,几乎每段一个金句。",
+        video_url: None,
+    },
+    Classic {
+        title: "What You'll Wish You'd Known",
+        author: "Paul Graham",
+        url: "http://paulgraham.com/hs.html",
+        style: "paul_graham",
+        blurb: "PG 写给高中生的话(也是给所有人)。把\"怎么用好接下来几年\"讲得既具体又锋利。",
+        video_url: None,
+    },
+    Classic {
+        title: "Cities and Ambition",
+        author: "Paul Graham",
+        url: "http://paulgraham.com/cities.html",
+        style: "paul_graham",
+        blurb: "为什么城市决定你成为谁。观察文体的范本 — 学怎么从生活细节抽出大主题。",
+        video_url: None,
+    },
+
+    // --- Famous speeches (video link makes a big difference for these) ---
     Classic {
         title: "Stanford Commencement Address (2005)",
         author: "Steve Jobs",
         url: "https://news.stanford.edu/2005/06/14/jobs-061505/",
         style: "speech",
         blurb: "三段式演讲。重复 + 排比 + 个人叙事 — 几乎每句都值得背。",
-    },
-    Classic {
-        title: "Politics and the English Language",
-        author: "George Orwell",
-        url: "https://www.orwellfoundation.com/the-orwell-foundation/orwell/essays-and-other-works/politics-and-the-english-language/",
-        style: "op_ed",
-        blurb: "英语写作圣经。讲清楚\"如何不写废话\"的祖师爷文。",
+        video_url: Some("https://www.youtube.com/watch?v=UF8uR6Z6KLc"),
     },
     Classic {
         title: "The Gettysburg Address",
@@ -612,6 +727,7 @@ const CLASSICS: &[Classic] = &[
         url: "https://www.abrahamlincolnonline.org/lincoln/speeches/gettysburg.htm",
         style: "speech",
         blurb: "272 词的演讲。每一句都是平行结构的范本。",
+        video_url: None,
     },
     Classic {
         title: "I Have a Dream",
@@ -619,6 +735,67 @@ const CLASSICS: &[Classic] = &[
         url: "https://www.americanrhetoric.com/speeches/mlkihaveadream.htm",
         style: "speech",
         blurb: "民权运动里程碑演讲。重复结构 + 圣经式句法。",
+        video_url: Some("https://www.youtube.com/watch?v=vP4iY1TtS3s"),
+    },
+    Classic {
+        title: "Inaugural Address (1961)",
+        author: "John F. Kennedy",
+        url: "https://www.jfklibrary.org/learn/about-jfk/historic-speeches/inaugural-address",
+        style: "speech",
+        blurb: "\"Ask not what your country can do for you...\" 短句、平行结构、修辞反转的范本。",
+        video_url: Some("https://www.youtube.com/watch?v=PEC1C4p0k3E"),
+    },
+    Classic {
+        title: "Harvard Commencement (2008): The Fringe Benefits of Failure",
+        author: "J.K. Rowling",
+        url: "https://news.harvard.edu/gazette/story/2008/06/text-of-j-k-rowling-speech/",
+        style: "speech",
+        blurb: "失败的礼物与想象力的重要。叙事和议论交替,讲故事的高级范本。",
+        video_url: Some("https://www.youtube.com/watch?v=wHGqp8lz36c"),
+    },
+    Classic {
+        title: "Citizenship in a Republic (\"The Man in the Arena\")",
+        author: "Theodore Roosevelt",
+        url: "https://en.wikisource.org/wiki/Citizenship_in_a_Republic",
+        style: "speech",
+        blurb: "1910 巴黎演讲。\"不是评论家,而是真正下场的人才算数\" — 情感最饱满的演讲段落之一。",
+        video_url: None,
+    },
+
+    // --- Classic essays on writing & ideas ---
+    Classic {
+        title: "Politics and the English Language",
+        author: "George Orwell",
+        url: "https://www.orwellfoundation.com/the-orwell-foundation/orwell/essays-and-other-works/politics-and-the-english-language/",
+        style: "op_ed",
+        blurb: "英语写作圣经。讲清楚\"如何不写废话\"的祖师爷文。",
+        video_url: None,
+    },
+    Classic {
+        title: "Why I Write",
+        author: "George Orwell",
+        url: "https://www.orwellfoundation.com/the-orwell-foundation/orwell/essays-and-other-works/why-i-write/",
+        style: "op_ed",
+        blurb: "Orwell 讲自己写作的四个动机。最后落到\"政治目的\" — 反思与议论的清晰范本。",
+        video_url: None,
+    },
+
+    // --- Modern tech / business essays ---
+    Classic {
+        title: "Why Software Is Eating the World",
+        author: "Marc Andreessen",
+        url: "https://a16z.com/2011/08/20/why-software-is-eating-the-world/",
+        style: "op_ed",
+        blurb: "2011 年的那篇宣言。如何用 8 段把一个宏大观点讲到具体行业案例。",
+        video_url: None,
+    },
+    Classic {
+        title: "1997 Shareholder Letter",
+        author: "Jeff Bezos",
+        url: "https://www.aboutamazon.com/news/company-news/1997-letter-to-shareholders",
+        style: "op_ed",
+        blurb: "贝索斯第一封致股东信,把\"long-term thinking\"写进商业经典。商业写作教科书。",
+        video_url: None,
     },
 ];
 
@@ -635,6 +812,7 @@ struct InsertParams {
     language: String,
     source: String,
     source_url: Option<String>,
+    video_url: Option<String>,
     style: String,
     topic: Option<String>,
     body: String,
@@ -643,21 +821,24 @@ struct InsertParams {
     structure_notes_json: String,
 }
 
+const ESSAY_SELECT_COLS: &str = "id, title, author, language, source, source_url, video_url, \
+    style, topic, body, word_count, language_points_json, structure_notes_json, created_at";
+
 async fn insert(pool: &SqlitePool, p: InsertParams) -> Result<EssayRow> {
-    let row: EssayRow = sqlx::query_as(
+    let row: EssayRow = sqlx::query_as(&format!(
         "INSERT INTO model_essays \
-           (user_id, title, author, language, source, source_url, style, topic, \
-            body, word_count, language_points_json, structure_notes_json) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id, title, author, language, source, source_url, style, topic, \
-                   body, word_count, language_points_json, structure_notes_json, created_at",
-    )
+           (user_id, title, author, language, source, source_url, video_url, \
+            style, topic, body, word_count, language_points_json, structure_notes_json) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING {ESSAY_SELECT_COLS}"
+    ))
     .bind(p.user_id)
     .bind(&p.title)
     .bind(p.author.as_deref())
     .bind(&p.language)
     .bind(&p.source)
     .bind(p.source_url.as_deref())
+    .bind(p.video_url.as_deref())
     .bind(&p.style)
     .bind(p.topic.as_deref())
     .bind(&p.body)

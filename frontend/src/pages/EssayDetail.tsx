@@ -6,6 +6,7 @@ import {
   Trash2,
   Highlighter,
   ListTree,
+  PlayCircle,
 } from 'lucide-react';
 import { deleteEssay, getEssay } from '../api';
 import type {
@@ -162,6 +163,17 @@ export default function EssayDetail() {
                 className="inline-flex items-center gap-1 hover:text-foreground"
               >
                 原文 <ExternalLink className="size-3" />
+              </a>
+            )}
+            {essay.video_url && (
+              <a
+                href={essay.video_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-50 px-2 py-0.5 text-rose-700 hover:bg-rose-100"
+                title="演讲视频"
+              >
+                <PlayCircle className="size-3" /> 看演讲
               </a>
             )}
           </div>

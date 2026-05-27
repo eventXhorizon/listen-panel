@@ -7,6 +7,7 @@ import {
   ClipboardPaste,
   Trash2,
   ExternalLink,
+  PlayCircle,
 } from 'lucide-react';
 import {
   deleteEssay,
@@ -144,14 +145,20 @@ export function EssaysIndex() {
                         {SOURCE_LABEL[x.source]}
                       </span>
                     </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {x.author && <span className="mr-1.5">{x.author}</span>}
+                    <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+                      {x.author && <span>{x.author}</span>}
                       <span className="rounded bg-accent px-1.5 py-0.5 text-foreground/70">
                         {STYLE_LABEL[x.style] ?? x.style}
                       </span>
-                      <span className="mx-1.5">·</span>
+                      {x.video_url && (
+                        <PlayCircle
+                          className="size-3 text-rose-500"
+                          aria-label="带演讲视频"
+                        />
+                      )}
+                      <span>·</span>
                       <span>{x.word_count} 词</span>
-                      <span className="mx-1.5">·</span>
+                      <span>·</span>
                       <span>{new Date(x.created_at).toLocaleDateString()}</span>
                     </div>
                     {x.topic && (
@@ -209,6 +216,7 @@ function ImportBar({ onAdded }: { onAdded: () => void }) {
   const [manualText, setManualText] = useState('');
   const [manualTitle, setManualTitle] = useState('');
   const [manualAuthor, setManualAuthor] = useState('');
+  const [manualVideoUrl, setManualVideoUrl] = useState('');
 
   async function submit() {
     setBusy(true);
@@ -227,6 +235,7 @@ function ImportBar({ onAdded }: { onAdded: () => void }) {
           text: manualText.trim(),
           title: manualTitle.trim() || undefined,
           author: manualAuthor.trim() || undefined,
+          video_url: manualVideoUrl.trim() || undefined,
         });
       }
       onAdded();
@@ -331,6 +340,13 @@ function ImportBar({ onAdded }: { onAdded: () => void }) {
               className="w-40 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
           </div>
+          <input
+            type="url"
+            value={manualVideoUrl}
+            onChange={(e) => setManualVideoUrl(e.target.value)}
+            placeholder="演讲视频链接(可选,如 YouTube)... 适用于 Steve Jobs 这种有原始视频的演讲"
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+          />
           <Textarea
             value={manualText}
             onChange={(e) => setManualText(e.target.value)}
@@ -413,6 +429,7 @@ function ClassicsList({
         url: c.url,
         author_hint: c.author,
         style: c.style,
+        video_url: c.video_url,
       });
       onAdded();
       navigate(`/essays/${essay.id}`);
@@ -440,12 +457,21 @@ function ClassicsList({
               <p className="text-sm font-medium leading-5 text-foreground">
                 {c.title}
               </p>
-              <p className="text-[11px] text-muted-foreground">
-                {c.author}
-                <span className="mx-1.5">·</span>
+              <p className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+                <span>{c.author}</span>
+                <span>·</span>
                 <span className="rounded bg-accent px-1.5 py-0.5 text-foreground/70">
                   {STYLE_LABEL[c.style] ?? c.style}
                 </span>
+                {c.video_url && (
+                  <span
+                    className="inline-flex items-center gap-0.5 rounded-full border border-rose-300 bg-rose-50 px-1.5 py-0 text-[10px] text-rose-700"
+                    title="带演讲视频"
+                  >
+                    <PlayCircle className="size-2.5" />
+                    视频
+                  </span>
+                )}
               </p>
               <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
                 {c.blurb}

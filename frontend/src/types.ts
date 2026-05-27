@@ -469,6 +469,8 @@ export interface ModelEssay {
   language: MaterialLanguage;
   source: EssaySource;
   source_url?: string | null;
+  /** Optional YouTube (etc.) link for delivered speeches. */
+  video_url?: string | null;
   style: EssayStyle;
   topic?: string | null;
   body: string;
@@ -478,6 +480,9 @@ export interface ModelEssay {
   created_at: string;
   /** Only set on the create response. */
   provider?: LlmProvider;
+  /** Only set on the /fetch response. True when the URL was already in
+   *  the user's library — UI uses it to show "已在库中" instead of "导入成功". */
+  was_existing?: boolean;
 }
 
 export interface ModelEssaySummary {
@@ -487,6 +492,7 @@ export interface ModelEssaySummary {
   language: MaterialLanguage;
   source: EssaySource;
   source_url?: string | null;
+  video_url?: string | null;
   style: EssayStyle;
   topic?: string | null;
   word_count: number;
@@ -502,4 +508,5 @@ export interface EssayClassic {
   url: string;
   style: EssayStyle;
   blurb: string;
+  video_url?: string;
 }

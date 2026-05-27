@@ -373,6 +373,7 @@ export function fetchEssayFromUrl(data: {
   url: string;
   author_hint?: string;
   style?: EssayStyle;
+  video_url?: string;
 }): Promise<ModelEssay> {
   return request<ModelEssay>('/api/essays/fetch', {
     method: 'POST',
@@ -386,6 +387,7 @@ export function importManualEssay(data: {
   author?: string;
   source_url?: string;
   style?: EssayStyle;
+  video_url?: string;
 }): Promise<ModelEssay> {
   return request<ModelEssay>('/api/essays/manual', {
     method: 'POST',
