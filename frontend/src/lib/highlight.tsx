@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { Loader2, Trash2 } from 'lucide-react';
 import type { MaterialLanguage, VocabEntry } from '../types';
 import SpeakButton from '../components/SpeakButton';
+import { deleteVocab } from '../api';
 import { languageAdapter } from './languages';
 
 const POP_W = 352;       // w-[22rem]
@@ -19,6 +21,10 @@ interface HighlightedWordProps {
   materialId?: number;
   language: MaterialLanguage;
   onPick?: (entry: VocabEntry) => void;
+  /** Called after the user clicks 删除 inside the popover and the
+   *  backend DELETE succeeds. Parent should refresh its vocab list so
+   *  the highlight disappears. */
+  onDeleted?: (entry: VocabEntry) => void;
 }
 
 function HighlightedWord({
@@ -27,9 +33,12 @@ function HighlightedWord({
   materialId,
   language,
   onPick,
+  onDeleted,
 }: HighlightedWordProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<Pos | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const markRef = useRef<HTMLElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -120,7 +129,40 @@ function HighlightedWord({
             <div className="flex items-center gap-2">
               <div className="text-lg font-medium text-foreground">{entry.word}</div>
               <SpeakButton word={entry.word} materialId={materialId} language={language} />
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (!confirm(`从生词本删除「${entry.word}」?`)) return;
+                  setDeleting(true);
+                  setDeleteError(null);
+                  try {
+                    await deleteVocab(entry.id);
+                    setOpen(false);
+                    onDeleted?.(entry);
+                  } catch (err) {
+                    setDeleteError((err as Error).message);
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                title="从生词本删除"
+                aria-label="从生词本删除"
+              >
+                {deleting ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Trash2 className="size-4" />
+                )}
+              </button>
             </div>
+            {deleteError && (
+              <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-xs text-destructive">
+                删除失败:{deleteError}
+              </div>
+            )}
             <div className="mt-1 text-sm text-muted-foreground">
               {entry.lemma &&
                 entry.lemma.toLowerCase() !== entry.word.toLowerCase() && (
@@ -181,6 +223,7 @@ export function highlightText(
   materialId?: number,
   language: MaterialLanguage = 'en',
   onClick?: (entry: VocabEntry) => void,
+  onDeleted?: (entry: VocabEntry) => void,
 ): ReactNode[] {
   if (vocab.length === 0) return [text];
   const matches = languageAdapter(language).highlightText(
@@ -204,6 +247,7 @@ export function highlightText(
         materialId={materialId}
         language={language}
         onPick={onClick}
+        onDeleted={onDeleted}
       />,
     );
     last = match.end;

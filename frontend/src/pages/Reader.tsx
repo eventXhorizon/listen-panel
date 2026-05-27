@@ -1250,6 +1250,7 @@ export default function Reader() {
                       noteKeyFor('segment', group.segments[0]?.id, undefined),
                     )}
                     onOpenNote={openNote}
+                    onVocabDeleted={refreshVocab}
                     loopActiveKey={loopRange?.key ?? null}
                     onToggleLoop={toggleLoop}
                   />
@@ -1265,6 +1266,7 @@ export default function Reader() {
                     paragraphStyle={paragraphStyle}
                     note={notesByTarget.get(noteKeyFor('paragraph', undefined, i))}
                     onOpenNote={openNote}
+                    onVocabDeleted={refreshVocab}
                   />
                 )
               ))
@@ -1281,6 +1283,7 @@ export default function Reader() {
                   paragraphStyle={paragraphStyle}
                   note={notesByTarget.get(noteKeyFor('paragraph', undefined, i))}
                   onOpenNote={openNote}
+                  onVocabDeleted={refreshVocab}
                 />
               ))
             ) : (
@@ -1550,6 +1553,7 @@ function ParagraphBlock({
   paragraphStyle,
   note,
   onOpenNote,
+  onVocabDeleted,
 }: {
   text: string;
   paragraphIndex: number;
@@ -1563,6 +1567,7 @@ function ParagraphBlock({
     target: Omit<PendingNote, 'note' | 'rect'>,
     trigger: HTMLElement,
   ) => void;
+  onVocabDeleted?: () => void;
 }) {
   return (
     <section
@@ -1585,7 +1590,9 @@ function ParagraphBlock({
         />
       </div>
       <p className="text-foreground" style={paragraphStyle}>
-        {highlightOn ? highlightText(text, vocab, materialId, language) : text}
+        {highlightOn
+          ? highlightText(text, vocab, materialId, language, undefined, onVocabDeleted)
+          : text}
       </p>
     </section>
   );
@@ -1678,6 +1685,7 @@ function TranscriptSegmentBlock({
   showStudy,
   note,
   onOpenNote,
+  onVocabDeleted,
   loopActiveKey,
   onToggleLoop,
 }: {
@@ -1696,6 +1704,7 @@ function TranscriptSegmentBlock({
     target: Omit<PendingNote, 'note' | 'rect'>,
     trigger: HTMLElement,
   ) => void;
+  onVocabDeleted?: () => void;
   loopActiveKey: string | null;
   onToggleLoop: (range: { start_ms: number; end_ms: number; key: string }) => void;
 }) {
@@ -1767,7 +1776,9 @@ function TranscriptSegmentBlock({
         }
         return (
           <p className="text-foreground" style={paragraphStyle}>
-            {highlightOn ? highlightText(text, vocab, materialId, language) : text}
+            {highlightOn
+              ? highlightText(text, vocab, materialId, language, undefined, onVocabDeleted)
+              : text}
           </p>
         );
       })()}
