@@ -7,6 +7,9 @@ import {
   Highlighter,
   ListTree,
   PlayCircle,
+  Play,
+  Pause,
+  Loader2,
 } from 'lucide-react';
 import { deleteEssay, getEssay, listVocab, translateEssay } from '../api';
 import SelectionPopup from '../components/SelectionPopup';
@@ -91,6 +94,76 @@ export default function EssayDetail() {
     refreshVocab();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Paragraph TTS. One shared audio instance so only one paragraph plays
+  // at a time — clicking another paragraph swaps the source. Status is
+  // tracked per paragraph index for the button icon.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const [ttsStatus, setTtsStatus] = useState<{
+    index: number;
+    state: 'loading' | 'playing';
+  } | null>(null);
+
+  function stopAudio() {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  }
+
+  useEffect(() => stopAudio, []);
+
+  async function playParagraph(idx: number, text: string) {
+    if (!essay) return;
+    // Click the currently playing paragraph again → stop.
+    if (ttsStatus?.index === idx && ttsStatus.state === 'playing') {
+      stopAudio();
+      setTtsStatus(null);
+      return;
+    }
+    stopAudio();
+    setTtsStatus({ index: idx, state: 'loading' });
+    try {
+      const res = await fetch('/api/tts/speech', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          essay_id: essay.id,
+          language: essay.language,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.addEventListener('ended', () => {
+        setTtsStatus(null);
+        stopAudio();
+      });
+      audio.addEventListener('error', () => {
+        setTtsStatus(null);
+        stopAudio();
+      });
+      await audio.play();
+      setTtsStatus({ index: idx, state: 'playing' });
+    } catch (e) {
+      setTtsStatus(null);
+      alert(`朗读失败:${(e as Error).message}`);
+    }
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -313,6 +386,7 @@ export default function EssayDetail() {
             {paragraphs.map((para, idx) => {
               const note = notesByIndex.get(idx);
               const zh = translation[idx]?.trim();
+              const tts = ttsStatus?.index === idx ? ttsStatus.state : 'idle';
               return (
                 <div
                   key={idx}
@@ -331,7 +405,27 @@ export default function EssayDetail() {
                       </span>
                     </div>
                   )}
-                  <p className="whitespace-pre-wrap text-[15.5px] leading-8 text-foreground">
+                  <button
+                    type="button"
+                    onClick={() => playParagraph(idx, para)}
+                    title={tts === 'playing' ? '暂停朗读' : '朗读这段'}
+                    aria-label="朗读这段"
+                    className={cn(
+                      'absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition opacity-0 group-hover:opacity-100',
+                      tts === 'playing' && 'opacity-100 text-primary',
+                      tts === 'loading' && 'opacity-100',
+                      'hover:bg-accent hover:text-foreground',
+                    )}
+                  >
+                    {tts === 'loading' ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : tts === 'playing' ? (
+                      <Pause className="size-4" />
+                    ) : (
+                      <Play className="size-4" />
+                    )}
+                  </button>
+                  <p className="whitespace-pre-wrap pr-8 text-[15.5px] leading-8 text-foreground">
                     {highlightText(
                       para,
                       vocab,

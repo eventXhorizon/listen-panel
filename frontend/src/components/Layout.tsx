@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { to: '/writing', label: '写作', end: false },
   { to: '/essays', label: '范文', end: false },
   { to: '/cloze', label: '填空', end: false },
+  { to: '/tts', label: '朗读', end: false },
   { to: '/review', label: '复习', end: false },
 ];
 

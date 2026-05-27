@@ -23,6 +23,7 @@ import Writing from './pages/Writing';
 import Cloze from './pages/Cloze';
 import Essays, { EssaysIndex } from './pages/Essays';
 import EssayDetail from './pages/EssayDetail';
+import Tts from './pages/Tts';
 
 export default function App() {
   return (
@@ -50,6 +51,7 @@ export default function App() {
                 <Route index element={<EssaysIndex />} />
                 <Route path=":id" element={<EssayDetail />} />
               </Route>
+              <Route path="tts" element={<Tts />} />
               <Route path="settings" element={<Settings />} />
             </Route>
           </Route>

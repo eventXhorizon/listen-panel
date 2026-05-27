@@ -28,27 +28,70 @@ struct SpeechRequest {
     text: String,
     #[serde(default)]
     material_id: Option<i64>,
+    /// Anchor an essay paragraph instead of a material — used by the model-
+    /// essays detail page so cache shards per-essay just like per-material.
+    /// Specify either material_id or essay_id, not both.
+    #[serde(default)]
+    essay_id: Option<i64>,
     #[serde(default)]
     language: Option<String>,
 }
 
+/// Hard cap on a single TTS request. Word lookups sit far under this;
+/// essay paragraphs occasionally run long (PG essays in particular).
+/// Azure caps SSML synthesis at ~10 minutes / request, which works out
+/// to roughly 4-5k chars at conversational pace — pick 4000 to stay
+/// comfortably under that.
+const MAX_TTS_CHARS: usize = 4000;
+
+/// Azure's synthesis call scales with input length. A 4000-char request
+/// can spend 20-40 seconds on the server side; the shared `state.http`
+/// client uses a 20s timeout that's sized for snappy word lookups, not
+/// paragraph synthesis. Past 20s reqwest aborts the body read and
+/// returns the misleading "operation timed out / decoding response body"
+/// error. Build a dedicated client for the Azure call. Same pattern as
+/// routes/essays.rs and study.rs.
+const AZURE_TIMEOUT_SECS: u64 = 180;
+
+fn build_azure_http() -> std::io::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(AZURE_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| std::io::Error::other(format!("build azure http client: {e}")))
+}
+
 async fn speech(
-    State(http): State<reqwest::Client>,
+    State(_http): State<reqwest::Client>,
     State(tts): State<SharedTts>,
     State(pool): State<SqlitePool>,
     user: CurrentUser,
     Json(req): Json<SpeechRequest>,
 ) -> Result<Response> {
+    // Use a dedicated long-timeout client for the Azure round trip;
+    // the shared http client's 20s timeout is too tight for paragraph-
+    // length synthesis.
+    let http = build_azure_http()?;
     let text = req.text.trim();
     if text.is_empty() {
         return Ok((StatusCode::BAD_REQUEST, "text is required").into_response());
     }
-    if text.chars().count() > 500 {
+    if text.chars().count() > MAX_TTS_CHARS {
         return Ok((StatusCode::BAD_REQUEST, "text is too long").into_response());
     }
-    let mut material_language: Option<String> = None;
-    let material_id = match req.material_id {
-        Some(id) if id > 0 => {
+    if req.material_id.is_some() && req.essay_id.is_some() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            "specify either material_id or essay_id, not both",
+        )
+            .into_response());
+    }
+
+    // Resolve the anchor: either a material or an essay, with the source's
+    // language locked in. Both go through the same `Anchor` enum so the
+    // cache path layout shards consistently.
+    let mut source_language: Option<String> = None;
+    let anchor = match (req.material_id, req.essay_id) {
+        (Some(id), None) if id > 0 => {
             let row: Option<(String,)> =
                 sqlx::query_as("SELECT language FROM materials WHERE id = ? AND user_id = ?")
                     .bind(id)
@@ -58,13 +101,27 @@ async fn speech(
             let Some((language,)) = row else {
                 return Ok((StatusCode::NOT_FOUND, "material not found").into_response());
             };
-            material_language = Some(language);
-            Some(id)
+            source_language = Some(language);
+            Anchor::Material(id)
         }
-        Some(_) => {
-            return Ok((StatusCode::BAD_REQUEST, "material_id is invalid").into_response());
+        (None, Some(id)) if id > 0 => {
+            let row: Option<(String,)> = sqlx::query_as(
+                "SELECT language FROM model_essays WHERE id = ? AND user_id = ?",
+            )
+            .bind(id)
+            .bind(user.id)
+            .fetch_optional(&pool)
+            .await?;
+            let Some((language,)) = row else {
+                return Ok((StatusCode::NOT_FOUND, "essay not found").into_response());
+            };
+            source_language = Some(language);
+            Anchor::Essay(id)
         }
-        None => None,
+        (Some(_), _) | (_, Some(_)) => {
+            return Ok((StatusCode::BAD_REQUEST, "id is invalid").into_response());
+        }
+        (None, None) => Anchor::None,
     };
 
     let cfg = tts.read().await.clone();
@@ -72,27 +129,35 @@ async fn speech(
         return Ok((StatusCode::SERVICE_UNAVAILABLE, "tts not configured").into_response());
     }
     let language = req.language.as_deref();
-    let language = material_language
+    let language = source_language
         .as_deref()
         .or(language)
         .map(Language::normalize)
         .unwrap_or(Language::English.code());
 
     match cfg.provider {
-        TtsProvider::Azure => {
-            cached_azure_speech(&http, &cfg, text, material_id, language).await
-        }
+        TtsProvider::Azure => cached_azure_speech(&http, &cfg, text, anchor, language).await,
     }
+}
+
+/// What the cached output is keyed to. Each variant gets its own
+/// subdirectory under the TTS cache root so the file names can't
+/// collide across material-1 and essay-1.
+#[derive(Debug, Clone, Copy)]
+enum Anchor {
+    None,
+    Material(i64),
+    Essay(i64),
 }
 
 async fn cached_azure_speech(
     http: &reqwest::Client,
     cfg: &crate::config::TtsConfig,
     text: &str,
-    material_id: Option<i64>,
+    anchor: Anchor,
     language: &str,
 ) -> Result<Response> {
-    let cache_path = cache_path(cfg, text, material_id, language);
+    let cache_path = cache_path(cfg, text, anchor, language);
     match fs::read(&cache_path).await {
         Ok(bytes) => {
             tracing::debug!(path = %cache_path.display(), "tts cache hit");
@@ -188,7 +253,7 @@ fn escape_xml(s: &str) -> String {
 fn cache_path(
     cfg: &crate::config::TtsConfig,
     text: &str,
-    material_id: Option<i64>,
+    anchor: Anchor,
     language: &str,
 ) -> PathBuf {
     let provider = tts_provider_name(cfg);
@@ -199,13 +264,15 @@ fn cache_path(
         text_slug(text),
         hash.chars().take(16).collect::<String>()
     );
-    cache_dir_for_material(material_id).join(filename)
+    cache_dir_for_anchor(anchor).join(filename)
 }
 
-fn cache_dir_for_material(material_id: Option<i64>) -> PathBuf {
-    match material_id {
-        Some(id) => crate::paths::tts_cache_dir().join(format!("material-{id}")),
-        None => crate::paths::tts_cache_dir(),
+fn cache_dir_for_anchor(anchor: Anchor) -> PathBuf {
+    let root = crate::paths::tts_cache_dir();
+    match anchor {
+        Anchor::Material(id) => root.join(format!("material-{id}")),
+        Anchor::Essay(id) => root.join(format!("essay-{id}")),
+        Anchor::None => root,
     }
 }
 
