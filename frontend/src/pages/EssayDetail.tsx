@@ -8,10 +8,12 @@ import {
   ListTree,
   PlayCircle,
 } from 'lucide-react';
-import { deleteEssay, getEssay, translateEssay } from '../api';
+import { deleteEssay, getEssay, listVocab, translateEssay } from '../api';
 import SelectionPopup from '../components/SelectionPopup';
 import AddVocabDialog from '../components/AddVocabDialog';
 import { languageAdapter } from '../lib/languages';
+import { highlightText } from '../lib/highlight';
+import type { VocabEntry } from '../types';
 import type {
   EssayParagraphFunction,
   ModelEssay,
@@ -71,6 +73,24 @@ export default function EssayDetail() {
   // we don't pop up when the user selects text in the sidebar.
   const articleRef = useRef<HTMLElement>(null);
   const [pendingVocab, setPendingVocab] = useState<{ word: string; context: string } | null>(null);
+
+  // Vocab attached to this essay, used to render in-paragraph highlights.
+  // Reader does the analogous thing scoped to material_id; here we scope
+  // to essay_id so unrelated words from other materials don't bleed in.
+  const [vocab, setVocab] = useState<VocabEntry[]>([]);
+  async function refreshVocab() {
+    if (!id) return;
+    try {
+      setVocab(await listVocab({ essay_id: Number(id) }));
+    } catch {
+      // Highlights are a nice-to-have; if the call fails the body still reads.
+    }
+  }
+  useEffect(() => {
+    setVocab([]);
+    refreshVocab();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
@@ -312,7 +332,14 @@ export default function EssayDetail() {
                     </div>
                   )}
                   <p className="whitespace-pre-wrap text-[15.5px] leading-8 text-foreground">
-                    {para}
+                    {highlightText(
+                      para,
+                      vocab,
+                      undefined,
+                      essay.language,
+                      undefined,
+                      refreshVocab,
+                    )}
                   </p>
                   {showTranslation && zh && (
                     <p className="mt-1.5 border-l-2 border-primary/30 bg-primary/[0.04] px-3 py-2 text-[14px] leading-7 text-muted-foreground">
@@ -440,7 +467,10 @@ export default function EssayDetail() {
           essayId={essay.id}
           language={essay.language}
           onClose={() => setPendingVocab(null)}
-          onSaved={() => setPendingVocab(null)}
+          onSaved={() => {
+            setPendingVocab(null);
+            refreshVocab();
+          }}
         />
       )}
     </main>
