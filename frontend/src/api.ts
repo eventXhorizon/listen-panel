@@ -11,6 +11,7 @@ import type {
   ClozeGradeResult,
   EssayClassic,
   EssayStyle,
+  EssayTranslateResponse,
   ModelEssay,
   ModelEssaySummary,
   JobWithSegments,
@@ -409,6 +410,12 @@ export async function deleteEssay(id: number): Promise<void> {
 
 export function listEssayClassics(): Promise<EssayClassic[]> {
   return request<EssayClassic[]>('/api/essays/classics');
+}
+
+export function translateEssay(id: number): Promise<EssayTranslateResponse> {
+  return request<EssayTranslateResponse>(`/api/essays/${id}/translate`, {
+    method: 'POST',
+  });
 }
 
 // Settings

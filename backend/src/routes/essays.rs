@@ -45,6 +45,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/essays/manual", post(manual))
         .route("/essays/classics", get(classics))
         .route("/essays/:id", get(get_one).delete(remove))
+        .route("/essays/:id/translate", post(translate))
 }
 
 const MAX_MANUAL_CHARS: usize = 50_000;
@@ -106,6 +107,11 @@ pub struct ModelEssay {
     pub word_count: i64,
     pub language_points: Vec<LanguagePoint>,
     pub structure_notes: Vec<StructureNote>,
+    /// Parallel array to body paragraphs (split on \n\n). Empty until the
+    /// detail page triggers /translate or a future eager-translate pass
+    /// runs. UI checks `.length === paragraphs.length` to know whether
+    /// translation is ready or still pending.
+    pub translation_zh: Vec<String>,
     pub created_at: String,
     /// Only set on the immediate create response — tells the UI whether
     /// DeepSeek or the Gemini fallback handled the heavy LLM call. Omitted
@@ -149,6 +155,7 @@ struct EssayRow {
     word_count: i64,
     language_points_json: String,
     structure_notes_json: String,
+    translation_zh_json: String,
     created_at: String,
 }
 
@@ -169,6 +176,8 @@ impl EssayRow {
             language_points: serde_json::from_str(&self.language_points_json)
                 .unwrap_or_default(),
             structure_notes: serde_json::from_str(&self.structure_notes_json)
+                .unwrap_or_default(),
+            translation_zh: serde_json::from_str(&self.translation_zh_json)
                 .unwrap_or_default(),
             created_at: self.created_at,
             provider: None,
@@ -803,6 +812,135 @@ async fn classics(_user: CurrentUser) -> Json<Vec<&'static Classic>> {
     Json(CLASSICS.iter().collect())
 }
 
+// ============== Translate (paragraph-by-paragraph Chinese) ==============
+
+#[derive(Debug, Serialize)]
+pub struct TranslateResponse {
+    pub id: i64,
+    pub translation_zh: Vec<String>,
+    pub provider: LlmProvider,
+    /// True when the call short-circuited because the essay already had
+    /// a translation cached. UI can skip the spinner in that case.
+    pub cached: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmTranslateOut {
+    #[serde(default)]
+    translations: Vec<String>,
+}
+
+async fn translate(
+    State(pool): State<SqlitePool>,
+    State(_http): State<reqwest::Client>,
+    State(llm): State<SharedLlm>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Response> {
+    let row: Option<EssayRow> = sqlx::query_as(&format!(
+        "SELECT {ESSAY_SELECT_COLS} FROM model_essays WHERE id = ? AND user_id = ?"
+    ))
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response());
+    };
+
+    // Split body into paragraphs the same way the UI does.
+    let paragraphs: Vec<&str> = row
+        .body
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    if paragraphs.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "essay has no paragraphs to translate" })),
+        )
+            .into_response());
+    }
+
+    // Cached: if existing translation has the same length as paragraphs,
+    // assume it's good (the user could re-run /translate explicitly if
+    // the essay body changed, but that path doesn't exist today).
+    let existing: Vec<String> =
+        serde_json::from_str(&row.translation_zh_json).unwrap_or_default();
+    if existing.len() == paragraphs.len()
+        && existing.iter().all(|s| !s.trim().is_empty())
+    {
+        return Ok(Json(TranslateResponse {
+            id: row.id,
+            translation_zh: existing,
+            provider: LlmProvider::Primary,
+            cached: true,
+        })
+        .into_response());
+    }
+
+    let paragraphs_json = serde_json::to_string(&paragraphs)?;
+    let http = build_llm_http()?;
+    let cfg = llm.read().await.clone();
+    let body = json!({
+        "messages": [
+            { "role": "system", "content": language::essay_translate_system_prompt() },
+            { "role": "user",   "content": language::essay_translate_user_prompt(&paragraphs_json) },
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0.3,
+        // Translation output scales with paragraph count. A 1500-word
+        // essay (~10-15 paragraphs) sits well under 4k, but PG-length
+        // pieces can push past that — same reason we lift the cap on
+        // the other essay LLM calls.
+        "max_tokens": 8192,
+    });
+
+    let outcome = call_chat_completions(&http, &cfg, body, "essay-translate")
+        .await
+        .map_err(AppError)?;
+    let parsed: LlmTranslateOut = serde_json::from_str(&outcome.content)
+        .with_context(|| format!("parse essay-translate output: {}", outcome.content))
+        .map_err(AppError)?;
+
+    // Length must match. If the LLM under-counted, pad with empty strings;
+    // if it over-counted, truncate. Either way the UI's paragraph-aligned
+    // render stays correct.
+    let mut translations: Vec<String> = parsed
+        .translations
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .collect();
+    translations.truncate(paragraphs.len());
+    while translations.len() < paragraphs.len() {
+        translations.push(String::new());
+    }
+    if translations.iter().all(|s| s.is_empty()) {
+        return Err(AppError(anyhow::anyhow!(
+            "LLM returned empty translations array"
+        )));
+    }
+
+    let translation_json = serde_json::to_string(&translations)?;
+    sqlx::query(
+        "UPDATE model_essays SET translation_zh_json = ? WHERE id = ? AND user_id = ?",
+    )
+    .bind(&translation_json)
+    .bind(id)
+    .bind(user.id)
+    .execute(&pool)
+    .await?;
+
+    Ok(Json(TranslateResponse {
+        id,
+        translation_zh: translations,
+        provider: outcome.provider,
+        cached: false,
+    })
+    .into_response())
+}
+
 // ============== Helpers ==============
 
 struct InsertParams {
@@ -822,7 +960,8 @@ struct InsertParams {
 }
 
 const ESSAY_SELECT_COLS: &str = "id, title, author, language, source, source_url, video_url, \
-    style, topic, body, word_count, language_points_json, structure_notes_json, created_at";
+    style, topic, body, word_count, language_points_json, structure_notes_json, \
+    translation_zh_json, created_at";
 
 async fn insert(pool: &SqlitePool, p: InsertParams) -> Result<EssayRow> {
     let row: EssayRow = sqlx::query_as(&format!(

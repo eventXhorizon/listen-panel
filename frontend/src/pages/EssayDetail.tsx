@@ -8,7 +8,7 @@ import {
   ListTree,
   PlayCircle,
 } from 'lucide-react';
-import { deleteEssay, getEssay } from '../api';
+import { deleteEssay, getEssay, translateEssay } from '../api';
 import type {
   EssayParagraphFunction,
   ModelEssay,
@@ -50,15 +50,34 @@ export default function EssayDetail() {
   // less busy when the user just wants to read.
   const [pointsOpen, setPointsOpen] = useState(true);
   const [structureOpen, setStructureOpen] = useState(true);
+  // Chinese translation, paragraph-aligned to body. Loaded lazily so
+  // import doesn't block on it. Toggle persists across essays.
+  const [translation, setTranslation] = useState<string[]>([]);
+  const [translating, setTranslating] = useState(false);
+  const [translateError, setTranslateError] = useState<string | null>(null);
+  const [showTranslation, setShowTranslation] = useState<boolean>(() => {
+    const v = localStorage.getItem('essay-show-translation');
+    return v == null ? true : v === '1';
+  });
+  useEffect(() => {
+    localStorage.setItem('essay-show-translation', showTranslation ? '1' : '0');
+  }, [showTranslation]);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setTranslation([]);
+    setTranslateError(null);
     getEssay(Number(id))
       .then((e) => {
-        if (!cancelled) setEssay(e);
+        if (cancelled) return;
+        setEssay(e);
+        // Seed translation from the row if it's already there.
+        if (e.translation_zh && e.translation_zh.length > 0) {
+          setTranslation(e.translation_zh);
+        }
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message);
@@ -70,6 +89,34 @@ export default function EssayDetail() {
       cancelled = true;
     };
   }, [id]);
+
+  // Once the essay is loaded, fire translation lazily if it's missing or
+  // out of sync with the current paragraph count. Cheap-cached cases
+  // return instantly via the backend's `cached: true` short-circuit.
+  useEffect(() => {
+    if (!essay) return;
+    const paragraphCount = essay.body.split(/\n{2,}/).filter((p) => p.trim()).length;
+    const haveSomeTranslation =
+      translation.length === paragraphCount && translation.some((s) => s.trim());
+    if (haveSomeTranslation || translating) return;
+    let cancelled = false;
+    setTranslating(true);
+    setTranslateError(null);
+    translateEssay(essay.id)
+      .then((r) => {
+        if (!cancelled) setTranslation(r.translation_zh);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setTranslateError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setTranslating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [essay?.id]);
 
   async function onDelete() {
     if (!essay) return;
@@ -124,6 +171,20 @@ export default function EssayDetail() {
             </Link>
           </Button>
           <div className="flex items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
+              <input
+                type="checkbox"
+                checked={showTranslation}
+                onChange={(e) => setShowTranslation(e.target.checked)}
+                className="accent-primary"
+              />
+              中文翻译
+              {translating && (
+                <span className="text-[10px] text-muted-foreground/70">
+                  (翻译中…)
+                </span>
+              )}
+            </label>
             {essay.provider && <ProviderBadge provider={essay.provider} />}
             <button
               type="button"
@@ -186,8 +247,14 @@ export default function EssayDetail() {
 
         <div className="grid gap-8 lg:grid-cols-[1fr_280px]">
           <article className="prose-essay">
+            {translateError && (
+              <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                翻译失败:{translateError} · 刷新页面可重试
+              </div>
+            )}
             {paragraphs.map((para, idx) => {
               const note = notesByIndex.get(idx);
+              const zh = translation[idx]?.trim();
               return (
                 <div key={idx} className="group relative mb-5">
                   {note && (
@@ -205,6 +272,16 @@ export default function EssayDetail() {
                   <p className="whitespace-pre-wrap text-[15.5px] leading-8 text-foreground">
                     {para}
                   </p>
+                  {showTranslation && zh && (
+                    <p className="mt-1.5 border-l-2 border-primary/30 bg-primary/[0.04] px-3 py-2 text-[14px] leading-7 text-muted-foreground">
+                      {zh}
+                    </p>
+                  )}
+                  {showTranslation && !zh && translating && (
+                    <p className="mt-1.5 border-l-2 border-muted bg-muted/30 px-3 py-2 text-[12px] italic text-muted-foreground/70">
+                      翻译生成中…
+                    </p>
+                  )}
                   {note && (
                     <p className="mt-1 text-[11px] leading-4 text-muted-foreground lg:hidden">
                       <span

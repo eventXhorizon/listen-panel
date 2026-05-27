@@ -133,6 +133,20 @@ pub fn essay_analyze_user_prompt(raw_text: &str) -> String {
     )
 }
 
+/// Paragraph-by-paragraph Chinese translation of an existing English essay.
+/// Translations come from a dedicated second LLM call (not jammed into the
+/// main analyze prompt) so the detail page can lazily backfill old rows
+/// and so the heavy main call stays under DeepSeek's 8192-token output cap.
+pub fn essay_translate_system_prompt() -> &'static str {
+    EN_ESSAY_TRANSLATE_SYSTEM_PROMPT
+}
+
+pub fn essay_translate_user_prompt(paragraphs_json: &str) -> String {
+    format!(
+        "下面是一篇英文文章的段落数组(已按段切好)。给每段一个自然、地道的中文翻译。\n\nparagraphs:\n{paragraphs_json}"
+    )
+}
+
 pub fn cloze_generate_user_prompt(transcript: &str, difficulty: &str) -> String {
     let guidance = match difficulty {
         "easy" => "难度档 = easy:用词通俗,目标 8-10 个空。词汇 ≈ 6 成,语法 ≈ 4 成。语法挖空优先介词、冠词、基础时态。",
@@ -346,6 +360,22 @@ function 必须是: 'thesis' | 'evidence' | 'counter' | 'transition' | 'conclusi
 paragraph_index 必须从 0 开始,与 body 中按 \\\\n\\\\n 切分后的段落对齐,每段恰好一个 note。\n\
 \n\
 **特别注意**:不要改写原文的句子;你的任务是【提取 + 注释】,不是【改写】。如果原文长度超过 3000 词,**不要截断**,但可以省略明显非正文的章节标记。";
+
+pub const EN_ESSAY_TRANSLATE_SYSTEM_PROMPT: &str = "你是英译中翻译,服务对象是中文母语的英语学习者。\n\
+输入是一个英文段落数组,你要给每段输出对应的中文翻译。\n\
+\n\
+严格 JSON,不要 markdown 代码块。格式:\n\
+{\n\
+  \"translations\": [\"第 0 段的中文翻译\", \"第 1 段的中文翻译\", ...]\n\
+}\n\
+\n\
+硬性要求:\n\
+- translations 数组的长度必须严格等于输入 paragraphs 的长度,顺序对齐。\n\
+- 翻译要自然、地道、有节奏感 — 不是逐词硬翻。比如 'Five score years ago' 译成 '一百年前' 比 '五个二十年前' 更好。\n\
+- 保留原文的语气和文体:演讲就有演讲味,议论文就有议论文的力度,叙事就有叙事的画面感。\n\
+- 专有名词、人名、地名按习惯译法(Emancipation Proclamation = 《解放宣言》,Martin Luther King = 马丁·路德·金)。\n\
+- 不要加译者注、不要解释、不要分析 — 只给翻译本身。\n\
+- 段落长度差异巨大也要逐段翻,不能合并相邻段。";
 
 #[cfg(test)]
 mod tests {

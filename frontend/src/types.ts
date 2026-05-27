@@ -477,6 +477,10 @@ export interface ModelEssay {
   word_count: number;
   language_points: EssayLanguagePoint[];
   structure_notes: EssayStructureNote[];
+  /** Parallel array to body paragraphs (split on blank lines). Empty
+   *  until /api/essays/:id/translate has been called for this essay —
+   *  EssayDetail lazy-fires that endpoint on first view. */
+  translation_zh: string[];
   created_at: string;
   /** Only set on the create response. */
   provider?: LlmProvider;
@@ -509,4 +513,13 @@ export interface EssayClassic {
   style: EssayStyle;
   blurb: string;
   video_url?: string;
+}
+
+/** Response shape of POST /api/essays/:id/translate. */
+export interface EssayTranslateResponse {
+  id: number;
+  translation_zh: string[];
+  provider: LlmProvider;
+  /** True when the call returned the cached array without re-translating. */
+  cached: boolean;
 }
