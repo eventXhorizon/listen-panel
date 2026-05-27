@@ -2,6 +2,7 @@ pub mod asr;
 pub mod auth;
 pub mod backup;
 pub mod cloze;
+pub mod essays;
 pub mod health;
 pub mod llm;
 pub mod materials;
@@ -32,5 +33,6 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(quick_notes::router())
         .merge(writing::router())
         .merge(cloze::router())
+        .merge(essays::router())
         .with_state(state)
 }

@@ -9,6 +9,10 @@ import type {
   ClozeExercise,
   ClozeExerciseSummary,
   ClozeGradeResult,
+  EssayClassic,
+  EssayStyle,
+  ModelEssay,
+  ModelEssaySummary,
   JobWithSegments,
   Material,
   MaterialLanguage,
@@ -350,6 +354,59 @@ export function gradeClozeExercise(
 
 export async function deleteClozeExercise(id: number): Promise<void> {
   await request<void>(`/api/cloze/exercises/${id}`, { method: 'DELETE' });
+}
+
+// Model essays
+
+export function generateEssay(data: {
+  topic: string;
+  style?: EssayStyle;
+  length?: 'short' | 'medium' | 'long';
+}): Promise<ModelEssay> {
+  return request<ModelEssay>('/api/essays/generate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function fetchEssayFromUrl(data: {
+  url: string;
+  author_hint?: string;
+  style?: EssayStyle;
+}): Promise<ModelEssay> {
+  return request<ModelEssay>('/api/essays/fetch', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function importManualEssay(data: {
+  text: string;
+  title?: string;
+  author?: string;
+  source_url?: string;
+  style?: EssayStyle;
+}): Promise<ModelEssay> {
+  return request<ModelEssay>('/api/essays/manual', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function listEssays(): Promise<ModelEssaySummary[]> {
+  return request<ModelEssaySummary[]>('/api/essays');
+}
+
+export function getEssay(id: number): Promise<ModelEssay> {
+  return request<ModelEssay>(`/api/essays/${id}`);
+}
+
+export async function deleteEssay(id: number): Promise<void> {
+  await request<void>(`/api/essays/${id}`, { method: 'DELETE' });
+}
+
+export function listEssayClassics(): Promise<EssayClassic[]> {
+  return request<EssayClassic[]>('/api/essays/classics');
 }
 
 // Settings

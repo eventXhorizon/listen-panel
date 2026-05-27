@@ -424,3 +424,82 @@ export interface ClozeGradeResult {
   correct_count: number;
   total_count: number;
 }
+
+// ---- Model essays ----
+
+/** Where this essay came from. UI shows a badge so the user can tell
+ *  generated text apart from extracted text. */
+export type EssaySource = 'llm' | 'web' | 'manual';
+
+export type EssayStyle =
+  | 'economist'
+  | 'atlantic'
+  | 'paul_graham'
+  | 'speech'
+  | 'narrative'
+  | 'op_ed'
+  | 'other';
+
+export type EssayParagraphFunction =
+  | 'thesis'
+  | 'evidence'
+  | 'counter'
+  | 'transition'
+  | 'conclusion'
+  | 'narrative'
+  | 'analysis'
+  | 'other';
+
+export interface EssayLanguagePoint {
+  phrase: string;
+  meaning_zh: string;
+  usage_note?: string;
+}
+
+export interface EssayStructureNote {
+  paragraph_index: number;
+  function: EssayParagraphFunction;
+  summary_zh: string;
+}
+
+export interface ModelEssay {
+  id: number;
+  title: string;
+  author?: string | null;
+  language: MaterialLanguage;
+  source: EssaySource;
+  source_url?: string | null;
+  style: EssayStyle;
+  topic?: string | null;
+  body: string;
+  word_count: number;
+  language_points: EssayLanguagePoint[];
+  structure_notes: EssayStructureNote[];
+  created_at: string;
+  /** Only set on the create response. */
+  provider?: LlmProvider;
+}
+
+export interface ModelEssaySummary {
+  id: number;
+  title: string;
+  author?: string | null;
+  language: MaterialLanguage;
+  source: EssaySource;
+  source_url?: string | null;
+  style: EssayStyle;
+  topic?: string | null;
+  word_count: number;
+  created_at: string;
+}
+
+/** A curated "must-read" entry served by GET /api/essays/classics.
+ *  Each entry is a hardcoded URL on the backend; the UI offers a
+ *  one-click "导入" that posts to /api/essays/fetch behind the scenes. */
+export interface EssayClassic {
+  title: string;
+  author: string;
+  url: string;
+  style: EssayStyle;
+  blurb: string;
+}

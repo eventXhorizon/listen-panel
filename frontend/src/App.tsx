@@ -21,6 +21,8 @@ import Review from './pages/Review';
 import Settings from './pages/Settings';
 import Writing from './pages/Writing';
 import Cloze from './pages/Cloze';
+import Essays, { EssaysIndex } from './pages/Essays';
+import EssayDetail from './pages/EssayDetail';
 
 export default function App() {
   return (
@@ -44,6 +46,10 @@ export default function App() {
               <Route path="review" element={<Review />} />
               <Route path="writing" element={<Writing />} />
               <Route path="cloze" element={<Cloze />} />
+              <Route path="essays" element={<Essays />}>
+                <Route index element={<EssaysIndex />} />
+                <Route path=":id" element={<EssayDetail />} />
+              </Route>
               <Route path="settings" element={<Settings />} />
             </Route>
           </Route>
