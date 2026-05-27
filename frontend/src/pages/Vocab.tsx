@@ -105,7 +105,7 @@ export default function Vocab() {
 
         <ul className="space-y-3">
           {filtered.map((v) => {
-            const mat = materialMap.get(v.material_id);
+            const mat = v.material_id != null ? materialMap.get(v.material_id) : undefined;
             return (
               <li
                 key={v.id}
@@ -118,7 +118,7 @@ export default function Vocab() {
                     </span>
                     <SpeakButton
                       word={v.word}
-                      materialId={v.material_id}
+                      materialId={v.material_id ?? undefined}
                       language={v.language}
                     />
                     <span className="rounded bg-accent px-1.5 py-0.5 text-[11px] text-muted-foreground">

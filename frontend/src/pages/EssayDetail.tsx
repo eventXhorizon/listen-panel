@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -9,6 +9,9 @@ import {
   PlayCircle,
 } from 'lucide-react';
 import { deleteEssay, getEssay, translateEssay } from '../api';
+import SelectionPopup from '../components/SelectionPopup';
+import AddVocabDialog from '../components/AddVocabDialog';
+import { languageAdapter } from '../lib/languages';
 import type {
   EssayParagraphFunction,
   ModelEssay,
@@ -62,6 +65,12 @@ export default function EssayDetail() {
   useEffect(() => {
     localStorage.setItem('essay-show-translation', showTranslation ? '1' : '0');
   }, [showTranslation]);
+
+  // Selection → add-to-vocab. Mirrors how Reader hooks the bookshelf reader.
+  // `articleRef` is the boundary SelectionPopup uses to scope detection so
+  // we don't pop up when the user selects text in the sidebar.
+  const articleRef = useRef<HTMLElement>(null);
+  const [pendingVocab, setPendingVocab] = useState<{ word: string; context: string } | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -123,6 +132,35 @@ export default function EssayDetail() {
     if (!confirm('删除这篇范文?')) return;
     await deleteEssay(essay.id);
     navigate('/essays');
+  }
+
+  /** SelectionPopup hands us the selected text; we look up which
+   *  paragraph it came out of, slice out the surrounding sentence and
+   *  hand the pair to AddVocabDialog. Same algorithm as Reader.tsx. */
+  function handleAddFromSelection(text: string) {
+    if (!essay) return;
+    const sel = window.getSelection();
+    let context = '';
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      const startNode = range.startContainer;
+      const paraEl = (
+        startNode.nodeType === Node.TEXT_NODE
+          ? startNode.parentElement
+          : (startNode as Element)
+      )?.closest('[data-paragraph]') as HTMLElement | null;
+      if (paraEl) {
+        const paraIdx = Number(paraEl.dataset.paragraph);
+        const para =
+          paragraphs[paraIdx] ?? paraEl.textContent ?? '';
+        const adapter = languageAdapter(essay.language);
+        const offset = adapter
+          .normalizeTerm(para)
+          .indexOf(adapter.normalizeTerm(text));
+        context = offset >= 0 ? adapter.extractSentence(para, offset) : para;
+      }
+    }
+    setPendingVocab({ word: text, context: context || text });
   }
 
   // Split body into paragraphs once; structure_notes are indexed against this.
@@ -246,7 +284,7 @@ export default function EssayDetail() {
         </header>
 
         <div className="grid gap-8 lg:grid-cols-[1fr_280px]">
-          <article className="prose-essay">
+          <article ref={articleRef} className="prose-essay">
             {translateError && (
               <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 翻译失败:{translateError} · 刷新页面可重试
@@ -256,7 +294,11 @@ export default function EssayDetail() {
               const note = notesByIndex.get(idx);
               const zh = translation[idx]?.trim();
               return (
-                <div key={idx} className="group relative mb-5">
+                <div
+                  key={idx}
+                  data-paragraph={idx}
+                  className="group relative mb-5"
+                >
                   {note && (
                     <div className="absolute -left-2 top-1.5 hidden -translate-x-full pr-3 text-[10px] lg:block">
                       <span
@@ -384,6 +426,23 @@ export default function EssayDetail() {
           </aside>
         </div>
       </div>
+
+      <SelectionPopup
+        containerRef={articleRef}
+        language={essay.language}
+        onAdd={handleAddFromSelection}
+      />
+
+      {pendingVocab && (
+        <AddVocabDialog
+          word={pendingVocab.word}
+          context={pendingVocab.context}
+          essayId={essay.id}
+          language={essay.language}
+          onClose={() => setPendingVocab(null)}
+          onSaved={() => setPendingVocab(null)}
+        />
+      )}
     </main>
   );
 }

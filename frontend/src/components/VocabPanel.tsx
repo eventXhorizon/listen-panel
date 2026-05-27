@@ -106,7 +106,7 @@ export default function VocabPanel({ items, onClose, onChange }: Props) {
                     </span>
                     <SpeakButton
                       word={v.word}
-                      materialId={v.material_id}
+                      materialId={v.material_id ?? undefined}
                       language={v.language}
                     />
                     {v.lemma &&

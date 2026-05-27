@@ -41,6 +41,9 @@ export type VocabKind = 'word' | 'idiom';
 
 export interface VocabEntry {
   id: number;
+  /** Always present. Vocab now owns its ownership via user_id; the
+   *  material_id / essay_id below are only context anchors. */
+  user_id: number;
   word: string;
   language: MaterialLanguage;
   kind: VocabKind;
@@ -51,13 +54,21 @@ export interface VocabEntry {
   definition_en?: string;
   example_zh?: string;
   context: string;
-  material_id: number;
+  /** Exactly one of material_id / essay_id is set. */
+  material_id?: number | null;
+  essay_id?: number | null;
   created_at: string;
   mastery: number;
 }
 
-export type CreateVocab = Omit<VocabEntry, 'id' | 'created_at' | 'kind'> & {
+export type CreateVocab = Omit<
+  VocabEntry,
+  'id' | 'created_at' | 'kind' | 'user_id' | 'material_id' | 'essay_id'
+> & {
   kind?: VocabKind;
+  /** Exactly one of these is required by the backend. */
+  material_id?: number;
+  essay_id?: number;
 };
 
 export type NewsSource =

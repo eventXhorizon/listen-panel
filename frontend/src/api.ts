@@ -108,9 +108,15 @@ export async function deleteMaterial(id: number): Promise<void> {
 
 // Vocab
 
-export function listVocab(materialId?: number): Promise<VocabEntry[]> {
-  const qs = materialId == null ? '' : `?material_id=${materialId}`;
-  return request<VocabEntry[]>(`/api/vocab${qs}`);
+export function listVocab(filters?: {
+  material_id?: number;
+  essay_id?: number;
+}): Promise<VocabEntry[]> {
+  const params = new URLSearchParams();
+  if (filters?.material_id != null) params.set('material_id', String(filters.material_id));
+  if (filters?.essay_id != null) params.set('essay_id', String(filters.essay_id));
+  const qs = params.toString();
+  return request<VocabEntry[]>(`/api/vocab${qs ? `?${qs}` : ''}`);
 }
 
 export function createVocab(data: CreateVocab): Promise<VocabEntry> {

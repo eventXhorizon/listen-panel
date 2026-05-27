@@ -21,7 +21,9 @@ import { cn } from '@/lib/utils';
 interface Props {
   word: string;
   context: string;
-  materialId: number;
+  /** Exactly one of materialId / essayId must be set. */
+  materialId?: number;
+  essayId?: number;
   language?: MaterialLanguage;
   onClose: () => void;
   onSaved: () => void;
@@ -31,6 +33,7 @@ export default function AddVocabDialog({
   word,
   context,
   materialId,
+  essayId,
   language = 'en',
   onClose,
   onSaved,
@@ -90,6 +93,7 @@ export default function AddVocabDialog({
         example_zh: exampleZh.trim() || undefined,
         context: contextEdit.trim(),
         material_id: materialId,
+        essay_id: essayId,
         mastery: 0,
       });
       onSaved();

@@ -209,7 +209,7 @@ export default function Review() {
               </div>
               <SpeakButton
                 word={cur.word}
-                materialId={cur.material_id}
+                materialId={cur.material_id ?? undefined}
                 language={cur.language}
                 className="mt-1"
               />

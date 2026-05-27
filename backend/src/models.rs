@@ -43,7 +43,9 @@ pub struct UpdateMaterial {
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct Vocab {
     pub id: i64,
-    pub material_id: i64,
+    pub user_id: i64,
+    pub material_id: Option<i64>,
+    pub essay_id: Option<i64>,
     pub word: String,
     pub language: String,
     pub kind: String,
@@ -60,7 +62,13 @@ pub struct Vocab {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateVocab {
-    pub material_id: i64,
+    /// Exactly one of material_id / essay_id must be set. The vocab row
+    /// always belongs to the current user; the optional foreign key just
+    /// records what the user was reading when they added it.
+    #[serde(default)]
+    pub material_id: Option<i64>,
+    #[serde(default)]
+    pub essay_id: Option<i64>,
     pub word: String,
     #[serde(default)]
     pub language: Option<String>,

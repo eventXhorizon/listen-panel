@@ -545,7 +545,7 @@ export default function Reader() {
       }
       setM(data);
       markOpened(mid);
-      setVocab(await listVocab(mid));
+      setVocab(await listVocab({ material_id: mid }));
       try {
         setNotes(await listNotes(mid));
         setNotesErr(null);
@@ -609,7 +609,7 @@ export default function Reader() {
   }, [job, mid, segments.length, showStudy]);
 
   async function refreshVocab() {
-    setVocab(await listVocab(mid));
+    setVocab(await listVocab({ material_id: mid }));
   }
 
   async function startTranscription() {
