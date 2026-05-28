@@ -8,12 +8,12 @@ import {
   ListTree,
   PlayCircle,
   Play,
-  Pause,
   Loader2,
 } from 'lucide-react';
 import { deleteEssay, getEssay, listVocab, translateEssay } from '../api';
 import SelectionPopup from '../components/SelectionPopup';
 import AddVocabDialog from '../components/AddVocabDialog';
+import AudioPlayer from '../components/AudioPlayer';
 import { languageAdapter } from '../lib/languages';
 import { highlightText } from '../lib/highlight';
 import type { VocabEntry } from '../types';
@@ -95,40 +95,37 @@ export default function EssayDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // Paragraph TTS. One shared audio instance so only one paragraph plays
-  // at a time — clicking another paragraph swaps the source. Status is
-  // tracked per paragraph index for the button icon.
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  const [ttsStatus, setTtsStatus] = useState<{
-    index: number;
-    state: 'loading' | 'playing';
-  } | null>(null);
+  // Paragraph TTS. Only one paragraph's player is mounted at a time
+  // — switching to another paragraph releases the previous blob URL.
+  // The AudioPlayer component below owns its own <audio> element with
+  // seek + volume + speed controls; we just supply the blob URL.
+  const ttsUrlRef = useRef<string | null>(null);
+  const [ttsParagraph, setTtsParagraph] = useState<number | null>(null);
+  const [ttsUrl, setTtsUrl] = useState<string | null>(null);
+  const [ttsLoadingIndex, setTtsLoadingIndex] = useState<number | null>(null);
 
-  function stopAudio() {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
-      audioRef.current = null;
+  function clearParagraphAudio() {
+    if (ttsUrlRef.current) {
+      URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
     }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
+    setTtsUrl(null);
+    setTtsParagraph(null);
   }
 
-  useEffect(() => stopAudio, []);
+  useEffect(() => clearParagraphAudio, []);
 
   async function playParagraph(idx: number, text: string) {
     if (!essay) return;
-    // Click the currently playing paragraph again → stop.
-    if (ttsStatus?.index === idx && ttsStatus.state === 'playing') {
-      stopAudio();
-      setTtsStatus(null);
+    // Click the play button on the paragraph that's already loaded
+    // → close its player.
+    if (ttsParagraph === idx) {
+      clearParagraphAudio();
       return;
     }
-    stopAudio();
-    setTtsStatus({ index: idx, state: 'loading' });
+    if (ttsLoadingIndex !== null) return;
+    clearParagraphAudio();
+    setTtsLoadingIndex(idx);
     try {
       const res = await fetch('/api/tts/speech', {
         method: 'POST',
@@ -146,22 +143,13 @@ export default function EssayDetail() {
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      audioUrlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.addEventListener('ended', () => {
-        setTtsStatus(null);
-        stopAudio();
-      });
-      audio.addEventListener('error', () => {
-        setTtsStatus(null);
-        stopAudio();
-      });
-      await audio.play();
-      setTtsStatus({ index: idx, state: 'playing' });
+      ttsUrlRef.current = url;
+      setTtsUrl(url);
+      setTtsParagraph(idx);
     } catch (e) {
-      setTtsStatus(null);
       alert(`朗读失败:${(e as Error).message}`);
+    } finally {
+      setTtsLoadingIndex(null);
     }
   }
 
@@ -386,7 +374,8 @@ export default function EssayDetail() {
             {paragraphs.map((para, idx) => {
               const note = notesByIndex.get(idx);
               const zh = translation[idx]?.trim();
-              const tts = ttsStatus?.index === idx ? ttsStatus.state : 'idle';
+              const isActive = ttsParagraph === idx;
+              const isLoading = ttsLoadingIndex === idx;
               return (
                 <div
                   key={idx}
@@ -408,19 +397,17 @@ export default function EssayDetail() {
                   <button
                     type="button"
                     onClick={() => playParagraph(idx, para)}
-                    title={tts === 'playing' ? '暂停朗读' : '朗读这段'}
+                    title={isActive ? '关闭播放器' : '朗读这段'}
                     aria-label="朗读这段"
                     className={cn(
                       'absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition opacity-0 group-hover:opacity-100',
-                      tts === 'playing' && 'opacity-100 text-primary',
-                      tts === 'loading' && 'opacity-100',
+                      isActive && 'opacity-100 text-primary',
+                      isLoading && 'opacity-100',
                       'hover:bg-accent hover:text-foreground',
                     )}
                   >
-                    {tts === 'loading' ? (
+                    {isLoading ? (
                       <Loader2 className="size-4 animate-spin" />
-                    ) : tts === 'playing' ? (
-                      <Pause className="size-4" />
                     ) : (
                       <Play className="size-4" />
                     )}
@@ -435,6 +422,14 @@ export default function EssayDetail() {
                       refreshVocab,
                     )}
                   </p>
+                  {isActive && ttsUrl && (
+                    <div className="mt-2">
+                      <AudioPlayer
+                        src={ttsUrl}
+                        onClose={clearParagraphAudio}
+                      />
+                    </div>
+                  )}
                   {showTranslation && zh && (
                     <p className="mt-1.5 border-l-2 border-primary/30 bg-primary/[0.04] px-3 py-2 text-[14px] leading-7 text-muted-foreground">
                       {zh}

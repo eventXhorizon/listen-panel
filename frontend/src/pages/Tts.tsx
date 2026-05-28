@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Play, Pause, Download, Volume2 } from 'lucide-react';
+import { Loader2, Play, Download, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import AudioPlayer from '../components/AudioPlayer';
 import type { MaterialLanguage } from '../types';
 
 const DRAFT_KEY = 'tts-playground-text';
 const LANG_KEY = 'tts-playground-language';
 const MAX_CHARS = 4000;
 
-type Status = 'idle' | 'loading' | 'playing';
+type Status = 'idle' | 'loading' | 'ready';
 
 /** Standalone TTS playground: paste any text, listen, optionally download
  *  the MP3. The backend /api/tts/speech endpoint accepts a no-anchor
@@ -31,23 +32,21 @@ export default function Tts() {
     localStorage.setItem(LANG_KEY, language);
   }, [language]);
 
-  // One shared audio instance; clicking the button again toggles it.
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Blob URL of the most recently fetched audio. AudioPlayer manages
+  // its own <audio> element from this URL; we just need to release the
+  // URL when it's replaced or the page unmounts.
   const audioUrlRef = useRef<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
-  function stopAudio() {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
-      audioRef.current = null;
-    }
+  function clearAudio() {
     if (audioUrlRef.current) {
       URL.revokeObjectURL(audioUrlRef.current);
       audioUrlRef.current = null;
     }
+    setAudioUrl(null);
   }
 
-  useEffect(() => stopAudio, []);
+  useEffect(() => clearAudio, []);
 
   async function fetchAudio(): Promise<Blob> {
     const trimmed = text.trim();
@@ -70,32 +69,17 @@ export default function Tts() {
     return await res.blob();
   }
 
-  async function onPlayToggle() {
-    if (status === 'playing') {
-      stopAudio();
-      setStatus('idle');
-      return;
-    }
+  async function onLoadAudio() {
     if (status === 'loading') return;
-    stopAudio();
+    clearAudio();
     setError(null);
     setStatus('loading');
     try {
       const blob = await fetchAudio();
       const url = URL.createObjectURL(blob);
       audioUrlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.addEventListener('ended', () => {
-        setStatus('idle');
-        stopAudio();
-      });
-      audio.addEventListener('error', () => {
-        setStatus('idle');
-        stopAudio();
-      });
-      await audio.play();
-      setStatus('playing');
+      setAudioUrl(url);
+      setStatus('ready');
     } catch (e) {
       setStatus('idle');
       setError((e as Error).message);
@@ -179,7 +163,7 @@ export default function Tts() {
               variant="ghost"
               size="sm"
               onClick={() => {
-                stopAudio();
+                clearAudio();
                 setStatus('idle');
                 setText('');
               }}
@@ -198,7 +182,7 @@ export default function Tts() {
               下载 MP3
             </Button>
             <Button
-              onClick={onPlayToggle}
+              onClick={onLoadAudio}
               disabled={!charCount || overLimit || status === 'loading'}
               className="min-w-[100px]"
             >
@@ -206,11 +190,6 @@ export default function Tts() {
                 <>
                   <Loader2 className="size-4 animate-spin" />
                   合成中
-                </>
-              ) : status === 'playing' ? (
-                <>
-                  <Pause className="size-4" />
-                  暂停
                 </>
               ) : (
                 <>
@@ -221,6 +200,21 @@ export default function Tts() {
             </Button>
           </div>
         </div>
+
+        {audioUrl && status === 'ready' && (
+          <div className="mt-4">
+            <AudioPlayer
+              src={audioUrl}
+              onEnded={() => {
+                /* keep the player visible so the user can replay / seek */
+              }}
+              onClose={() => {
+                clearAudio();
+                setStatus('idle');
+              }}
+            />
+          </div>
+        )}
 
         {error && (
           <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
