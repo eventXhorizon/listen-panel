@@ -12,7 +12,9 @@ use crate::language::Language;
 use crate::llm_call::{LlmProvider, call_chat_completions};
 
 pub fn router() -> Router<crate::AppState> {
-    Router::new().route("/lookup", post(lookup))
+    Router::new()
+        .route("/lookup", post(lookup))
+        .route("/translate", post(translate))
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +91,81 @@ async fn lookup(
     }
     Ok(Json(LookupResp {
         core,
+        provider: outcome.provider,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TranslateReq {
+    pub text: String,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranslateCore {
+    translation_zh: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TranslateResp {
+    pub translation_zh: String,
+    pub provider: LlmProvider,
+}
+
+/// Paragraph-aware Chinese translation of arbitrary source text (a word, a
+/// sentence, or several paragraphs). Side-effect free — unlike quick-notes it
+/// stores nothing, so the TTS page can translate freely.
+async fn translate(
+    State(http): State<reqwest::Client>,
+    State(llm): State<SharedLlm>,
+    _user: CurrentUser,
+    Json(req): Json<TranslateReq>,
+) -> Result<Json<TranslateResp>> {
+    let cfg = llm.read().await.clone();
+    if !cfg.configured() {
+        return Err(AppError(anyhow::anyhow!(
+            "LLM API key not configured; set it on the Settings page"
+        )));
+    }
+
+    let text = req.text.trim();
+    if text.is_empty() {
+        return Err(AppError(anyhow::anyhow!("text is required")));
+    }
+    if text.chars().count() > 4000 {
+        return Err(AppError(anyhow::anyhow!("text is too long")));
+    }
+
+    let language = req
+        .language
+        .as_deref()
+        .map(Language::from_code)
+        .unwrap_or(Language::English);
+
+    let body = json!({
+        "messages": [
+            { "role": "system", "content": language.translate_system_prompt() },
+            { "role": "user", "content": language.translate_user_prompt(text) }
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0.2
+    });
+
+    let outcome = call_chat_completions(&http, &cfg, body, "translate")
+        .await
+        .map_err(AppError)?;
+
+    let core: TranslateCore = serde_json::from_str(&outcome.content)
+        .map_err(|e| anyhow::anyhow!("LLM returned invalid JSON: {e}"))?;
+
+    if core.translation_zh.trim().is_empty() {
+        return Err(AppError(anyhow::anyhow!(
+            "LLM response missing translation_zh"
+        )));
+    }
+    Ok(Json(TranslateResp {
+        translation_zh: core.translation_zh,
         provider: outcome.provider,
     }))
 }

@@ -1,10 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Play, Download, Volume2 } from 'lucide-react';
+import { Loader2, Play, Download, Volume2, Languages } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import AudioPlayer from '../components/AudioPlayer';
+import ProviderBadge from '../components/ProviderBadge';
+import {
+  lookupWord,
+  translateText,
+  type LookupResult,
+  type TranslateResult,
+} from '../lib/llm';
 import type { MaterialLanguage } from '../types';
+
+/** A single token (no internal whitespace) is treated as a word → richer
+ *  dictionary lookup; anything with a space goes through paragraph translate. */
+function isSingleWord(text: string): boolean {
+  return text.length > 0 && !/\s/.test(text);
+}
+
+type Translation =
+  | { kind: 'word'; data: LookupResult }
+  | { kind: 'text'; data: TranslateResult };
 
 const DRAFT_KEY = 'tts-playground-text';
 const LANG_KEY = 'tts-playground-language';
@@ -24,6 +41,10 @@ export default function Tts() {
   });
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
+
+  const [translating, setTranslating] = useState(false);
+  const [translation, setTranslation] = useState<Translation | null>(null);
+  const [translateError, setTranslateError] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem(DRAFT_KEY, text);
@@ -104,6 +125,32 @@ export default function Tts() {
     }
   }
 
+  async function onTranslate() {
+    if (translating) return;
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setTranslateError('请先输入要翻译的文字');
+      return;
+    }
+    if (trimmed.length > MAX_CHARS) {
+      setTranslateError(`文字太长(${trimmed.length} / ${MAX_CHARS} 字符上限)`);
+      return;
+    }
+    setTranslateError(null);
+    setTranslation(null);
+    setTranslating(true);
+    try {
+      const result: Translation = isSingleWord(trimmed)
+        ? { kind: 'word', data: await lookupWord(trimmed, trimmed, language) }
+        : { kind: 'text', data: await translateText(trimmed, language) };
+      setTranslation(result);
+    } catch (e) {
+      setTranslateError((e as Error).message);
+    } finally {
+      setTranslating(false);
+    }
+  }
+
   const charCount = text.trim().length;
   const overLimit = charCount > MAX_CHARS;
 
@@ -166,6 +213,8 @@ export default function Tts() {
                 clearAudio();
                 setStatus('idle');
                 setText('');
+                setTranslation(null);
+                setTranslateError(null);
               }}
               disabled={!text}
             >
@@ -180,6 +229,24 @@ export default function Tts() {
             >
               <Download className="size-4" />
               下载 MP3
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onTranslate}
+              disabled={!charCount || overLimit || translating}
+            >
+              {translating ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  翻译中
+                </>
+              ) : (
+                <>
+                  <Languages className="size-4" />
+                  翻译
+                </>
+              )}
             </Button>
             <Button
               onClick={onLoadAudio}
@@ -221,8 +288,77 @@ export default function Tts() {
             {error}
           </div>
         )}
+
+        {translateError && (
+          <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {translateError}
+          </div>
+        )}
+
+        {translation && (
+          <div className="mt-4">
+            <TranslationPanel translation={translation} />
+          </div>
+        )}
       </div>
     </main>
+  );
+}
+
+/** Renders either a rich dictionary card (single word, via /api/lookup) or a
+ *  paragraph translation (via /api/translate), preserving \n\n breaks. */
+function TranslationPanel({ translation }: { translation: Translation }) {
+  if (translation.kind === 'word') {
+    const d = translation.data;
+    return (
+      <div className="flex flex-col gap-2 rounded-md border border-border bg-card/50 p-4">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-lg font-medium text-foreground">{d.lemma}</span>
+          {d.phonetic && (
+            <span className="font-mono text-sm text-muted-foreground">
+              /{d.phonetic}/
+            </span>
+          )}
+          {d.pos && (
+            <span className="rounded bg-accent px-1.5 py-0.5 text-xs text-muted-foreground">
+              {d.pos}
+            </span>
+          )}
+        </div>
+        <p className="text-[15px] leading-7 text-foreground">{d.definition_zh}</p>
+        {d.definition_en && (
+          <p className="text-sm leading-6 text-muted-foreground">
+            {d.definition_en}
+          </p>
+        )}
+        {d.example_zh && (
+          <p className="text-sm leading-6 text-muted-foreground">
+            例：{d.example_zh}
+          </p>
+        )}
+        {d.provider && (
+          <div className="mt-1">
+            <ProviderBadge provider={d.provider} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const d = translation.data;
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-card/50 p-4">
+      <div className="flex flex-col gap-2 text-[15px] leading-7 text-foreground">
+        {d.translation_zh.split(/\n\n+/).map((para, i) => (
+          <p key={i}>{para}</p>
+        ))}
+      </div>
+      {d.provider && (
+        <div className="mt-1">
+          <ProviderBadge provider={d.provider} />
+        </div>
+      )}
+    </div>
   );
 }
 

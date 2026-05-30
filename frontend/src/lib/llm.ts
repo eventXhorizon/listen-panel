@@ -11,16 +11,17 @@ export interface LookupResult {
   provider?: LlmProvider;
 }
 
-export async function lookupWord(
-  word: string,
-  context: string,
-  language: MaterialLanguage = 'en',
-): Promise<LookupResult> {
-  const res = await fetch('/api/lookup', {
+export interface TranslateResult {
+  translation_zh: string;
+  provider?: LlmProvider;
+}
+
+async function postLlm<T>(url: string, payload: unknown): Promise<T> {
+  const res = await fetch(url, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ word, context, language }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
@@ -37,5 +38,21 @@ export async function lookupWord(
     }
     throw new Error(msg);
   }
-  return (await res.json()) as LookupResult;
+  return (await res.json()) as T;
+}
+
+export async function lookupWord(
+  word: string,
+  context: string,
+  language: MaterialLanguage = 'en',
+): Promise<LookupResult> {
+  return postLlm<LookupResult>('/api/lookup', { word, context, language });
+}
+
+/** Paragraph-aware Chinese translation of any source text. Side-effect free. */
+export async function translateText(
+  text: string,
+  language: MaterialLanguage = 'en',
+): Promise<TranslateResult> {
+  return postLlm<TranslateResult>('/api/translate', { text, language });
 }
