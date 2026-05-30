@@ -207,6 +207,46 @@ mod tests {
     }
 }
 
+/// Call the **fallback** provider directly, skipping the primary entirely.
+///
+/// Vision/OCR needs a multimodal model. The primary (DeepSeek `deepseek-chat`)
+/// is text-only and 400s on image input — and a 400 doesn't trigger the normal
+/// fallback path — so image requests must go straight to the configured
+/// fallback (Gemini), which is multimodal. Returns `provider = Fallback`.
+pub async fn call_fallback_only(
+    client: &reqwest::Client,
+    cfg: &LlmConfig,
+    body_without_model: Value,
+    context_label: &str,
+) -> Result<LlmCallOutcome> {
+    if !cfg.fallback_configured() {
+        return Err(anyhow!(
+            "{context_label}: 需要多模态模型,请在设置页配置兜底 provider(Gemini)的 key/base_url/model"
+        ));
+    }
+    match try_once(
+        client,
+        &cfg.fallback_base_url,
+        &cfg.fallback_api_key,
+        &cfg.fallback_model,
+        &body_without_model,
+    )
+    .await
+    {
+        Ok(content) => Ok(LlmCallOutcome {
+            provider: LlmProvider::Fallback,
+            content,
+        }),
+        Err((status, msg)) => {
+            let where_ = match status {
+                Some(s) => format!("{} {}", LlmProvider::Fallback.label_zh(), s),
+                None => format!("{} (network)", LlmProvider::Fallback.label_zh()),
+            };
+            Err(anyhow!("{context_label} via {where_}: {msg}"))
+        }
+    }
+}
+
 /// Decide whether the primary's failure is one we should retry on the
 /// fallback provider. Conservative on purpose — bad requests / bad keys
 /// won't get better by switching providers.

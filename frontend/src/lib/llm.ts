@@ -16,6 +16,12 @@ export interface TranslateResult {
   provider?: LlmProvider;
 }
 
+export interface RecognizeResult {
+  source_text: string;
+  translation_zh: string;
+  provider?: LlmProvider;
+}
+
 async function postLlm<T>(url: string, payload: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
@@ -55,4 +61,12 @@ export async function translateText(
   language: MaterialLanguage = 'en',
 ): Promise<TranslateResult> {
   return postLlm<TranslateResult>('/api/translate', { text, language });
+}
+
+/** OCR an image (data URL) and translate the recognized English into Chinese
+ *  in one multimodal call. Side-effect free. */
+export async function recognizeImage(
+  image: string,
+): Promise<RecognizeResult> {
+  return postLlm<RecognizeResult>('/api/recognize', { image });
 }

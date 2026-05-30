@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { to: '/cloze', label: '填空', end: false },
   { to: '/tts', label: '朗读', end: false },
   { to: '/speaking', label: '口语', end: false },
+  { to: '/recognize', label: '识别', end: false },
   { to: '/review', label: '复习', end: false },
 ];
 

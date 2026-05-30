@@ -25,6 +25,7 @@ import Essays, { EssaysIndex } from './pages/Essays';
 import EssayDetail from './pages/EssayDetail';
 import Tts from './pages/Tts';
 import Speaking from './pages/Speaking';
+import Recognize from './pages/Recognize';
 
 export default function App() {
   return (
@@ -54,6 +55,7 @@ export default function App() {
               </Route>
               <Route path="tts" element={<Tts />} />
               <Route path="speaking" element={<Speaking />} />
+              <Route path="recognize" element={<Recognize />} />
               <Route path="settings" element={<Settings />} />
             </Route>
           </Route>
