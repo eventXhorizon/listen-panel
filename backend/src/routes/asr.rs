@@ -251,7 +251,12 @@ async fn create_study(
         return Ok(Json(job));
     }
 
-    crate::study::mark_study_running(&state.pool, id).await?;
+    // Atomic claim: if a concurrent request already flipped the job to running,
+    // `mark_study_running` reports false and we must not spawn a second worker
+    // racing on the same segment-study upserts.
+    if !crate::study::mark_study_running(&state.pool, id).await? {
+        return Ok(Json(job_for_user(&state.pool, id, user.id).await?));
+    }
     let spawned_state = state.clone();
     tokio::spawn(async move {
         tracing::info!(job_id = id, "starting segment study generation");

@@ -348,25 +348,29 @@ async fn persist_study_batch(
     Ok(())
 }
 
-pub async fn mark_study_running(pool: &sqlx::SqlitePool, job_id: i64) -> Result<()> {
-    sqlx::query(
+/// Atomically claim the job for study generation. Returns `true` only if this
+/// call transitioned the job into `running` (i.e. it wasn't already running),
+/// so the caller can decide whether to spawn the worker. Two concurrent
+/// "翻译分析" clicks therefore can't both spawn a generator over the same job.
+pub async fn mark_study_running(pool: &sqlx::SqlitePool, job_id: i64) -> Result<bool> {
+    let res = sqlx::query(
         "UPDATE transcription_jobs \
-         SET study_status = 'running', study_error = NULL, \
+         SET study_status = 'running', study_error = NULL, study_pause_requested = 0, \
              study_progress = CASE WHEN study_status = 'pending' THEN study_progress ELSE 0 END, \
              study_stage = '等待开始', updated_at = ? \
-         WHERE id = ?",
+         WHERE id = ? AND study_status != 'running'",
     )
     .bind(Utc::now())
     .bind(job_id)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() > 0)
 }
 
 pub async fn request_study_pause(pool: &sqlx::SqlitePool, job_id: i64) -> Result<()> {
     sqlx::query(
         "UPDATE transcription_jobs \
-         SET study_stage = '暂停中', updated_at = ? \
+         SET study_pause_requested = 1, study_stage = '暂停中', updated_at = ? \
          WHERE id = ? AND study_status = 'running'",
     )
     .bind(Utc::now())
@@ -408,7 +412,8 @@ async fn mark_study_skipped(pool: &sqlx::SqlitePool, job_id: i64, reason: &str) 
 async fn mark_study_paused(pool: &sqlx::SqlitePool, job_id: i64, progress: i64) -> Result<()> {
     sqlx::query(
         "UPDATE transcription_jobs \
-         SET study_status = 'pending', study_progress = ?, study_stage = '已暂停', updated_at = ? \
+         SET study_status = 'pending', study_pause_requested = 0, \
+             study_progress = ?, study_stage = '已暂停', updated_at = ? \
          WHERE id = ? AND study_status = 'running'",
     )
     .bind(progress.clamp(0, 99))
@@ -420,13 +425,14 @@ async fn mark_study_paused(pool: &sqlx::SqlitePool, job_id: i64, progress: i64) 
 }
 
 async fn pause_requested(pool: &sqlx::SqlitePool, job_id: i64) -> Result<bool> {
-    let stage: Option<String> = sqlx::query_scalar(
-        "SELECT study_stage FROM transcription_jobs WHERE id = ? AND study_status = 'running'",
+    let requested: Option<bool> = sqlx::query_scalar(
+        "SELECT study_pause_requested FROM transcription_jobs \
+         WHERE id = ? AND study_status = 'running'",
     )
     .bind(job_id)
     .fetch_optional(pool)
     .await?;
-    Ok(stage.as_deref() == Some("暂停中"))
+    Ok(requested.unwrap_or(false))
 }
 
 async fn update_study_progress(
@@ -435,10 +441,13 @@ async fn update_study_progress(
     progress: i64,
     stage: &str,
 ) -> Result<()> {
+    // Don't overwrite the '暂停中' display text while a pause is pending — the
+    // loop hasn't acknowledged it yet, and clobbering it back to "分析第 N 段"
+    // would flicker the UI between the request and the ack.
     sqlx::query(
         "UPDATE transcription_jobs \
          SET study_progress = ?, study_stage = ?, updated_at = ? \
-         WHERE id = ? AND study_status = 'running' AND study_stage != '暂停中'",
+         WHERE id = ? AND study_status = 'running' AND study_pause_requested = 0",
     )
     .bind(progress.clamp(0, 99))
     .bind(stage.chars().take(200).collect::<String>())

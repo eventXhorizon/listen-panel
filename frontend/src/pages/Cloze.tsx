@@ -36,10 +36,10 @@ const TOPICS: { value: NewsTopic; label: string }[] = [
   { value: 'other', label: '其他' },
 ];
 const SOURCES: { value: NewsSource; label: string }[] = [
-  { value: 'bbc' as NewsSource, label: 'BBC' },
-  { value: 'bloomberg' as NewsSource, label: 'Bloomberg' },
-  { value: 'economist' as NewsSource, label: 'Economist' },
-  { value: 'ft' as NewsSource, label: 'FT' },
+  { value: 'cnbc', label: 'CNBC' },
+  { value: 'bloomberg', label: 'Bloomberg' },
+  { value: 'wsj', label: 'WSJ' },
+  { value: 'ft', label: 'FT' },
 ];
 
 export default function Cloze() {

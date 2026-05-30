@@ -534,3 +534,32 @@ export interface EssayTranslateResponse {
   /** True when the call returned the cached array without re-translating. */
   cached: boolean;
 }
+
+/** One word in a pronunciation assessment. `error_type` is Azure's label:
+ *  'None' | 'Mispronunciation' | 'Omission' | 'Insertion' | 'UnexpectedBreak'
+ *  | 'MissingBreak' | 'Monotone'. */
+export interface PhonemeScore {
+  phoneme: string;
+  accuracy: number | null;
+}
+
+export interface PronunciationWord {
+  word: string;
+  accuracy: number | null;
+  error_type: string;
+  /** Per-sound (IPA) breakdown — used to point at the exact sounds to fix. */
+  phonemes: PhonemeScore[];
+}
+
+/** Response shape of POST /api/pronunciation/assess. Scores are 0-100, or null
+ *  when Azure couldn't recognize speech (recognition_status != 'Success'). */
+export interface PronunciationResult {
+  recognition_status: string;
+  recognized_text: string;
+  accuracy: number | null;
+  fluency: number | null;
+  completeness: number | null;
+  prosody: number | null;
+  pron_score: number | null;
+  words: PronunciationWord[];
+}

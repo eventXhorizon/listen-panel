@@ -23,6 +23,7 @@ import type {
   NewsSource,
   NewsTopic,
   PolishResult,
+  PronunciationResult,
   QuickNote,
   TranscriptionJob,
   User,
@@ -434,4 +435,25 @@ export function checkAsrHealth(data: {
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+// Pronunciation assessment
+
+export async function assessPronunciation(
+  audio: Blob,
+  referenceText: string,
+  language: MaterialLanguage,
+): Promise<PronunciationResult> {
+  const form = new FormData();
+  // Let the browser set the multipart boundary — don't pass a JSON header.
+  form.append('audio', audio, 'speech.wav');
+  form.append('reference_text', referenceText);
+  form.append('language', language);
+  const res = await fetch('/api/pronunciation/assess', {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: form,
+  });
+  if (!res.ok) throw await asError(res);
+  return (await res.json()) as PronunciationResult;
 }

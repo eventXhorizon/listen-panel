@@ -24,6 +24,7 @@ const NAV_ITEMS = [
   { to: '/essays', label: '范文', end: false },
   { to: '/cloze', label: '填空', end: false },
   { to: '/tts', label: '朗读', end: false },
+  { to: '/speaking', label: '口语', end: false },
   { to: '/review', label: '复习', end: false },
 ];
 
@@ -144,7 +145,11 @@ export default function Layout() {
         onClick={() => setQuickNoteOpen(true)}
         aria-label="随手记 (⇧⌘J)"
         title="随手记 (⇧⌘J)"
-        className="fixed bottom-5 left-5 z-40 inline-flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground shadow-lg shadow-black/15 transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        // bottom uses safe-area-inset-bottom so the button clears the iOS
+        // home-indicator strip; falls back to plain 20px on devices/browsers
+        // without env() support via the calc().
+        style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)' }}
+        className="fixed left-5 z-40 inline-flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground shadow-lg shadow-black/15 transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
         <Pencil className="size-3.5" />
         随手记

@@ -38,6 +38,7 @@ import VideoPlayer, { type VideoPlayerHandle } from '../components/VideoPlayer';
 import SelectionPopup from '../components/SelectionPopup';
 import AddVocabDialog from '../components/AddVocabDialog';
 import VocabPanel from '../components/VocabPanel';
+import PronunciationCheck from '../components/PronunciationCheck';
 import { highlightText } from '../lib/highlight';
 import { languageAdapter, languageLabel } from '../lib/languages';
 import { textSourceLabel } from '../lib/textSources';
@@ -481,6 +482,7 @@ export default function Reader() {
   const mid = Number(id);
   const navigate = useNavigate();
   const [m, setM] = useState<Material | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [vocab, setVocab] = useState<VocabEntry[]>([]);
   const [leftPct, setLeftPct] = useState(50);
   const [highlightOn, setHighlightOn] = useState(true);
@@ -537,50 +539,73 @@ export default function Reader() {
       navigate('/');
       return;
     }
+    // Switching materials (or unmounting) mid-flight must not let stale
+    // responses write into the new material's state — guard every setState.
+    let cancelled = false;
     (async () => {
-      const data = await getMaterial(mid);
-      if (!data) {
-        navigate('/');
-        return;
-      }
-      setM(data);
-      markOpened(mid);
-      setVocab(await listVocab({ material_id: mid }));
+      setLoadErr(null);
       try {
-        setNotes(await listNotes(mid));
-        setNotesErr(null);
-      } catch (e) {
-        setNotesErr((e as Error).message);
-      }
-      const jobs = await listTranscriptionJobs(mid);
-      const latest = jobs[0] ?? null;
-      setJob(latest);
-      // Default to showing study for imported news (provider='youtube_caption') so
-      // translations / grammar / usage points appear without an extra click.
-      const isNewsImport = latest?.provider === 'youtube_caption';
-      const shouldShowStudy =
-        latest?.status === 'succeeded' && (loadStudyVisible(mid) || isNewsImport);
-      setShowStudy(shouldShowStudy);
-      if (latest?.status === 'succeeded') {
-        try {
-          const withSegments = await getTranscriptionSegments(latest.id);
-          setSegments(withSegments.segments);
-          setSegmentsErr(null);
-        } catch (e) {
-          setSegmentsErr((e as Error).message);
+        const data = await getMaterial(mid);
+        if (cancelled) return;
+        if (!data) {
+          navigate('/');
+          return;
         }
-      } else {
-        setSegments([]);
-        setSegmentsErr(null);
+        setM(data);
+        markOpened(mid);
+        const v = await listVocab({ material_id: mid });
+        if (cancelled) return;
+        setVocab(v);
+        try {
+          const n = await listNotes(mid);
+          if (cancelled) return;
+          setNotes(n);
+          setNotesErr(null);
+        } catch (e) {
+          if (!cancelled) setNotesErr((e as Error).message);
+        }
+        const jobs = await listTranscriptionJobs(mid);
+        if (cancelled) return;
+        const latest = jobs[0] ?? null;
+        setJob(latest);
+        // Default to showing study for imported news (provider='youtube_caption') so
+        // translations / grammar / usage points appear without an extra click.
+        const isNewsImport = latest?.provider === 'youtube_caption';
+        const shouldShowStudy =
+          latest?.status === 'succeeded' && (loadStudyVisible(mid) || isNewsImport);
+        setShowStudy(shouldShowStudy);
+        if (latest?.status === 'succeeded') {
+          try {
+            const withSegments = await getTranscriptionSegments(latest.id);
+            if (cancelled) return;
+            setSegments(withSegments.segments);
+            setSegmentsErr(null);
+          } catch (e) {
+            if (!cancelled) setSegmentsErr((e as Error).message);
+          }
+        } else {
+          setSegments([]);
+          setSegmentsErr(null);
+        }
+      } catch (e) {
+        if (!cancelled) setLoadErr((e as Error).message || '加载失败');
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [mid, navigate]);
 
   useEffect(() => {
     if (!job || !shouldPollTranscription(job, showStudy)) return;
+    // A poll's awaits can resolve after the interval is cleared (material
+    // switch, status change). `stopped` keeps those late responses from
+    // writing into a now-stale render.
+    let stopped = false;
     const timer = window.setInterval(async () => {
       try {
         const next = await getTranscriptionJob(job.id);
+        if (stopped) return;
         setJob(next);
         if (next.status === 'failed') {
           setTranscriptionErr(next.error || '转写失败,请检查 ASR worker 配置');
@@ -588,8 +613,10 @@ export default function Reader() {
         if (next.status === 'succeeded' && segments.length === 0) {
           setTranscriptionErr(null);
           const refreshed = await getMaterial(mid);
+          if (stopped) return;
           if (refreshed) setM(refreshed);
           const withSegments = await getTranscriptionSegments(next.id);
+          if (stopped) return;
           setSegments(withSegments.segments);
           setSegmentsErr(null);
           if (!loadStudyVisible(mid)) {
@@ -598,14 +625,18 @@ export default function Reader() {
         }
         if (next.status === 'succeeded' && showStudy) {
           const withSegments = await getTranscriptionSegments(next.id);
+          if (stopped) return;
           setSegments(withSegments.segments);
           setSegmentsErr(null);
         }
       } catch (e) {
-        setTranscriptionErr((e as Error).message);
+        if (!stopped) setTranscriptionErr((e as Error).message);
       }
     }, 2500);
-    return () => window.clearInterval(timer);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
   }, [job, mid, segments.length, showStudy]);
 
   async function refreshVocab() {
@@ -907,8 +938,20 @@ export default function Reader() {
   if (!m) {
     return (
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto px-6 py-10 text-muted-foreground text-sm">
-          加载中...
+        <div className="max-w-6xl mx-auto px-6 py-10 text-sm">
+          {loadErr ? (
+            <div className="space-y-3 text-muted-foreground">
+              <div className="text-destructive">加载失败:{loadErr}</div>
+              <button
+                onClick={() => window.location.reload()}
+                className="rounded border border-border px-3 py-1.5 hover:bg-muted"
+              >
+                重试
+              </button>
+            </div>
+          ) : (
+            <span className="text-muted-foreground">加载中...</span>
+          )}
         </div>
       </main>
     );
@@ -1340,10 +1383,12 @@ export default function Reader() {
         )}
         {isMobileReader && (
           <div
+            // bottom-safe-4 = 1rem + env(safe-area-inset-bottom) — keeps the
+            // collapsed media pill clear of the iOS home indicator.
             className={`fixed md:hidden ${
               showMobileMedia
                 ? 'inset-0 z-50 bg-black/45'
-                : 'inset-x-4 bottom-4 z-30 pointer-events-none'
+                : 'inset-x-4 bottom-safe-4 z-30 pointer-events-none'
             }`}
           >
             {showMobileMedia && (
@@ -1355,9 +1400,13 @@ export default function Reader() {
               />
             )}
             <aside
+              // Expanded sheet pads its bottom by the home-indicator height
+              // so the video frame doesn't disappear behind the iOS gesture
+              // bar. Collapsed pill already gets the offset via bottom-safe-4
+              // on the parent.
               className={`${
                 showMobileMedia
-                  ? 'absolute inset-x-0 bottom-0 flex max-h-[86vh] flex-col rounded-t-xl'
+                  ? 'absolute inset-x-0 bottom-0 flex max-h-[86dvh] flex-col rounded-t-xl pb-safe'
                   : 'pointer-events-auto relative rounded-lg'
               } bg-neutral-950 shadow-2xl shadow-neutral-950/40`}
             >
@@ -1713,6 +1762,7 @@ function TranscriptSegmentBlock({
   const targetId = segments[0]?.id;
   const loopKey = `seg-block-${paragraphIndex}-${targetId ?? 'x'}`;
   const isLooping = loopActiveKey === loopKey;
+  const [pronOpen, setPronOpen] = useState(false);
   const studyItems = segments
     .map((segment) => ({ segment, study: segment.study }))
     .filter((item): item is { segment: TranscriptSegment; study: SegmentStudy } =>
@@ -1740,6 +1790,19 @@ function TranscriptSegmentBlock({
             }`}
           >
             {isLooping ? '● 循环中' : '↻ 循环'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPronOpen((v) => !v)}
+            aria-label={pronOpen ? '收起发音测评' : '发音测评'}
+            title="朗读这段并评估发音"
+            className={`inline-flex h-5 items-center rounded px-1.5 text-[10px] font-medium transition ${
+              pronOpen
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+            }`}
+          >
+            🎤 测评
           </button>
         </div>
         <NoteButton
@@ -1782,6 +1845,11 @@ function TranscriptSegmentBlock({
           </p>
         );
       })()}
+      {pronOpen && (
+        <div className="mt-3">
+          <PronunciationCheck text={text} language={language} compact />
+        </div>
+      )}
       {showStudy && studyItems.map(({ segment, study }) => (
         <div
           key={segment.id}
@@ -2187,14 +2255,19 @@ function ShadowingControls({
     { value: 2000, label: '2s' },
   ];
   return (
-    <div className="flex shrink-0 items-center gap-1 rounded-md border border-border bg-card px-1 py-0.5">
-      <span className="px-1.5 text-[10px] font-medium text-muted-foreground">速</span>
+    // Touch-target sizing: pills are h-9 (36px) + px-2.5 on mobile to give
+    // a finger something to actually hit (iOS HIG suggests 44pt; 36px with
+    // generous padding gets close without bloating the desktop toolbar).
+    // Desktop keeps the original compact h-7 / px-2 since hover precision
+    // is fine with a mouse.
+    <div className="flex shrink-0 items-center gap-1 rounded-md border border-border bg-card px-1 py-1 md:py-0.5">
+      <span className="px-1.5 text-[11px] font-medium text-muted-foreground md:text-[10px]">速</span>
       {RATES.map((r) => (
         <button
           key={r}
           type="button"
           onClick={() => onChangeRate(r)}
-          className={`h-7 rounded px-2 text-[11px] tabular-nums transition ${
+          className={`h-9 rounded px-2.5 text-[13px] tabular-nums transition md:h-7 md:px-2 md:text-[11px] ${
             playbackRate === r ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'
           }`}
         >
@@ -2202,13 +2275,13 @@ function ShadowingControls({
         </button>
       ))}
       <span className="mx-1 hidden h-3 w-px bg-border md:block" />
-      <span className="px-1.5 text-[10px] font-medium text-muted-foreground">停</span>
+      <span className="px-1.5 text-[11px] font-medium text-muted-foreground md:text-[10px]">停</span>
       {PAUSES.map((p) => (
         <button
           key={p.value}
           type="button"
           onClick={() => onChangePause(p.value)}
-          className={`h-7 rounded px-2 text-[11px] tabular-nums transition ${
+          className={`h-9 rounded px-2.5 text-[13px] tabular-nums transition md:h-7 md:px-2 md:text-[11px] ${
             endPauseMs === p.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'
           }`}
         >
@@ -2221,7 +2294,7 @@ function ShadowingControls({
           <button
             type="button"
             onClick={onStopLoop}
-            className="h-7 rounded bg-primary px-2 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
+            className="h-9 rounded bg-primary px-2.5 text-[13px] font-medium text-primary-foreground hover:bg-primary/90 md:h-7 md:px-2 md:text-[11px]"
           >
             ● 停止循环
           </button>

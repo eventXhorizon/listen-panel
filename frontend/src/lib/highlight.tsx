@@ -6,13 +6,26 @@ import SpeakButton from '../components/SpeakButton';
 import { deleteVocab } from '../api';
 import { languageAdapter } from './languages';
 
-const POP_W = 352;       // w-[22rem]
-const POP_H_EST = 320;   // 估值,用于决定上下翻转
-const VIEWPORT_M = 12;   // 视口边距
+const POP_W_DESKTOP = 352;  // w-[22rem]
+const POP_H_EST = 320;       // 估值,用于决定上下翻转
+const VIEWPORT_M = 12;       // 视口边距
+
+/**
+ * iOS Safari pushes the keyboard up over the layout viewport but leaves
+ * `window.innerHeight` unchanged. visualViewport reflects what the user can
+ * actually see; fall back to the layout viewport on browsers that don't
+ * expose it.
+ */
+function viewportSize(): { width: number; height: number; offsetTop: number } {
+  const vv = window.visualViewport;
+  if (vv) return { width: vv.width, height: vv.height, offsetTop: vv.offsetTop };
+  return { width: window.innerWidth, height: window.innerHeight, offsetTop: 0 };
+}
 
 interface Pos {
   top: number;
   left: number;
+  width: number;
 }
 
 interface HighlightedWordProps {
@@ -45,16 +58,24 @@ function HighlightedWord({
   function compute(): Pos | null {
     const rect = elementRect(markRef.current);
     if (!rect) return null;
-    const wantLeft = rect.left + rect.width / 2 - POP_W / 2;
+    const { width: vw, height: vh, offsetTop } = viewportSize();
+    // On iPhone SE (375px) the 352px desktop popover leaves only 12px of side
+    // margin combined. Cap width to viewport minus 2× margin so it always fits.
+    const width = Math.min(POP_W_DESKTOP, vw - VIEWPORT_M * 2);
+    const wantLeft = rect.left + rect.width / 2 - width / 2;
     const left = Math.max(
       VIEWPORT_M,
-      Math.min(window.innerWidth - POP_W - VIEWPORT_M, wantLeft),
+      Math.min(vw - width - VIEWPORT_M, wantLeft),
     );
-    const flipUp = rect.bottom + POP_H_EST + 6 > window.innerHeight;
+    // Flip decision uses the visible viewport (visualViewport.height shrinks
+    // when the iOS keyboard appears); offsetTop accounts for the keyboard
+    // pushing the visual viewport down.
+    const visibleBottom = offsetTop + vh;
+    const flipUp = rect.bottom + POP_H_EST + 6 > visibleBottom;
     const top = flipUp
-      ? Math.max(VIEWPORT_M, rect.top - POP_H_EST - 6)
+      ? Math.max(offsetTop + VIEWPORT_M, rect.top - POP_H_EST - 6)
       : rect.bottom + 6;
-    return { top, left };
+    return { top, left, width };
   }
 
   function toggle(e: React.MouseEvent | React.PointerEvent | React.TouchEvent) {
@@ -88,10 +109,18 @@ function HighlightedWord({
     document.addEventListener('mousedown', onDocMouseDown);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onResize);
+    // visualViewport fires when the iOS keyboard appears/disappears or the
+    // page is pinch-zoomed. Reposition (don't close) so the popover stays
+    // anchored to its mark while the visible viewport shifts.
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', onResize);
+    vv?.addEventListener('scroll', onResize);
     return () => {
       document.removeEventListener('mousedown', onDocMouseDown);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onResize);
+      vv?.removeEventListener('resize', onResize);
+      vv?.removeEventListener('scroll', onResize);
     };
   }, [open]);
 
@@ -122,9 +151,12 @@ function HighlightedWord({
               position: 'fixed',
               top: pos.top,
               left: pos.left,
-              width: POP_W,
+              width: pos.width,
             }}
-            className="z-50 max-h-[70vh] overflow-y-auto bg-card border border-border shadow-xl rounded-lg p-4 text-left cursor-default normal-case"
+            // max-h uses dvh (dynamic viewport) so the popover stays usable
+            // when the iOS keyboard pushes the layout up. 70vh would compute
+            // against the full layout viewport and overflow off-screen.
+            className="z-50 max-h-[70dvh] overflow-y-auto bg-card border border-border shadow-xl rounded-lg p-4 text-left cursor-default normal-case"
           >
             <div className="flex items-center gap-2">
               <div className="text-lg font-medium text-foreground">{entry.word}</div>

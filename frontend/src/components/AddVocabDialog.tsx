@@ -48,6 +48,7 @@ export default function AddVocabDialog({
   const [exampleZh, setExampleZh] = useState('');
   const [contextEdit, setContextEdit] = useState(context);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [provider, setProvider] = useState<'primary' | 'fallback' | null>(null);
 
   useEffect(() => {
@@ -80,6 +81,7 @@ export default function AddVocabDialog({
       return;
     }
     setSaving(true);
+    setSaveError(null);
     try {
       const adapter = languageAdapter(language);
       await createVocab({
@@ -97,6 +99,8 @@ export default function AddVocabDialog({
         mastery: 0,
       });
       onSaved();
+    } catch (e) {
+      setSaveError((e as Error).message || '保存失败,请重试');
     } finally {
       setSaving(false);
     }
@@ -184,13 +188,20 @@ export default function AddVocabDialog({
           )}
         </div>
 
-        <DialogFooter className="border-t border-border px-6 py-3">
-          <Button variant="outline" onClick={onClose}>
-            取消
-          </Button>
-          <Button onClick={save} disabled={loading || saving || !!error}>
-            {saving ? '保存中...' : '保存'}
-          </Button>
+        <DialogFooter className="flex-col gap-2 border-t border-border px-6 py-3 sm:flex-col sm:items-stretch">
+          {saveError && (
+            <div className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {saveError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={onClose}>
+              取消
+            </Button>
+            <Button onClick={save} disabled={loading || saving || !!error}>
+              {saving ? '保存中...' : '保存'}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

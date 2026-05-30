@@ -168,3 +168,12 @@
   font-weight: 400;
   margin-bottom: 0.05em;
 }
+
+/* iOS safe-area helpers. With viewport-fit=cover in index.html, the page
+ * extends behind the notch and the home indicator; these utilities add
+ * exactly enough padding to clear them. Use on any fixed/absolute element
+ * that sits at the very top or very bottom of the viewport. The 0px
+ * fallback keeps non-notched devices unchanged. */
+.pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+.bottom-safe-4 { bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem); }

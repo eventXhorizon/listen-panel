@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn cache_filename_includes_text_slug_and_short_hash() {
         let cfg = crate::config::TtsConfig::default();
-        let path = cache_path(&cfg, "spiritual drain", Some(42), "en");
+        let path = cache_path(&cfg, "spiritual drain", Anchor::Material(42), "en");
         let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
         assert!(path.to_string_lossy().contains("material-42"));
         assert!(name.starts_with("azure_en_spiritual-drain_"));
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn cache_filename_includes_japanese_language() {
         let cfg = crate::config::TtsConfig::default();
-        let path = cache_path(&cfg, "こんにちは", Some(42), "ja");
+        let path = cache_path(&cfg, "こんにちは", Anchor::Material(42), "ja");
         let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
         assert!(name.starts_with("azure_ja_こんにちは_"));
     }
