@@ -225,9 +225,10 @@ async fn import(
         }
         sqlx::query(
             "INSERT INTO vocab \
-             (material_id, word, language, kind, lemma, definition_zh, example_zh, context, mastery) \
-             VALUES (?, ?, ?, 'idiom', ?, ?, ?, ?, 0)",
+             (user_id, material_id, word, language, kind, lemma, definition_zh, example_zh, context, mastery) \
+             VALUES (?, ?, ?, ?, 'idiom', ?, ?, ?, ?, 0)",
         )
+        .bind(user.id)
         .bind(material.id)
         .bind(idiom.phrase.trim())
         .bind(&news.language)
