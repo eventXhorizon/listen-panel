@@ -26,6 +26,7 @@ const NAV_ITEMS = [
   { to: '/tts', label: '朗读', end: false },
   { to: '/speaking', label: '口语', end: false },
   { to: '/recognize', label: '识别', end: false },
+  { to: '/interview', label: '面试', end: false },
   { to: '/review', label: '复习', end: false },
 ];
 

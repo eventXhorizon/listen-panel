@@ -12,6 +12,9 @@ import type {
   EssayClassic,
   EssayStyle,
   EssayTranslateResponse,
+  InterviewGenerateResponse,
+  InterviewQuestion,
+  InterviewTopic,
   ModelEssay,
   ModelEssaySummary,
   JobWithSegments,
@@ -423,6 +426,40 @@ export function translateEssay(id: number): Promise<EssayTranslateResponse> {
   return request<EssayTranslateResponse>(`/api/essays/${id}/translate`, {
     method: 'POST',
   });
+}
+
+// Interview practice
+
+export function listInterviewTopics(): Promise<InterviewTopic[]> {
+  return request<InterviewTopic[]>('/api/interview/topics');
+}
+
+export function listInterviewQuestions(
+  topicId?: number,
+): Promise<InterviewQuestion[]> {
+  const qs = topicId != null ? `?topic_id=${topicId}` : '';
+  return request<InterviewQuestion[]>(`/api/interview/questions${qs}`);
+}
+
+export function getInterviewQuestion(id: number): Promise<InterviewQuestion> {
+  return request<InterviewQuestion>(`/api/interview/questions/${id}`);
+}
+
+export function generateInterviewQuestions(
+  topicId: number,
+  count?: number,
+): Promise<InterviewGenerateResponse> {
+  return request<InterviewGenerateResponse>(
+    `/api/interview/topics/${topicId}/generate`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ count }),
+    },
+  );
+}
+
+export async function deleteInterviewQuestion(id: number): Promise<void> {
+  await request<void>(`/api/interview/questions/${id}`, { method: 'DELETE' });
 }
 
 // Settings

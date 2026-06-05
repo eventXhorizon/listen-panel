@@ -4,6 +4,7 @@ pub mod backup;
 pub mod cloze;
 pub mod essays;
 pub mod health;
+pub mod interview;
 pub mod llm;
 pub mod materials;
 pub mod media;
@@ -36,5 +37,6 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(writing::router())
         .merge(cloze::router())
         .merge(essays::router())
+        .merge(interview::router())
         .with_state(state)
 }

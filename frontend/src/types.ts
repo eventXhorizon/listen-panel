@@ -535,6 +535,47 @@ export interface EssayTranslateResponse {
   cached: boolean;
 }
 
+// ---- Interview practice (English-language technical interview prep) ----
+
+export type InterviewCategory = 'rust_basic' | 'rust_advanced' | 'ai_agent';
+export type InterviewDifficulty = 'mid' | 'senior' | 'staff';
+
+export interface InterviewTopic {
+  id: number;
+  slug: string;
+  category: InterviewCategory;
+  /** Rust Book chapter number; null for ai_agent topics. */
+  chapter_no: number | null;
+  title_en: string;
+  title_zh: string;
+  source_url: string | null;
+  sort_order: number;
+}
+
+export interface InterviewQuestion {
+  id: number;
+  topic_id: number;
+  topic_slug: string;
+  topic_title_en: string;
+  question_en: string;
+  question_zh: string;
+  sample_answer_en: string;
+  sample_answer_zh: string;
+  key_points: string[];
+  follow_ups: string[];
+  difficulty: InterviewDifficulty;
+  /** True when the row is the system-curated seed (no delete). */
+  is_system: boolean;
+  created_at: string;
+  /** Set only on the immediate /generate response. */
+  provider?: LlmProvider;
+}
+
+export interface InterviewGenerateResponse {
+  topic_id: number;
+  inserted: InterviewQuestion[];
+}
+
 /** One word in a pronunciation assessment. `error_type` is Azure's label:
  *  'None' | 'Mispronunciation' | 'Omission' | 'Insertion' | 'UnexpectedBreak'
  *  | 'MissingBreak' | 'Monotone'. */

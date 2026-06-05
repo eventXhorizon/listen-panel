@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
     routes::media::ensure_dirs().await?;
     routes::tts::ensure_cache_dir().await?;
     let pool = db::pool().await?;
+    routes::interview::seed_system_questions(&pool).await?;
     let llm = config::load().await;
     if !llm.read().await.configured() {
         tracing::warn!(

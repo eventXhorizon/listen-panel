@@ -1,0 +1,921 @@
+[
+  {
+    "topic_slug": "rust-getting-started",
+    "question_en": "Rust ships its own toolchain manager, rustup, instead of relying on system package managers like apt or brew. Why?",
+    "question_zh": "为什么 Rust 自带 rustup 而不是直接用系统包管理器？",
+    "sample_answer_en": "Rust releases on a six-week cadence and supports three channels — stable, beta, and nightly — so users routinely need multiple toolchains side by side. System package managers ship a single, often outdated version, which makes it painful to test on nightly or pin a project to a specific stable. rustup gives per-project pinning through rust-toolchain.toml, handles cross-compilation targets via `rustup target add`, and keeps the whole thing in `~/.rustup` so you don't need root. Basically it solves the same problem nvm and pyenv solve for Node and Python.",
+    "sample_answer_zh": "Rust 六周一个版本、三条通道，常需要多版本并存；系统包管理只能装一个、还经常过期。rustup 支持项目级 pin、跨编译目标，安装在用户目录无需 root，本质和 nvm/pyenv 解决同一类问题。",
+    "key_points": ["release channels", "rust-toolchain.toml", "cross-compilation targets", "no root required", "reproducibility"],
+    "follow_ups": ["How does rust-toolchain.toml affect CI?", "When would you actually need nightly in production code?"]
+  },
+  {
+    "topic_slug": "rust-getting-started",
+    "question_en": "Walk me through what happens between `cargo new hello` and `cargo run` printing Hello, world.",
+    "question_zh": "从 `cargo new` 到 `cargo run` 输出 Hello world，中间发生了什么？",
+    "sample_answer_en": "`cargo new` scaffolds a binary crate with `Cargo.toml`, `src/main.rs`, and initializes a git repo. `cargo run` resolves the dependency graph from `Cargo.toml`, materializes `Cargo.lock` if it's missing, then invokes rustc to compile `main.rs` into `target/debug/hello`. rustc lowers the source through HIR, MIR, and LLVM IR, runs the borrow checker on MIR, and produces a native binary. Finally Cargo execs the binary and pipes stdout back to your terminal.",
+    "sample_answer_zh": "`cargo new` 搭脚手架；`cargo run` 解析依赖、生成 lock、调用 rustc 经 HIR/MIR/LLVM IR 编译并跑借用检查，最后执行二进制。",
+    "key_points": ["Cargo.toml vs Cargo.lock", "rustc compilation pipeline", "borrow check on MIR", "target/debug layout"],
+    "follow_ups": ["What's incremental compilation actually caching?", "Why is the first build so much slower than subsequent builds?"]
+  },
+  {
+    "topic_slug": "rust-getting-started",
+    "question_en": "What's the practical difference between `cargo build` and `cargo build --release`?",
+    "question_zh": "`cargo build` 和 `cargo build --release` 有什么实际区别？",
+    "sample_answer_en": "Debug builds keep optimizations off (opt-level=0), preserve full debug info, and skip overflow-on-arithmetic wrapping so panics catch bugs early — that's why debug binaries are 5–20× slower and much larger. Release builds turn on opt-level=3, strip most debuginfo, and let arithmetic wrap silently in production. I use debug for the inner dev loop because compile time matters more than runtime, and release for benchmarks, CI artifacts, and anything I'm actually shipping. You can tune both profiles in `Cargo.toml` under `[profile.dev]` / `[profile.release]`.",
+    "sample_answer_zh": "debug 关优化、保留调试信息、算术溢出会 panic，跑得慢但开发循环快；release 全优化、剥调试信息、溢出 wrap，跑分和发布用它。两种 profile 都可以在 Cargo.toml 自定义。",
+    "key_points": ["opt-level", "overflow checks", "debug info", "compile time vs runtime tradeoff", "profile customization"],
+    "follow_ups": ["What's `lto = \"fat\"` and when would you turn it on?", "Why can a release build be slower than expected without `codegen-units = 1`?"]
+  },
+  {
+    "topic_slug": "rust-getting-started",
+    "question_en": "A junior on your team commits Cargo.lock for a library crate and asks if that's right. How do you respond?",
+    "question_zh": "新同事在一个库 crate 里提交了 Cargo.lock，对吗？",
+    "sample_answer_en": "The convention is: commit `Cargo.lock` for binaries and applications, ignore it for libraries. For a binary you want bit-for-bit reproducible builds across machines and time. For a library, downstream consumers do their own resolution against their full dependency graph, and a lockfile in your repo only affects `cargo test` runs in your own CI — it can actually hide breakage that downstream users will hit. So I'd remove it from the library and let the lockfile only live in apps and integration test harnesses.",
+    "sample_answer_zh": "二进制 crate 要提交 Cargo.lock（保证可重现构建），库 crate 不该提交 — 下游会用他们自己的 lock，你 commit 反而可能掩盖下游会遇到的兼容问题。",
+    "key_points": ["binary vs library convention", "reproducible builds", "downstream resolution", "hiding breakage"],
+    "follow_ups": ["What if the library has examples and integration tests that depend on specific versions?", "How does `--locked` in CI relate to this?"]
+  },
+  {
+    "topic_slug": "rust-getting-started",
+    "question_en": "You're setting up a new team's Rust environment for Mac, Linux, and CI. What's your bootstrapping checklist?",
+    "question_zh": "为团队搭跨平台（Mac/Linux/CI）Rust 环境，你的清单是什么？",
+    "sample_answer_en": "First, pin the toolchain with a `rust-toolchain.toml` in the repo root specifying the channel, version, components like rustfmt and clippy, and target triples — so every developer and CI runner is on the exact same compiler. Second, configure `.cargo/config.toml` for any company-wide registry mirrors and target-specific linker flags. Third, run rustup via the official installer in CI, then cache `~/.cargo/registry` and `target/` to keep builds fast. Finally, enforce `cargo fmt --check` and `cargo clippy --deny warnings` as required CI gates so style and lint stay consistent.",
+    "sample_answer_zh": "用 rust-toolchain.toml 固定编译器和组件、用 .cargo/config.toml 配镜像和链接器、CI 缓存 registry 和 target、把 fmt 和 clippy 当强制 gate。",
+    "key_points": ["rust-toolchain.toml", ".cargo/config.toml", "CI cache strategy", "fmt/clippy as required checks"],
+    "follow_ups": ["What about sccache or sparse registry?", "How do you handle private crates from a company registry?"]
+  },
+
+  {
+    "topic_slug": "rust-guessing-game",
+    "question_en": "The guessing game tutorial introduces `let mut guess = String::new();` followed by `io::stdin().read_line(&mut guess)`. Why does `read_line` take `&mut guess` instead of returning a new String?",
+    "question_zh": "为什么 `read_line` 用 `&mut guess` 而不是直接返回一个 String？",
+    "sample_answer_en": "It's an allocation-reuse pattern: by writing into the caller's buffer, the API lets you call `read_line` in a loop without allocating a fresh String each iteration. Returning a String would force a heap allocation every call, which matters for a server reading thousands of lines. Mutable borrowing also signals ownership clearly — the buffer keeps belonging to the caller, and `read_line` only borrows it temporarily. This is the same pattern as `Vec::extend_from_slice` or C's `fgets`.",
+    "sample_answer_zh": "为了复用 buffer：调用者持有 String，read_line 只是临时借用写入，避免每次循环都重新分配。和 fgets / Vec::extend_from_slice 一个套路。",
+    "key_points": ["allocation reuse", "buffer ownership stays with caller", "mutable borrow semantics", "loop performance"],
+    "follow_ups": ["Why doesn't `read_line` truncate `guess` for you?", "How would you adapt this if you wanted to read until EOF?"]
+  },
+  {
+    "topic_slug": "rust-guessing-game",
+    "question_en": "The tutorial uses `let guess: u32 = guess.trim().parse().expect(\"...\");` — variable shadowing with the same name. Why is shadowing preferred over a new name like `guess_num`?",
+    "question_zh": "为什么用同名 shadowing 而不是 `guess_num` 这种新名字？",
+    "sample_answer_en": "Shadowing lets you change the type of a binding while keeping a single conceptual name flowing through the function, so you don't pollute the namespace with `guess_str`, `guess_num`, `guess_trimmed`. The original String is dropped or moved at the shadow point, so there's no risk of accidentally reading the stale version. Compared to `mut`, shadowing also lets you transform an immutable binding into a new immutable binding of a different type, which is more honest about what's happening — you're not mutating, you're rebinding. The compiler still catches you if you try to use the old type after the shadow.",
+    "sample_answer_zh": "同名 shadowing 让一个概念用一个名字贯穿函数、避免命名污染；它和 mut 不同——是重新绑定（可换类型）而不是变更现有值，旧值不可再访问。",
+    "key_points": ["scope-based rebinding", "type change without `mut`", "no stale-reference risk", "namespace hygiene"],
+    "follow_ups": ["When would shadowing actually hurt readability?", "What's the lifetime of the original String after shadowing?"]
+  },
+  {
+    "topic_slug": "rust-guessing-game",
+    "question_en": "Why does the tutorial wrap `parse()` in a `match` that handles `Err(_) => continue` instead of `.unwrap()` or `.expect()`?",
+    "question_zh": "为什么解析输入要用 `match Err(_) => continue` 而不是直接 unwrap？",
+    "sample_answer_en": "`unwrap` and `expect` panic on `Err`, which crashes the whole program — fine for a prototype, terrible for interactive input where users will type garbage. The `match … continue` pattern keeps the loop alive and silently re-prompts. In a real CLI I'd usually log the parse error to stderr so the user knows why their input was rejected, but the pedagogical point is that `Result` forces you to make this decision explicitly. The compiler won't let you forget that user input can fail.",
+    "sample_answer_zh": "unwrap 一遇 Err 就整程 panic，对交互输入不合适；match…continue 让循环存活、给用户重试机会，编译器强迫你显式处理这种错误。",
+    "key_points": ["panic vs recoverable error", "Result forces explicit handling", "interactive UX", "stderr feedback"],
+    "follow_ups": ["Where would `?` be appropriate instead?", "How would you generalize this into a typed-input helper function?"]
+  },
+  {
+    "topic_slug": "rust-guessing-game",
+    "question_en": "The example adds `rand = \"0.8\"` to Cargo.toml and immediately calls `rand::thread_rng().gen_range(1..=100)`. Walk me through what `0.8` resolves to and what could go wrong.",
+    "question_zh": "`rand = \"0.8\"` 实际上会解析成哪个版本？有什么坑？",
+    "sample_answer_en": "Cargo treats `\"0.8\"` as a caret requirement, so it resolves to the latest 0.8.x — currently something like 0.8.5. Patch upgrades come in automatically on `cargo update`. The risk: rand had a notable API shift between 0.8 and 0.9 (`gen_range` became `random_range`, `thread_rng` became `rng`), so pinning to `\"0.8\"` is fine until you bump majors. The deeper trap is `thread_rng` uses non-deterministic seeding — if you ever need reproducible games for tests, you need `StdRng::seed_from_u64(...)` instead.",
+    "sample_answer_zh": "`\"0.8\"` 是 caret 约束，会拿最新的 0.8.x；0.8→0.9 时 API 有破坏性变化，需手动升。另外 thread_rng 不可复现，测试要 seedable RNG。",
+    "key_points": ["caret semver", "breaking changes across majors", "deterministic vs nondeterministic RNG", "reproducible tests"],
+    "follow_ups": ["When would you pin exact versions in Cargo.toml?", "How do you seed an RNG for reproducible tests in Rust?"]
+  },
+  {
+    "topic_slug": "rust-guessing-game",
+    "question_en": "After finishing the guessing game, what would you refactor to make it production-quality, beyond what the tutorial shows?",
+    "question_zh": "做完猜数字后，要让它达到生产质量，你会重构什么？",
+    "sample_answer_en": "I'd split it into a library crate exposing a `Game` struct with `new(secret: u32)` and `guess(&mut self, value: u32) -> Outcome`, where `Outcome` is an enum of `TooLow / TooHigh / Correct`. The CLI then becomes a thin shell over that library, which makes it testable without spawning a process. I'd add proper error types instead of `expect`, use `tracing` for structured logging, and accept an upper bound and seed from CLI args via `clap`. Plus property-based tests with `proptest` to assert that any guess between 1 and N eventually terminates the game.",
+    "sample_answer_zh": "把核心逻辑抽成 lib（Game + Outcome enum），CLI 只是壳——便于单测；替换 expect 为自定义错误，加 tracing 日志，用 clap 接参数，proptest 做性质测试。",
+    "key_points": ["lib + bin split", "enum-based domain modeling", "clap for CLI args", "structured logging", "property tests"],
+    "follow_ups": ["How would you test the CLI behavior end-to-end?", "What does separating lib and bin buy you for compile times?"]
+  },
+
+  {
+    "topic_slug": "rust-common-concepts",
+    "question_en": "When would you reach for `let mut` versus shadowing in Rust, and which one is idiomatic?",
+    "question_zh": "什么时候用 `let mut`，什么时候用 shadowing？哪个更地道？",
+    "sample_answer_en": "Use `let mut` when you genuinely mutate the value in place — pushing to a Vec, incrementing a counter, updating a field. Use shadowing when you're transforming a value into a new representation, often a different type, and the old value no longer matters. Shadowing is preferred in idiomatic Rust because it keeps bindings immutable by default and makes refactoring safer; mutability is opt-in for a reason. A good rule: if I could replace the `mut` with a shadowed `let`, I usually should.",
+    "sample_answer_zh": "原地变更用 mut（push、自增、改字段）；变换值或换类型用 shadowing。地道 Rust 默认不可变，能 shadow 就别 mut。",
+    "key_points": ["immutability by default", "in-place mutation vs transformation", "type changes via shadowing", "refactor safety"],
+    "follow_ups": ["When does shadowing make code harder to read?", "How does shadowing interact with closures?"]
+  },
+  {
+    "topic_slug": "rust-common-concepts",
+    "question_en": "Rust has both `i32` and `isize`. When does the difference matter and what's the failure mode if you pick wrong?",
+    "question_zh": "i32 和 isize 什么时候有区别？选错会怎样？",
+    "sample_answer_en": "`isize` is pointer-sized — 32 bits on 32-bit targets, 64 bits on 64-bit targets — so it's the right type for indices, lengths, and pointer offsets. `i32` is always 32 bits regardless of platform, so it's the right type for portable data formats, network protocols, and anything that crosses architectures. If you use `i32` for indices, you'll silently overflow on a >2GB collection on 64-bit machines; if you use `isize` for an on-the-wire integer, you've just made your protocol non-portable. The signed/unsigned axis is independent — `usize` is the unsigned pointer-size and is what `Vec::len` actually returns.",
+    "sample_answer_zh": "isize 是指针大小（与平台相关），适合索引和偏移；i32 固定 32 位，适合协议和跨架构数据。用错的两种典型故障：i32 当索引在 >2GB 集合上溢出；isize 上协议线就不可移植。",
+    "key_points": ["pointer-sized vs fixed-size integers", "indices use usize/isize", "wire formats use fixed-size", "portability"],
+    "follow_ups": ["What does `as usize` cost at runtime?", "Why does `Vec::len` return `usize` and not `u64`?"]
+  },
+  {
+    "topic_slug": "rust-common-concepts",
+    "question_en": "Show me what the borrow checker prevents in this snippet: `let s = String::from(\"hi\"); let r = &s; drop(s); println!(\"{r}\");`. What's the actual error and what would the equivalent C program do?",
+    "question_zh": "给一段 `let s = String::from(\"hi\"); let r = &s; drop(s); println!(\"{r}\");`，借用检查器会报什么？等价 C 程序会怎样？",
+    "sample_answer_en": "The compiler refuses with \"cannot move out of `s` because it is borrowed\" — `drop(s)` requires owning `s`, but `r` still borrows it. In C, the equivalent would call `free(s)` and then print through a dangling pointer, which is the textbook use-after-free: undefined behavior, possibly a crash, possibly silent data corruption, possibly an exploit primitive. Rust catches this at compile time without runtime overhead, which is the core safety guarantee of ownership. The fix is either to drop `r` first (let it go out of scope), or to clone, or to restructure so the borrow ends before the drop.",
+    "sample_answer_zh": "编译器报 \"cannot move while borrowed\"——drop 要拿走所有权但 r 还借着。C 中等价于 free 后再访问，是经典 use-after-free，UB。Rust 在编译期零成本拦下来。",
+    "key_points": ["use-after-free at compile time", "move requires no live borrows", "zero runtime overhead", "UB in C equivalent"],
+    "follow_ups": ["How does NLL change which borrows are considered live?", "Can you construct a case where the borrow checker is overly conservative?"]
+  },
+  {
+    "topic_slug": "rust-common-concepts",
+    "question_en": "Rust requires `if` conditions to be `bool` and won't auto-coerce integers. Why is this a deliberate design choice?",
+    "question_zh": "Rust 的 if 条件必须是 bool，不允许整数隐式转换 — 为什么这么设计？",
+    "sample_answer_en": "C-style truthiness is a famous footgun: `if (x = 5)` is a valid assignment that always evaluates true, and `if (strcmp(a, b))` enters the branch when the strings are *equal* nothing. Rust forces an explicit comparison so the intent is in the source code, and a typo like `if x = 5` is a compile error because assignments are statements that return `()`, not expressions of type `bool`. It costs you almost nothing — `if x != 0` is one extra token — and it removes a whole category of bug. The same philosophy shows up in match-must-be-exhaustive and no-implicit-numeric-conversions.",
+    "sample_answer_zh": "C 的 \"非零即真\" 是著名坑（`if (x = 5)` 永真、strcmp 语义反直觉）。Rust 强制显式比较，意图清楚，typo 立即编译错；多一个 token 换一整类 bug，和 match 强制穷尽是同一哲学。",
+    "key_points": ["explicit over implicit", "C truthiness footguns", "assignment isn't expression", "consistent design philosophy"],
+    "follow_ups": ["What other implicit conversions does Rust deliberately reject?", "Where does Rust accept implicit conversion (deref coercion)?"]
+  },
+  {
+    "topic_slug": "rust-common-concepts",
+    "question_en": "Walk me through what `loop { ... break value; }` returns and why this is more than syntactic sugar.",
+    "question_zh": "`loop { ... break value; }` 返回什么？为什么不只是语法糖？",
+    "sample_answer_en": "`loop` is an expression that evaluates to whatever `break value` produces, with type inference unifying all break sites. This lets you write retry-with-result patterns cleanly — for example, polling a queue with `let item = loop { if let Some(x) = queue.pop() { break x; } thread::sleep(...); };`. It's not sugar because the alternative in other languages is either a sentinel variable plus a mutable flag, or stuffing the work into a function so you can `return` — both worse. The same expression-orientation applies to `if`, `match`, and blocks, which is what makes Rust feel functional even though it's not.",
+    "sample_answer_zh": "loop 是表达式，break value 决定它的类型；典型用法是带返回值的重试（轮询拿到值就 break）。比其他语言的 \"flag + mutable var\" 优雅，是 Rust 表达式优先哲学的一部分。",
+    "key_points": ["loop is an expression", "break with value", "retry patterns", "expression-oriented design"],
+    "follow_ups": ["What's the difference between `break 'outer value;` and `return value;`?", "How does type unification work across multiple breaks?"]
+  },
+
+  {
+    "topic_slug": "rust-ownership",
+    "question_en": "State the three ownership rules in Rust and explain why each one exists.",
+    "question_zh": "Rust 三条所有权规则是什么？各自为什么需要？",
+    "sample_answer_en": "First, every value has exactly one owner — this gives us deterministic destruction, so we can call `drop` once at a predictable point without ref counting or GC. Second, ownership can be transferred (moved), but only one binding holds it at a time — this prevents double-frees because the source binding is statically invalidated. Third, when the owner goes out of scope, the value is dropped — this ties cleanup to the lexical structure of the code, so RAII works for files, locks, sockets, anything. Together they give you C-level performance with C++-style RAII but without manual lifetime tracking.",
+    "sample_answer_zh": "一是单一所有者（决定唯一 drop 点，无需 GC/refcount）；二是 move 转移、原绑定失效（防 double-free）；三是离开作用域自动 drop（RAII 全自动）。三条合起来给你 C 的性能 + C++ 的 RAII，没有手工生命周期。",
+    "key_points": ["single owner", "deterministic drop", "no double-free", "RAII for any resource"],
+    "follow_ups": ["Where does Rc/Arc fit into 'single owner'?", "How does the destructor order work in a struct with multiple fields?"]
+  },
+  {
+    "topic_slug": "rust-ownership",
+    "question_en": "What's the difference between a move, a copy, and a clone in Rust? When does each happen?",
+    "question_zh": "Move、Copy、Clone 在 Rust 里有什么区别？分别什么时候发生？",
+    "sample_answer_en": "Move is the default for non-`Copy` types — assignment or passing by value transfers ownership and invalidates the source. Copy is an opt-in trait for types where bit-for-bit duplication is safe and cheap (integers, bools, references, simple structs of `Copy` fields); when present, the same syntax that would move now copies and the source remains usable. Clone is an explicit `.clone()` call producing a deep duplicate — required for `String`, `Vec`, anything that owns heap memory, because copying the pointer alone would alias the owned allocation. The rule of thumb: if you don't see `.clone()`, no heap allocation crossed that line.",
+    "sample_answer_zh": "Move 是默认：转移所有权、原变量失效。Copy 是 trait，按位复制（整数、bool、引用、纯 Copy 字段的结构体）；有 Copy 时同样语法变成复制。Clone 显式调用 .clone()，深拷贝堆内存。没 .clone() 就没 heap 分配。",
+    "key_points": ["move is the default", "Copy is opt-in and bitwise", "Clone is explicit and deep", "no implicit deep copy"],
+    "follow_ups": ["Why can't `String` implement `Copy`?", "What's the cost of `Copy` for a 1KB struct of integers?"]
+  },
+  {
+    "topic_slug": "rust-ownership",
+    "question_en": "Explain shared (`&T`) vs mutable (`&mut T`) references and the borrowing rules between them.",
+    "question_zh": "共享引用 `&T` 和可变引用 `&mut T` 有什么区别？借用规则是什么？",
+    "sample_answer_en": "You can have any number of shared `&T` references at once, or exactly one `&mut T` reference, but never both at the same time. This is the \"aliasing XOR mutation\" rule, and it's what makes Rust safe to optimize aggressively — the compiler knows a `&mut T` is non-aliasing the way C's `restrict` keyword wishes it could promise. The flip side is some valid programs can't be expressed without `RefCell` or `unsafe` to escape the static check. NLL (non-lexical lifetimes) made this much less painful by ending borrows at their last use instead of the end of scope.",
+    "sample_answer_zh": "&T 可有多个，&mut T 同时只能有一个，二者不能并存——\"aliasing XOR mutation\"。这让编译器能像 C 的 restrict 一样激进优化。代价是有些合法程序需 RefCell 或 unsafe 绕开静态检查；NLL 之后没那么疼了。",
+    "key_points": ["aliasing XOR mutation", "compile-time enforcement", "restrict-like optimization", "NLL"],
+    "follow_ups": ["What does NLL actually change?", "When would two-phase borrowing be needed?"]
+  },
+  {
+    "topic_slug": "rust-ownership",
+    "question_en": "What's the difference between `&str` and `&String`? When would you actually take one over the other in a function signature?",
+    "question_zh": "&str 和 &String 有什么区别？函数参数应该选哪个？",
+    "sample_answer_en": "`&String` is a reference to a heap-allocated, growable string; `&str` is a reference to any contiguous UTF-8 byte slice — could be a `String`, a string literal, or a substring. Function parameters should almost always take `&str` because deref coercion lets callers pass `&String` for free, and you also accept literals and slices without forcing an allocation. Taking `&String` makes the signature artificially narrow: a caller with `&\"hello\"` has to allocate a `String` just to call you. Same pattern with `&[T]` over `&Vec<T>`.",
+    "sample_answer_zh": "&String 是堆上可增长 String 的引用；&str 是任何连续 UTF-8 切片的引用（含字面量）。函数参数几乎总选 &str：通过 deref coercion，&String 自动转 &str，还能接字面量和子串，避免强迫调用方分配。`&[T]` 优于 `&Vec<T>` 同理。",
+    "key_points": ["str is a view, String owns", "deref coercion", "narrower vs broader signature", "slice over collection"],
+    "follow_ups": ["When would taking `String` by value be the right call?", "What's the cost of converting a `&str` to a `String`?"]
+  },
+  {
+    "topic_slug": "rust-ownership",
+    "question_en": "Explain why this fails to compile and how to fix it: `let mut v = vec![1, 2, 3]; let first = &v[0]; v.push(4); println!(\"{first}\");`",
+    "question_zh": "为什么这段不编译？怎么修？`let mut v = vec![1,2,3]; let first = &v[0]; v.push(4); println!(\"{first}\");`",
+    "sample_answer_en": "`first` is a shared borrow of `v[0]`, but `v.push(4)` may reallocate the Vec's backing buffer if capacity is exceeded, which would leave `first` dangling. The borrow checker rejects `push` while a shared borrow is live, regardless of whether reallocation would actually happen — it's a static rule. To fix it, either copy the value out (`let first = v[0];` since `i32: Copy`), or scope the borrow so it ends before `push`, or use `Vec::get` plus `.cloned()` if you need a defensible owned copy. This is exactly the kind of iterator-invalidation bug that segfaults in C++.",
+    "sample_answer_zh": "first 借了 v[0]，但 push 可能扩容、搬到新地址，让 first 变成悬挂引用——借用检查器不管实际会不会扩，规则就是 push 时不允许活借用。修复：拷出值（i32 是 Copy）、缩短借用作用域，或克隆。这就是 C++ 经典的 iterator invalidation。",
+    "key_points": ["potential reallocation invalidates borrows", "static rule, not runtime check", "iterator invalidation in C++", "scope the borrow"],
+    "follow_ups": ["What if I called `v.reserve(N)` upfront — would that help?", "How does `slice::split_at_mut` get around this rule?"]
+  },
+
+  {
+    "topic_slug": "rust-structs",
+    "question_en": "When would you choose a tuple struct over a regular struct with named fields?",
+    "question_zh": "什么时候选 tuple struct 而不是带命名字段的 struct？",
+    "sample_answer_en": "Tuple structs shine when the type itself carries the meaning and the fields don't need names — newtypes are the canonical case, like `struct UserId(u64);` or `struct Wrapping<T>(T)`. They're also good for short fixed-shape data where naming would be noise, like `struct Point(f32, f32);` in a hot loop. But for anything with more than two fields, or where future readers would have to remember what `.0` and `.1` mean, named fields win every time. The newtype pattern is the most important use because it gives you type safety without runtime cost.",
+    "sample_answer_zh": "适合 newtype（UserId(u64)）和短小固定形（Point(f32,f32)）；超过两个字段或语义不显然就用命名字段。newtype 是最重要的用法——零成本类型安全。",
+    "key_points": ["newtype pattern", "zero-cost type safety", "named fields for clarity", "two-field threshold"],
+    "follow_ups": ["How do you derive traits on a newtype while inheriting from the inner type?", "What's `#[repr(transparent)]` and when do you need it?"]
+  },
+  {
+    "topic_slug": "rust-structs",
+    "question_en": "What's the difference between `impl` blocks and trait `impl` blocks, and when would you split methods across multiple `impl` blocks for the same type?",
+    "question_zh": "inherent impl 和 trait impl 有什么区别？什么时候把方法拆到多个 impl 里？",
+    "sample_answer_en": "An inherent `impl Foo` defines methods that belong only to `Foo`. A trait `impl Trait for Foo` defines methods that satisfy a contract and can be called generically through that trait. You split into multiple inherent `impl` blocks usually for one of three reasons: generic bounds that only apply to some methods (`impl<T: Clone> Foo<T> { fn dup() ... }`), conditional compilation (`#[cfg(unix)] impl Foo { ... }`), or just organizing a large API into logical groups. The compiler treats them as a single set of methods, so there's no runtime difference.",
+    "sample_answer_zh": "inherent impl 定义类型自己的方法；trait impl 实现某个 trait 契约。多个 impl 块拆分的常见原因：部分方法需要更紧的泛型约束、cfg 条件编译、按功能分组。运行时无差别。",
+    "key_points": ["inherent vs trait impl", "bounded impls for some methods", "cfg-gated impls", "no runtime impact"],
+    "follow_ups": ["Can two inherent impl blocks define methods with the same name?", "What's the precedence between inherent and trait methods at call site?"]
+  },
+  {
+    "topic_slug": "rust-structs",
+    "question_en": "Walk through what happens at runtime when you call `let p = Point { x: 1.0, y: 2.0 };` versus `let p = Box::new(Point { x: 1.0, y: 2.0 });`.",
+    "question_zh": "`Point { x: 1.0, y: 2.0 }` 和 `Box::new(...)` 在运行时有什么区别？",
+    "sample_answer_en": "Direct construction puts the `Point` on the stack — 8 bytes of x and 8 of y sit in the current frame, no allocator involved, and it's freed by the frame epilogue. `Box::new` heap-allocates a 16-byte chunk, copies the Point into it, and `p` becomes a 8-byte pointer on the stack pointing at the heap allocation; the destructor of `Box` will call into the global allocator on drop. For a Point you almost never want `Box`; you'd want it when the struct is large, when it needs a fixed address (self-referential or pinning), or when you need a trait object (`Box<dyn Trait>`).",
+    "sample_answer_zh": "直接构造在栈上分配 16 字节，函数返回时弹栈；Box::new 在堆上分配并把 Point 拷过去，p 是栈上的指针，drop 时调全局分配器。Box 适合大对象、需要固定地址、或要 trait object。",
+    "key_points": ["stack vs heap allocation", "Box is a pointer on stack pointing to heap", "drop calls global allocator", "when Box is justified"],
+    "follow_ups": ["What's the cost of `Box::new` in a tight loop?", "How does NRVO / move elision interact here?"]
+  },
+  {
+    "topic_slug": "rust-structs",
+    "question_en": "Explain the `..rest` syntax in struct update like `Config { timeout: 30, ..default }`. What gotchas does it have?",
+    "question_zh": "`Config { timeout: 30, ..default }` 这种 struct update 有什么坑？",
+    "sample_answer_en": "It builds a new struct by taking the listed fields from the literal and the remaining fields from `default`. The catch: it's a *move* of the remaining fields, not a copy, so if any of those fields aren't `Copy`, `default` is partially moved and unusable afterward. If the moved fields happen to all be `Copy`, `default` survives. So I either reach for it on `Copy`-heavy configs, or accept that `default` is gone after the update, or call `.clone()` upfront. People also forget this means `..Default::default()` is fine because the temporary is consumed right there.",
+    "sample_answer_zh": "字段是 move 不是 copy——剩余字段若不是 Copy，default 就部分 move 不能再用。要么所有剩余字段都是 Copy、要么接受 default 被消费、要么先 clone。`..Default::default()` 因为是临时值无所谓。",
+    "key_points": ["move semantics of unmentioned fields", "partial move makes source unusable", "Copy fields keep source alive", "common idioms"],
+    "follow_ups": ["What's a partial move error look like at the compiler?", "How does this interact with `#[derive(Clone)]`?"]
+  },
+  {
+    "topic_slug": "rust-structs",
+    "question_en": "You have `struct Vehicle { wheels: u8, color: String }`. Show how to give it a Debug impl manually and explain why you'd ever do that instead of `#[derive(Debug)]`.",
+    "question_zh": "给 `struct Vehicle { wheels: u8, color: String }` 手写 Debug — 什么时候不用 derive？",
+    "sample_answer_en": "Most of the time you just slap `#[derive(Debug)]` on. You hand-write when the default format leaks too much (a credentials field), is too verbose (a million-element cache where you only want a summary), or isn't valid for the inner type (a type that doesn't implement Debug but you want a fallback). A manual impl looks like `impl fmt::Debug for Vehicle { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.debug_struct(\"Vehicle\").field(\"wheels\", &self.wheels).field(\"color\", &\"<redacted>\").finish() } }`. The `debug_struct` builder keeps you compatible with `{:#?}` pretty-printing.",
+    "sample_answer_zh": "默认 derive；手写场景：藏敏感字段、收缩超长输出、内部字段没 Debug 想 fallback。手写用 `f.debug_struct` builder 兼容 `{:#?}` 美化输出。",
+    "key_points": ["derive is default", "redaction / summarization / fallback", "debug_struct builder", "pretty-print compat"],
+    "follow_ups": ["How would you redact only in release builds with cfg?", "What's the difference between Debug and Display?"]
+  },
+
+  {
+    "topic_slug": "rust-enums-pattern",
+    "question_en": "Why is `Option<T>` an enum and not a special null value like Java's `null`?",
+    "question_zh": "为什么 Rust 的 Option<T> 是 enum，而不是像 Java 的 null？",
+    "sample_answer_en": "Modeling absence as an enum variant pushes the maybe-empty decision into the type system: a function returning `T` *must* produce a value, and one returning `Option<T>` *must* be pattern-matched before you use the inner value. Null in Java is implicit — every reference type silently includes it, which is why NullPointerException is the most common production crash. Rust's `Option` also composes with all the usual combinators (`map`, `and_then`, `?`) so optional plumbing reads naturally without nested if-not-null. And `Option<&T>` is the same size as `&T` thanks to niche optimization, so you don't pay for the abstraction.",
+    "sample_answer_zh": "Option 是 enum，把 \"可能为空\" 写进类型系统：返回 T 必非空，返回 Option<T> 必须解构才能用。Java 的 null 是隐式的——所有引用类型默认带，所以 NPE 漫天飞。Option 还能用 map/and_then/? 组合；`Option<&T>` 因 niche opt 和 `&T` 同大小，零成本。",
+    "key_points": ["explicit in type system", "no implicit null", "combinator-friendly", "niche optimization"],
+    "follow_ups": ["What's niche optimization and where does it apply?", "How does `?` desugar for Option?"]
+  },
+  {
+    "topic_slug": "rust-enums-pattern",
+    "question_en": "Walk through the difference between `if let`, `while let`, `let else`, and a full `match`. When do you reach for each?",
+    "question_zh": "if let / while let / let else / match 各自什么时候用？",
+    "sample_answer_en": "`match` is the canonical, exhaustive form — use it when you handle multiple variants or want the compiler to remind you to handle new ones. `if let` is the shorthand when you care about one variant and ignore the rest — typical for `Option::Some(x)` early returns or single-variant enum extraction. `while let` runs as long as a variant matches — perfect for popping from a queue or draining an iterator. `let else` is the newest tool and the cleanest way to bind a value or diverge: `let Some(x) = opt else { return; };` flattens the happy path so the rest of the function reads top-to-bottom.",
+    "sample_answer_zh": "match：穷尽，多个分支或想编译器提醒新增 variant 时用。if let：只关心一个 variant 的简写。while let：循环里持续匹配。let else：绑定或 diverge，把 happy path 拍平。",
+    "key_points": ["exhaustiveness with match", "single-variant convenience", "loop until variant changes", "let else flattens early return"],
+    "follow_ups": ["How would you migrate `match Some(x) { Some(x) => ..., None => return }` to `let else`?", "What's the desugaring of `while let`?"]
+  },
+  {
+    "topic_slug": "rust-enums-pattern",
+    "question_en": "Why does the compiler require `match` arms to be exhaustive, and what does `#[non_exhaustive]` do?",
+    "question_zh": "为什么 match 必须穷尽？`#[non_exhaustive]` 的作用是什么？",
+    "sample_answer_en": "Exhaustiveness gives you a powerful refactoring guarantee: add a new variant to an enum and every `match` site that doesn't already cover it becomes a compile error. That turns a runtime mystery into a build-time TODO list. `#[non_exhaustive]` on an enum or struct flips that: downstream crates must include a `_ => ...` wildcard, which lets you add variants without it being a semver-breaking change. It's a library author's tool for keeping options open, while inside your own crate exhaustiveness still applies.",
+    "sample_answer_zh": "穷尽匹配让 \"新增 variant\" 变成全局编译错误的待办清单，是 Rust 重构利器。`#[non_exhaustive]` 要求外部 crate 必须写 `_ =>`，让你以后可以加 variant 而不破坏 semver；crate 内部还是穷尽。",
+    "key_points": ["exhaustiveness as refactor aid", "non_exhaustive for semver", "downstream must wildcard", "internal vs external"],
+    "follow_ups": ["When would you NOT use non_exhaustive on a public enum?", "How does this interact with the `nonstandard_style` lint?"]
+  },
+  {
+    "topic_slug": "rust-enums-pattern",
+    "question_en": "Explain `Result<T, E>` vs `Option<T>` and when you'd convert between them.",
+    "question_zh": "Result<T,E> 和 Option<T> 有什么区别？什么时候互转？",
+    "sample_answer_en": "Both model the absence of a happy value, but `Result` carries why it failed and `Option` doesn't. Use `Option` when the absence is the only possible failure mode — `HashMap::get` returns `Option` because the only thing that can go wrong is \"not there.\" Use `Result` when failure has structure — file open, parse, network call. Conversion happens at API boundaries: `opt.ok_or(MyErr::Missing)` upgrades an Option into a Result so `?` propagates a real error, and `res.ok()` drops the error info when callers only care about success or not. Be deliberate about losing error info; the wrong `.ok()` swallows the cause of a bug.",
+    "sample_answer_zh": "Option 只说 \"有/无\"，Result 还带失败原因。Option 适合唯一失败模式（HashMap::get）；Result 适合有结构的失败（文件、解析、网络）。互转用 `ok_or` 把 Option 升级成 Result，用 `.ok()` 抛掉错误信息——后者要谨慎，可能吞掉故障原因。",
+    "key_points": ["absence vs structured failure", "ok_or upgrades to error", ".ok() loses info", "API boundary conversions"],
+    "follow_ups": ["What's `Option::transpose` and when do you need it?", "How does `?` work in functions that return Option vs Result?"]
+  },
+  {
+    "topic_slug": "rust-enums-pattern",
+    "question_en": "Show how you'd model the state of a network request as a Rust enum, and why this beats a struct with optional fields.",
+    "question_zh": "用 Rust enum 表达一个网络请求的状态机，比 \"struct + 一堆 Option 字段\" 好在哪？",
+    "sample_answer_en": "Something like `enum Request { Idle, InFlight { started_at: Instant }, Done { status: u16, body: Bytes }, Failed(Error) }`. Each variant carries only the data that makes sense for it — no `body: Option<Bytes>` lying around in the Idle state begging to be unwrapped wrongly. The compiler then enforces that you handle every state in your render or progress code via `match`. With a struct of options, every site has to remember which combinations are valid and which are illegal-but-still-typecheck — that's exactly the \"make illegal states unrepresentable\" win.",
+    "sample_answer_zh": "用 `enum Request { Idle, InFlight {...}, Done {...}, Failed(...) }`：每个 variant 只带它该带的数据，不会有 \"InFlight 状态里 body 是 None\" 这种合法但语义错乱的组合。match 强制穷尽——make illegal states unrepresentable。",
+    "key_points": ["state-specific data per variant", "illegal states unrepresentable", "exhaustive match enforces handling", "vs struct-of-options"],
+    "follow_ups": ["How would you handle transitions — methods on the enum?", "When does a typestate pattern beat an enum here?"]
+  },
+
+  {
+    "topic_slug": "rust-modules",
+    "question_en": "Walk me through the difference between a package, a crate, and a module in Rust.",
+    "question_zh": "package、crate、module 有什么区别？",
+    "sample_answer_en": "A package is one `Cargo.toml` — the unit Cargo manages. A crate is the unit of compilation: one library crate and any number of binary crates can live in one package. A module is an in-source organizational unit inside a crate, declared with `mod` and addressed with paths like `crate::foo::bar`. So `tokio` the package contains the `tokio` crate, which contains modules like `tokio::sync` and `tokio::io`. The visibility rules and the privacy boundary all operate at the module level, not the crate level.",
+    "sample_answer_zh": "package 是一个 Cargo.toml；crate 是编译单元（一个 lib + 多个 bin 都可以）；module 是源码内的组织单元，用 `mod` 声明、用 `crate::a::b` 寻址。可见性是 module 层面的，不是 crate 层面的。",
+    "key_points": ["package = Cargo.toml", "crate = compilation unit", "module = source organization", "visibility at module level"],
+    "follow_ups": ["What's a workspace and how does it relate?", "Can a package have multiple library crates?"]
+  },
+  {
+    "topic_slug": "rust-modules",
+    "question_en": "Compare `pub`, `pub(crate)`, `pub(super)`, and `pub(in path)`. When would you reach for each?",
+    "question_zh": "pub、pub(crate)、pub(super)、pub(in path) 分别什么时候用？",
+    "sample_answer_en": "`pub` exposes a name to anyone who can name your crate, so it's part of your public API and subject to semver. `pub(crate)` exposes only within the current crate — perfect for helper code that several modules share but external consumers must never see. `pub(super)` is even tighter, visible only to the parent module — good for tightly coupled siblings. `pub(in path)` lets you spell out a specific ancestor module as the visibility boundary, which is rare but useful for big internal layers. The default rule of thumb: start with private, widen only as needed.",
+    "sample_answer_zh": "pub 是公开 API（semver）；pub(crate) 限本 crate 内部共享；pub(super) 只给父模块；pub(in path) 指定某个祖先模块为边界。默认私有、按需放宽。",
+    "key_points": ["pub is public API surface", "pub(crate) for internal sharing", "pub(super) for tight coupling", "pub(in path) for layered internals"],
+    "follow_ups": ["What's the harm of overusing plain `pub` inside a crate?", "How does this interact with re-exports?"]
+  },
+  {
+    "topic_slug": "rust-modules",
+    "question_en": "What's the difference between `use foo::bar` and `pub use foo::bar`? Walk through a façade pattern example.",
+    "question_zh": "use 和 pub use 有什么区别？讲一个 façade 模式的例子。",
+    "sample_answer_en": "`use` brings a name into the current scope so you can reference it shortly; it doesn't expose it to anyone else. `pub use` does the same but also re-exports the name through the current module, so external consumers can access `mycrate::Bar` even though the real definition lives at `mycrate::internal::bar::Bar`. The façade pattern uses this to present a flat, stable public API while letting internals be reorganized freely. Tokio does this — `tokio::spawn` is a re-export from a deep submodule, and the implementation can move without breaking users.",
+    "sample_answer_zh": "use 只把名字带进当前作用域，不对外。pub use 同时再导出——外部能从你的 module 路径看到原本藏在深处的名字。façade 模式靠它：对外扁平稳定，内部任意重组。Tokio 的 `tokio::spawn` 就是这么干的。",
+    "key_points": ["use is scope-local", "pub use re-exports", "façade for stable API", "internal reorganization"],
+    "follow_ups": ["What's `pub use foo::*` and when is it dangerous?", "How do prelude modules work?"]
+  },
+  {
+    "topic_slug": "rust-modules",
+    "question_en": "Why are workspaces useful and what's actually shared across workspace members?",
+    "question_zh": "workspace 有什么用？成员之间共享什么？",
+    "sample_answer_en": "Workspaces let you keep several related crates in one repo with a shared `Cargo.lock`, shared `target/` directory, and unified `cargo build` / `cargo test` from the root. The shared lockfile means all members agree on dependency versions, which prevents the diamond-dependency mess you'd get from independent repos. The shared `target/` means a crate's incremental build state is reused when another member depends on it, which is the main reason monorepos compile fast. You also get workspace-level dependency declarations (`[workspace.dependencies]`) so you can pin once and reuse across crates.",
+    "sample_answer_zh": "把多个相关 crate 放一个仓库、共享 Cargo.lock 和 target/、根目录一条命令构建/测试。共享 lock 避免菱形依赖错乱；共享 target 让增量构建跨 crate 复用；`[workspace.dependencies]` 一处 pin 处处用。",
+    "key_points": ["shared lockfile", "shared target/", "unified commands", "workspace.dependencies"],
+    "follow_ups": ["What's a virtual workspace?", "How do you exclude a member from default builds?"]
+  },
+  {
+    "topic_slug": "rust-modules",
+    "question_en": "You're refactoring a 5000-line `lib.rs` into modules. What's your strategy and what gotchas should you watch for?",
+    "question_zh": "把 5000 行 lib.rs 拆成模块，你的策略是什么？要注意什么？",
+    "sample_answer_en": "Group by domain concept first, not by code type — `user/`, `billing/`, `notify/`, each with its own `mod.rs` or named file. Within each module, keep the public API minimal and gate helpers with `pub(crate)`. The big gotchas: paths break in tests and benchmarks, so I run `cargo test --all-targets` after each cut; the `use` lists balloon at the top of files, so I let rust-analyzer reformat them; and circular `mod` references will refuse to compile, so I sometimes have to extract a third module to hold the shared types. I also commit incrementally — one module at a time — so a bisect lands on a clean step if something regresses later.",
+    "sample_answer_zh": "按领域分（user/billing/notify），每个 mod 自带 mod.rs。注意点：测试和 bench 的路径会断（cargo test --all-targets 兜底）；use 列表会爆炸（让工具整理）；循环 mod 引用要拆出第三个 mod；每模块一个 commit，方便 bisect。",
+    "key_points": ["domain not code-type grouping", "minimal public surface", "incremental commits", "watch for cyclic deps"],
+    "follow_ups": ["When would a `mod private { ... } pub use private::*;` indirection be useful?", "How does this interact with cargo-modules visualization?"]
+  },
+
+  {
+    "topic_slug": "rust-collections",
+    "question_en": "Walk through `Vec`'s growth strategy and the cost of `push` in the worst case versus amortized.",
+    "question_zh": "Vec 的扩容策略是什么？push 在最坏和均摊下的成本？",
+    "sample_answer_en": "Vec doubles its capacity when it runs out — actually, it grows geometrically with a factor of roughly 2. A single `push` is O(1) normally but O(n) when it triggers reallocation, because it has to copy every existing element. Amortized over many pushes, the cost is still O(1) per push because each element is copied a bounded number of times across the lifetime of the Vec — the classic argument from doubling arrays. If you know the final size, `Vec::with_capacity` skips intermediate reallocations entirely, which matters in hot loops.",
+    "sample_answer_zh": "Vec 容量耗尽时近似翻倍。单次 push 通常 O(1)，扩容时 O(n)；均摊下来还是 O(1)（经典 doubling array 论证）。预知大小时用 with_capacity 跳过中间扩容。",
+    "key_points": ["geometric growth ~2x", "amortized O(1)", "with_capacity", "doubling argument"],
+    "follow_ups": ["What about `shrink_to_fit` and when would you call it?", "Does removing from the middle of a Vec shrink capacity?"]
+  },
+  {
+    "topic_slug": "rust-collections",
+    "question_en": "What does `HashMap::entry(key).or_insert_with(|| compute())` do, and why is it different from `get` plus `insert`?",
+    "question_zh": "`HashMap::entry(k).or_insert_with(|| compute())` 在做什么？和 `get + insert` 有什么不同？",
+    "sample_answer_en": "`entry` returns a handle to that slot in the map after a single lookup. `or_insert_with` then either gives you a mutable reference to the existing value or inserts the closure's result and gives you a reference to that. The two-step `get` then `insert` does two lookups in the worst case, and there's a borrow-check landmine because the `get` holds an immutable borrow that fights the `insert` mutable one. The closure form is also important: `or_insert(compute())` would evaluate `compute()` even on a hit, which matters if compute is expensive — `or_insert_with` only runs it on miss.",
+    "sample_answer_zh": "entry 一次查询拿到槽位句柄；or_insert_with 命中给可变引用、未命中执行闭包再给引用。`get+insert` 是两次查询且借用打架。`or_insert_with` 的闭包形式在命中时不执行计算，比 `or_insert(...)` 更省。",
+    "key_points": ["single lookup", "borrow-check friendly", "closure deferred on hit", "vs get+insert pitfalls"],
+    "follow_ups": ["What's `entry().or_default()`?", "How does this compare to `get_or_insert_with` on Option?"]
+  },
+  {
+    "topic_slug": "rust-collections",
+    "question_en": "Show me how you'd count word frequencies in a `&str` using HashMap idiomatically.",
+    "question_zh": "用 HashMap 优雅地统计 &str 里词频，写一下。",
+    "sample_answer_en": "I'd do `let mut counts = HashMap::new(); for word in text.split_whitespace() { *counts.entry(word).or_insert(0) += 1; }`. The `*` deref turns the `&mut i32` from `or_insert` into the int so I can `+=` it. If the keys need to outlive the input, I'd switch to `counts.entry(word.to_string()).or_insert(0)` to own the strings, accepting the allocation cost. For a faster hasher in a hot path I'd swap `HashMap` for `ahash::HashMap` or `FxHashMap`, since the default hasher is SipHash and prioritizes DOS resistance over speed.",
+    "sample_answer_zh": "`for word in text.split_whitespace() { *counts.entry(word).or_insert(0) += 1; }`。需要持久持有键时换成 `to_string()`。热路径换 ahash 或 fxhash——默认 SipHash 安全但慢。",
+    "key_points": ["entry().or_insert(0) += 1", "deref the &mut", "owned vs borrowed keys", "hasher tradeoffs"],
+    "follow_ups": ["When would Vec of (key, count) beat HashMap?", "How would you parallelize this with rayon?"]
+  },
+  {
+    "topic_slug": "rust-collections",
+    "question_en": "Compare `String`, `&str`, `Cow<str>`, and `Box<str>`. When does each show up?",
+    "question_zh": "String、&str、Cow<str>、Box<str> 各自什么场景出现？",
+    "sample_answer_en": "`String` is the owning, growable heap string — what you reach for when you build up text. `&str` is a borrowed view, the right parameter type 90% of the time. `Cow<str>` is a clone-on-write enum that's either borrowed or owned — perfect when most callers can return a borrow but some need to compute a modified copy, like a sanitization pass that usually changes nothing. `Box<str>` is a heap-allocated, immutable, exact-fit string with no extra capacity — useful when you keep millions of immutable strings around and want to save the 8 bytes of capacity field per string. So: build with String, parameterize with &str, return Cow when input might not need modification, intern as Box<str>.",
+    "sample_answer_zh": "String：可变可增长堆字符串。&str：借用视图，参数 90% 选它。Cow<str>：可能借可能拥有，sanitize 等大多透传少量修改的场景。Box<str>：精确大小、不可变，海量字符串省 capacity 那 8 字节。",
+    "key_points": ["String for building", "&str for parameters", "Cow for usually-borrow-sometimes-own", "Box<str> for immutable storage"],
+    "follow_ups": ["What's the layout difference between String and Box<str>?", "When would you use Arc<str>?"]
+  },
+  {
+    "topic_slug": "rust-collections",
+    "question_en": "You profiled a hot loop and HashMap lookup is the bottleneck. Walk me through your optimization options.",
+    "question_zh": "热路径上 HashMap 查询是瓶颈，你的优化思路？",
+    "sample_answer_en": "First, swap the hasher — std's SipHash is DOS-resistant but slow; `ahash`, `fxhash`, or `rustc_hash` are 2–5× faster for non-adversarial inputs. Second, if keys are small fixed-size ints, consider a `Vec` indexed by key or a `BTreeMap` (better cache behavior for tiny maps). Third, if keys are strings that get hashed repeatedly, pre-hash and key the map on the hash itself. Fourth, look at whether `entry` is reducing two lookups to one — many naive uses still call `contains_key` then `insert`. Finally, profile, don't guess — the right answer depends on key distribution and the access pattern.",
+    "sample_answer_zh": "换 hasher（ahash/fxhash 比 SipHash 快 2-5 倍）；小整数键考虑 Vec 索引或 BTreeMap；字符串键考虑预哈希；用 entry 把两次查询并成一次；最后 profile 验证而不是猜。",
+    "key_points": ["faster hasher", "Vec/BTreeMap for small int keys", "pre-hash string keys", "entry over contains+insert", "measure don't guess"],
+    "follow_ups": ["What about Robin Hood hashing or SwissTable?", "When does interning win over a HashMap?"]
+  },
+
+  {
+    "topic_slug": "rust-error-handling",
+    "question_en": "Walk me through the difference between `panic!`, `Result`, and `unwrap`. When do you reach for each?",
+    "question_zh": "panic!、Result、unwrap 各自什么时候用？",
+    "sample_answer_en": "`panic!` is for unrecoverable invariant violations — something the program literally cannot continue from, like an index off the end of a fixed-size array. `Result` is for recoverable errors — anything caused by the outside world, like I/O, network, parsing user input. `unwrap` is `panic` in disguise on `Err`, so I treat it the same as `panic`: fine in tests and prototypes, almost never in production code. The rule I use: if a human could plausibly cause this error by doing something normal, it's `Result`; if it's a bug, it's `panic`.",
+    "sample_answer_zh": "panic：不可恢复的不变式违背（程序逻辑错）。Result：可恢复错误（来自外部世界——IO/网络/输入）。unwrap 等价于 panic，原型可以、生产几乎不行。判断标准：人能正常触发就 Result，是 bug 就 panic。",
+    "key_points": ["panic for bugs/invariants", "Result for external failures", "unwrap is panic", "production vs prototype"],
+    "follow_ups": ["What's `expect` good for and how is it different from `unwrap`?", "When would `unwrap` actually be defensible in production?"]
+  },
+  {
+    "topic_slug": "rust-error-handling",
+    "question_en": "Explain how the `?` operator works and how its desugaring differs between Option and Result.",
+    "question_zh": "`?` 是怎么工作的？Option 和 Result 的脱糖有什么不同？",
+    "sample_answer_en": "`expr?` roughly desugars to `match expr { Ok(v) => v, Err(e) => return Err(From::from(e)) }` for Result, and similarly for Option with `None => return None`. The key bit is `From::from`: the inner error gets converted into whatever error type the enclosing function returns, so `?` chains naturally across heterogeneous error types as long as you've wired up `From` impls or used `anyhow` / `thiserror`. The actual desugaring goes through the `Try` trait so other types like ControlFlow work too. The function's return type must agree — you can't `?` a Result inside a function returning Option without `.ok()` first.",
+    "sample_answer_zh": "Result 的 `expr?` 大致脱糖成 `match { Ok(v) => v, Err(e) => return Err(From::from(e)) }`；Option 类似返回 None。关键是 `From::from`，让异质错误串起来。实际走 Try trait。函数返回类型必须匹配——Option 函数里 `?` 一个 Result 要先 `.ok()`。",
+    "key_points": ["? desugars via Try", "From::from for error conversion", "must match return type", "Option uses None"],
+    "follow_ups": ["What's the Try trait actually look like?", "How would you propagate a Result through a function returning Option?"]
+  },
+  {
+    "topic_slug": "rust-error-handling",
+    "question_en": "Compare `anyhow` and `thiserror`. When would you reach for each in production code?",
+    "question_zh": "anyhow 和 thiserror 怎么选？",
+    "sample_answer_en": "`thiserror` is for *defining* error types — a library exposes a structured `enum Error { Io(io::Error), Parse(String), … }` so callers can `match` on variants and respond differently. `anyhow` is for *consuming* errors — an application catches anything that can fail and just wants context, backtrace, and propagation without exhaustively listing types. The rule of thumb: libraries return `Result<T, MyError>` built with thiserror; binaries return `anyhow::Result<T>` and `.context(\"failed to load config\")` at each boundary. Mixing is fine — application code uses anyhow on top of libraries that expose thiserror types.",
+    "sample_answer_zh": "thiserror 用于库——定义结构化 enum，调用方可以 match 不同 variant。anyhow 用于应用——只想要 context 和 backtrace，不想穷举类型。库出 thiserror，二进制用 anyhow，并在边界加 .context。两者完全可以叠用。",
+    "key_points": ["thiserror for libraries", "anyhow for applications", "context() for breadcrumbs", "can layer them"],
+    "follow_ups": ["What does anyhow's backtrace cost in release builds?", "How does thiserror's #[from] interact with ? operator?"]
+  },
+  {
+    "topic_slug": "rust-error-handling",
+    "question_en": "What's an idiomatic way to add context to an error as it propagates, and why do you need it?",
+    "question_zh": "错误向上传时怎么优雅地加 context？为什么需要？",
+    "sample_answer_en": "With anyhow, `.with_context(|| format!(\"reading {path}\"))` wraps the inner error with a human-readable layer; with a custom error type, you typically have a variant that carries inner + a string. You need context because raw errors usually say *what* went wrong but not *what we were trying to do* — `No such file or directory` is useless without knowing which file. Each layer that handles I/O or external calls should add a one-line breadcrumb, so the printed chain reads top-down like a story: \"loading user profile → fetching avatar → reading /var/cache/avatars/u123.png → No such file or directory\". This makes triage from logs 10× faster.",
+    "sample_answer_zh": "anyhow 用 `.with_context(|| \"...\")`，自定义错误带 inner + 描述字段。raw error 只说 \"什么坏了\"，不说 \"在干什么\"。每个 I/O/外部调用边界加一行面包屑，最终错误链读起来像故事——从日志定位故障的速度差 10 倍。",
+    "key_points": ["with_context wraps errors", "raw errors lack intent", "breadcrumbs at boundaries", "log triage speed"],
+    "follow_ups": ["When does context become noise?", "How do you avoid double-context when an error is caught and re-raised?"]
+  },
+  {
+    "topic_slug": "rust-error-handling",
+    "question_en": "When is `panic::catch_unwind` the right tool, and what are its limitations?",
+    "question_zh": "`panic::catch_unwind` 什么时候该用？有什么限制？",
+    "sample_answer_en": "It's the right tool when a thread or task boundary needs to survive an upstream panic — typical use cases are FFI boundaries where unwinding into C is UB, threadpool workers that should log and continue, and test harnesses. Limitations: it only works if the panic strategy is `unwind` (not `abort`); the value inside must be `UnwindSafe` or you have to opt in with `AssertUnwindSafe`; and it doesn't catch every kind of crash, just Rust panics — segfaults from `unsafe` blow through it. So I think of it as \"convert this Rust-level abort into an Err\", not as a general try/catch.",
+    "sample_answer_zh": "FFI 边界（unwind 到 C 是 UB）、线程池 worker、测试框架。限制：abort 策略下不工作；要求 UnwindSafe（或 AssertUnwindSafe）；只接 Rust 的 panic，segfault 兜不住。把它当 \"把 Rust 级 abort 转成 Err\"，不是 try/catch。",
+    "key_points": ["FFI safety", "panic = unwind required", "UnwindSafe constraint", "not a general try/catch"],
+    "follow_ups": ["How does tokio's task::spawn handle panics?", "What's the cost of catch_unwind in the happy path?"]
+  },
+
+  {
+    "topic_slug": "rust-generics-traits",
+    "question_en": "What's the difference between static and dynamic dispatch in Rust? When would you choose `impl Trait` vs `Box<dyn Trait>`?",
+    "question_zh": "Rust 的静态分发和动态分发有什么区别？`impl Trait` 和 `Box<dyn Trait>` 怎么选？",
+    "sample_answer_en": "Static dispatch monomorphizes — the compiler generates a specialized copy of the function for each concrete type, so calls are direct and inlinable but binary size grows. Dynamic dispatch via `dyn Trait` uses a vtable: one shared function, indirect call through a pointer, no monomorphization bloat but a small per-call cost. Reach for `impl Trait` (static) in hot paths or when you want maximum inlining; reach for `Box<dyn Trait>` when you need a heterogeneous collection (`Vec<Box<dyn Animal>>`), when you want to hide the concrete type behind an API boundary, or when binary size matters more than per-call speed. The performance gap is usually tiny — pick on ergonomics first.",
+    "sample_answer_zh": "静态分发=单态化（每个具体类型生成一份代码，调用直接可内联，体积膨胀）；动态分发=vtable（一份代码、间接调用、有少量代价）。impl Trait 适合热路径和需要内联；Box<dyn Trait> 适合异构集合、API 边界隐藏类型、关心体积。性能差距通常很小，先看人体工学。",
+    "key_points": ["monomorphization vs vtable", "binary size vs call overhead", "heterogeneous collections need dyn", "ergonomics first"],
+    "follow_ups": ["What constraints does `dyn Trait` impose on the trait itself (object safety)?", "How does `Box<dyn Trait + Send>` differ?"]
+  },
+  {
+    "topic_slug": "rust-generics-traits",
+    "question_en": "Explain trait bounds, `where` clauses, and when you'd reach for one syntax over the other.",
+    "question_zh": "trait bound 和 where 子句什么时候用哪种？",
+    "sample_answer_en": "Inline bounds like `fn foo<T: Display + Clone>(x: T)` are fine for one or two short constraints. `where` clauses move the bounds to a separate region — `fn foo<T>(x: T) where T: Display + Clone` — which keeps the function signature legible when bounds get complex, especially with associated types like `where T::Item: Debug`. `where` is also strictly more expressive: only `where` can express bounds on associated types or constraints that aren't on a generic parameter at all (`where Self: Sized`). My rule is: one short bound inline, anything more or anything involving associated types in a `where`.",
+    "sample_answer_zh": "短的（一两个）用内联；多约束、涉及关联类型（where T::Item: Debug）、或约束不在泛型参数上（where Self: Sized）必须用 where。where 表达力严格更强。",
+    "key_points": ["inline for short bounds", "where for complex/associated bounds", "where is strictly more expressive", "readability driven"],
+    "follow_ups": ["When do you need higher-ranked trait bounds (HRTB) like `for<'a>`?", "What's a `?Sized` bound?"]
+  },
+  {
+    "topic_slug": "rust-generics-traits",
+    "question_en": "What are lifetimes in Rust, what problem do they solve, and what does the elision rule do?",
+    "question_zh": "生命周期是什么？解决什么问题？省略规则在做什么？",
+    "sample_answer_en": "Lifetimes are compile-time labels on references that tell the borrow checker how long each reference must remain valid. They don't change runtime behavior — there's no lifetime value at runtime — they're just constraints for the static check that prevents dangling references. Elision rules are sugar: when a function has one input reference, it's assumed to flow to the output; when there's `&self`, output references borrow from self. So you write `fn first_word(s: &str) -> &str`, and the elision rule fills in the equivalent `<'a>(s: &'a str) -> &'a str`. You only write lifetimes explicitly when the rules can't disambiguate.",
+    "sample_answer_zh": "生命周期=编译期标签，告诉借用检查器引用的有效范围；运行时无开销。省略规则：单个输入引用流向输出；&self 时输出借自 self。`fn first_word(s: &str) -> &str` 实际是 `<'a>(s: &'a str) -> &'a str`。规则不够时才显式写。",
+    "key_points": ["compile-time only", "prevent dangling references", "elision rules for common cases", "explicit when ambiguous"],
+    "follow_ups": ["What's the 'static lifetime really mean?", "Why can't a struct hold a `&str` without a lifetime parameter?"]
+  },
+  {
+    "topic_slug": "rust-generics-traits",
+    "question_en": "What's the orphan rule and what problem does it solve? How does the newtype pattern work around it?",
+    "question_zh": "什么是孤儿规则？要解决什么问题？newtype 怎么绕过？",
+    "sample_answer_en": "The orphan rule says you can implement a trait for a type only if either the trait or the type is defined in your crate. It prevents two unrelated crates from both implementing the same trait for the same foreign type, which would be ambiguous and break coherence. The newtype pattern wraps a foreign type in a struct you own: `struct MyVec<T>(Vec<T>);` and then you can `impl Display for MyVec<T>` because `MyVec` is local. `#[repr(transparent)]` keeps the wrapper layout-compatible at zero runtime cost, which is what makes the pattern essentially free.",
+    "sample_answer_zh": "孤儿规则：trait 或类型至少一个在你的 crate 里才能 impl。防止两个无关 crate 给同一外部类型实现同 trait、破坏 coherence。newtype 用 `struct MyVec<T>(Vec<T>)` 包一层、加 #[repr(transparent)] 零开销，就能合法 impl 外部 trait。",
+    "key_points": ["coherence guarantee", "trait OR type must be local", "newtype wraps foreign type", "repr(transparent) for zero cost"],
+    "follow_ups": ["What if both crates upgrade and both add the impl?", "What's the difference between coherence and orphan rules?"]
+  },
+  {
+    "topic_slug": "rust-generics-traits",
+    "question_en": "Explain associated types vs generic type parameters on a trait. Why does `Iterator` use `type Item` instead of `Iterator<Item>`?",
+    "question_zh": "trait 的关联类型和泛型参数有什么区别？为什么 Iterator 用 `type Item` 而不是 `Iterator<Item>`？",
+    "sample_answer_en": "A generic parameter like `Iterator<Item>` lets one type implement the trait many times with different `Item` types, which is rarely what you want. An associated type fixes one `Item` per `impl`, so each implementor commits to one element type — much closer to how iteration actually works in practice. Calling `for x in iter` then has unambiguous typing without you specifying the element type at the call site. Generic parameters on traits are for things like `From<T> for U` where there are genuinely many conversions per source type.",
+    "sample_answer_zh": "泛型参数允许一个类型多次 impl 该 trait 用不同参数——通常不是你想要的。关联类型一个 impl 一个 Item，对应 \"一种迭代器一种元素\" 的现实，调用方写 `for x in iter` 不用标元素类型。`From<T> for U` 那种 \"一种源很多目标\" 才用泛型参数。",
+    "key_points": ["one impl per type with associated", "many impls per type with generic", "call-site type inference", "From/Into use generic"],
+    "follow_ups": ["What's GAT and what does it enable?", "Why can't `Iterator::Item` be expressed as a generic parameter without breaking inference?"]
+  },
+
+  {
+    "topic_slug": "rust-testing",
+    "question_en": "What's the difference between unit tests, integration tests, and doc tests in Rust? Where does each live?",
+    "question_zh": "Rust 里 unit / integration / doc test 分别在哪写？有什么区别？",
+    "sample_answer_en": "Unit tests live next to the code in a `#[cfg(test)] mod tests { … }` block at the bottom of each file — they can test private items because they're in the same module. Integration tests live in `tests/*.rs` at the crate root and only see the public API, simulating how an external user would consume the crate. Doc tests are code in `///` documentation blocks — Cargo compiles and runs them, so your examples are guaranteed to actually work and stay in sync with the API. Each runs in a separate binary, so they don't share state, and integration tests have noticeable startup overhead per file.",
+    "sample_answer_zh": "Unit 在文件底部 #[cfg(test)] mod tests，能测私有项。Integration 在 crate 根的 tests/，只看公开 API。Doc test 在 /// 里，保证示例真能跑。三者各自独立二进制，integration 每文件有启动开销。",
+    "key_points": ["unit can test private", "integration tests public API", "doc tests keep examples honest", "separate binaries"],
+    "follow_ups": ["How do you share helper code across integration tests?", "What's the cost of a doc test that allocates?"]
+  },
+  {
+    "topic_slug": "rust-testing",
+    "question_en": "How do you test code that uses async/await? Walk me through tokio's #[tokio::test] versus building a runtime manually.",
+    "question_zh": "async 代码怎么测？`#[tokio::test]` 和手搭 runtime 有什么区别？",
+    "sample_answer_en": "`#[tokio::test]` wraps your `async fn` in a fresh runtime per test, so you just write `async fn it_works() { … }` and tokio handles the boilerplate. Manual runtime construction — `let rt = tokio::runtime::Builder::new_current_thread().build().unwrap(); rt.block_on(async { … });` — is needed when you want to customize the runtime, share it across tests, or test multi-threaded behavior with `Builder::new_multi_thread`. The attribute form accepts flavor and worker_threads arguments, so most cases stay clean: `#[tokio::test(flavor = \"multi_thread\")]`. I default to the attribute and only drop down to manual builders for performance tests or when measuring runtime behavior itself.",
+    "sample_answer_zh": "`#[tokio::test]` 自动为每个测试搭一个 runtime。手搭用 `Builder::new_current_thread()/new_multi_thread().build()/block_on`，适合定制 runtime、跨测试共享或测多线程行为。属性形式接 flavor 参数，多数场景够用——只有 perf 测和测 runtime 本身才下沉到手搭。",
+    "key_points": ["attribute per test", "manual for customization", "multi_thread flavor", "default to attribute"],
+    "follow_ups": ["What does pause-and-advance time give you for testing timeouts?", "How would you test a function that spawns its own task?"]
+  },
+  {
+    "topic_slug": "rust-testing",
+    "question_en": "What's `#[should_panic]` good for, what are its pitfalls, and what's a better pattern in many cases?",
+    "question_zh": "`#[should_panic]` 用来做什么？有什么坑？什么时候有更好的替代？",
+    "sample_answer_en": "It marks a test that's expected to panic, which is useful for verifying invariants like array bounds or assertions. The pitfall is that *any* panic counts as success unless you tighten with `#[should_panic(expected = \"substring\")]` — so a typo or unrelated panic earlier in the test would still mark it green. A better pattern when the code can return a `Result` is to assert on `Err(matching variant)`, which is more precise and gives a real error message on failure. I reserve `should_panic` for genuinely panic-only APIs like `slice[idx]` or `unwrap` semantics.",
+    "sample_answer_zh": "标记预期 panic 的测试；坑是 \"任何 panic\" 都算通过，须带 `expected = \"...\"` 收紧。能返回 Result 的代码改用 `assert!(matches!(err, ...))` 更精确、报错更清楚。`should_panic` 留给真正只能 panic 的 API（unwrap、越界）。",
+    "key_points": ["any panic = pass without expected", "expected substring tightens", "Result + matches! is better", "reserve for panic-only APIs"],
+    "follow_ups": ["How would `assert_matches!` change this?", "What's a way to test panic messages exactly, not just substring?"]
+  },
+  {
+    "topic_slug": "rust-testing",
+    "question_en": "How would you set up integration tests that need a real database and run in parallel without interfering with each other?",
+    "question_zh": "需要真实数据库的集成测试，如何并行且互不干扰？",
+    "sample_answer_en": "Two main patterns. One: per-test schema — each test creates a fresh schema or database with a unique name, runs migrations, and drops it on teardown; expensive but bullet-proof isolation. Two: per-test transaction — open a transaction at the start, roll back at the end; very fast but requires the code under test to honor the transaction handle. For Postgres I often use the schema-per-test pattern with a connection pool that prefixes a random suffix. Also crucial: use `cargo test -- --test-threads=N` deliberately if the database can't handle full parallelism, and always assert in a teardown helper, not just in the test body, so a panic still cleans up.",
+    "sample_answer_zh": "两种主流：per-test schema（每测建独立 schema/库、跑迁移、teardown 删除，慢但隔离）；per-test transaction（开事务，结束回滚，快但要求代码接受外部事务）。Postgres 常用 schema 法，连接池前缀随机。配合 `--test-threads` 控制并发，teardown 写到 helper 里保证 panic 也能清理。",
+    "key_points": ["schema-per-test isolation", "transaction-per-test speed", "test-threads control", "teardown survives panic"],
+    "follow_ups": ["What's testcontainers and when does it pay off?", "How do you handle database fixtures vs each test creating its own data?"]
+  },
+  {
+    "topic_slug": "rust-testing",
+    "question_en": "Compare property-based testing with `proptest` to traditional example-based tests. When does each shine?",
+    "question_zh": "proptest 这种性质测试和传统例子测试，怎么选？",
+    "sample_answer_en": "Example-based tests check specific inputs you wrote down — `assert_eq!(reverse(\"hello\"), \"olleh\")`. Property-based tests generate hundreds of random inputs and check a *property* — `for any string s, reverse(reverse(s)) == s`. Properties are great for invariants — encode/decode roundtrips, sort idempotence, parser stability — they catch edge cases you didn't think of. Examples are still important for documenting expected behavior and pinning down regressions of a specific bug. I typically write properties first to find bugs, then add example tests for the specific cases the properties uncover so the bug stays fixed.",
+    "sample_answer_zh": "例子测试覆盖具体输入；性质测试随机生成大量输入、检查 invariant（reverse 两次还原、解析编码 roundtrip、排序幂等）。性质找你没想到的边界；例子固定具体 bug 的回归。我通常性质先发现，再补例子钉死。",
+    "key_points": ["invariants vs specific cases", "find unknown edge cases", "regression pinning", "complement each other"],
+    "follow_ups": ["How does proptest shrink a failing case to a minimal counterexample?", "What's a good property to write for a parser?"]
+  },
+
+  {
+    "topic_slug": "rust-io-project",
+    "question_en": "The minigrep tutorial splits the project into a binary (`main.rs`) and a library (`lib.rs`). Why is this split worth doing for any non-trivial project?",
+    "question_zh": "minigrep 把项目拆成 bin + lib——任何稍大的项目都该这么做，为什么？",
+    "sample_answer_en": "The binary becomes a thin shell: parse args, set up logging, call the library, render output. All the actual logic lives in the library, which means tests can exercise it without spawning a process or mocking stdout. It also opens the door to reusing the library in other binaries — a debug CLI, a benchmark harness, a wasm build. Compile times improve too because changing `main.rs` doesn't trigger recompiling the library. Same pattern shows up across the Rust ecosystem: `ripgrep` is `librg` plus a small `main.rs`, `cargo` is `cargo-the-lib` plus the binary.",
+    "sample_answer_zh": "二进制变薄壳：解析参数、设日志、调库、渲染输出。逻辑在 lib 里——测试不用 spawn 进程；可复用到其他 bin（debug CLI、bench、wasm）；改 main 不重编 lib，编译更快。ripgrep、cargo 都是这模式。",
+    "key_points": ["thin binary shell", "testable without process", "lib reuse across binaries", "incremental compile"],
+    "follow_ups": ["When does this split actually slow you down?", "How would you structure a multi-binary tool like cargo's subcommands?"]
+  },
+  {
+    "topic_slug": "rust-io-project",
+    "question_en": "Critique this signature from the early tutorial: `fn parse_config(args: &[String]) -> (String, String)`. What's wrong with it from a senior perspective?",
+    "question_zh": "从 senior 角度看 `fn parse_config(args: &[String]) -> (String, String)` 有什么问题？",
+    "sample_answer_en": "Four issues. First, the tuple return loses field names — callers have to remember position. Second, no error handling: argument parsing absolutely can fail and `(String, String)` lies about that. Third, returning `String` clones what's already in `args` for no reason — taking `args: Vec<String>` by value and moving the slots out, or using lifetimes with `&'a str` returns, would avoid the alloc. Fourth, `&[String]` is more restrictive than necessary; callers might have `&[&str]` or an iterator. I'd rewrite as `fn parse_config(args: impl IntoIterator<Item = String>) -> Result<Config, ConfigError>` returning a named struct.",
+    "sample_answer_zh": "四个问题：tuple 丢字段名；没有错误处理（参数解析会失败）；返回 String 浪费克隆；&[String] 过于死板。改成 `fn parse_config(args: impl IntoIterator<Item=String>) -> Result<Config, ConfigError>` 加命名 struct。",
+    "key_points": ["named struct over tuple", "Result for fallible parsing", "avoid unnecessary clones", "looser input bound"],
+    "follow_ups": ["When would you use clap instead of writing this by hand?", "What's the cost of `impl IntoIterator` in monomorphization?"]
+  },
+  {
+    "topic_slug": "rust-io-project",
+    "question_en": "The tutorial introduces reading an env var with `env::var(\"IGNORE_CASE\").is_ok()`. What's wrong with treating env vars as booleans this way?",
+    "question_zh": "用 `env::var(\"IGNORE_CASE\").is_ok()` 把环境变量当布尔有什么问题？",
+    "sample_answer_en": "It conflates \"set\" with \"truthy\" — `IGNORE_CASE=0` and `IGNORE_CASE=false` both make `is_ok()` return true, which surprises users who type the obvious thing. It also can't distinguish unset from empty, which sometimes matters. A safer parse: read the var, lowercase it, accept `1`, `true`, `yes`, `on` as true and `0`, `false`, `no`, `off`, empty, or unset as false, and reject everything else with a clear error. Or just use a config library or `clap` env-var support which handles this consistently. The principle: env vars are typed contracts with users, treat them like input parsing.",
+    "sample_answer_zh": "把 \"已设置\" 等同于 \"为真\"——`IGNORE_CASE=0` 反而生效，反直觉。也分不清 unset 和空字符串。应当显式接受 1/true/yes/on，拒绝其它。或者直接用 clap 的 env 支持。环境变量就是输入，照输入解析待。",
+    "key_points": ["set != truthy", "explicit boolean parsing", "unset vs empty distinction", "treat env as input"],
+    "follow_ups": ["How does clap's #[arg(env = ...)] handle this?", "What's a 'feature flag' env var convention you've used?"]
+  },
+  {
+    "topic_slug": "rust-io-project",
+    "question_en": "Walk through how you'd add a streaming mode to minigrep that doesn't load the whole file into memory.",
+    "question_zh": "怎么给 minigrep 加流式模式，不把整个文件读进内存？",
+    "sample_answer_en": "Open the file with `File::open`, wrap it in `BufReader::new`, and iterate via `lines()` to get one `Result<String, io::Error>` per line. For each line, apply the search predicate and print matches as they come, so memory stays bounded regardless of file size. The contains-substring check stays the same, but for large files I'd also consider `memchr` for the substring scan, which is SIMD-accelerated. The trade-off vs the in-memory version: streaming can't easily do multi-line matches, and printing happens in chunks rather than all-at-once which can change output ordering when piped.",
+    "sample_answer_zh": "File::open → BufReader → lines()，每行单独搜索打印，内存恒定。子串搜索可换 memchr（SIMD 加速）。代价：不易做多行匹配；流式输出顺序和全量缓冲版不完全一样（管道场景）。",
+    "key_points": ["BufReader + lines", "constant memory", "memchr for SIMD scan", "tradeoffs vs buffered"],
+    "follow_ups": ["What about reading stdin so it works in a pipeline?", "How would you parallelize streaming search across cores?"]
+  },
+  {
+    "topic_slug": "rust-io-project",
+    "question_en": "If you were taking minigrep from tutorial-quality to production-quality, what's your top-5 list of changes?",
+    "question_zh": "把 minigrep 从教程级提到生产级，你的前 5 项改造？",
+    "sample_answer_en": "One: replace ad-hoc arg parsing with `clap` — gives you `--help`, env-var defaults, subcommands, and validation for free. Two: structured errors with `thiserror` in the library and `anyhow` in the binary with `.context` at every I/O boundary. Three: streaming search with `BufReader` and `memchr` so it scales to gigabyte files. Four: parallelize across files (or chunks) with `rayon` since grep is embarrassingly parallel and most cores are wasted otherwise. Five: structured output options — JSON via `--json`, color via `--color=auto`, and tests for the formatter so the output contract doesn't drift.",
+    "sample_answer_zh": "1) clap 解析参数；2) thiserror + anyhow 结构化错误 + context；3) BufReader + memchr 流式；4) rayon 并行（按文件或块）；5) `--json/--color` 结构化输出并测试格式契约。",
+    "key_points": ["clap", "thiserror+anyhow", "streaming + memchr", "rayon parallelism", "structured output"],
+    "follow_ups": ["What does ripgrep actually do for performance that minigrep doesn't?", "How would you benchmark these changes?"]
+  },
+
+  {
+    "topic_slug": "rust-closures-iter",
+    "question_en": "Explain `Fn`, `FnMut`, and `FnOnce`. How does the compiler decide which trait a closure implements?",
+    "question_zh": "Fn / FnMut / FnOnce 有什么区别？编译器怎么决定一个闭包实现了哪个？",
+    "sample_answer_en": "`FnOnce` consumes captured variables — can only be called once. `FnMut` mutably borrows captures — can be called many times but needs `&mut self`. `Fn` immutably borrows captures — callable many times through `&self`. The compiler infers based on how the closure body uses each capture: any move-by-value of a capture forces `FnOnce`; any mutation forces `FnMut`; only reads keep it `Fn`. Every closure also implements the looser traits automatically — an `Fn` closure also implements `FnMut` and `FnOnce`, so accepting `FnOnce` is the most permissive bound for a one-shot call.",
+    "sample_answer_zh": "FnOnce 消耗捕获，只能调一次；FnMut 可变借用，可多次调；Fn 不可变借用，多次调。编译器看 body：move 强制 FnOnce、修改强制 FnMut、只读为 Fn。每个闭包自动实现宽松那些——Fn 也是 FnMut 也是 FnOnce。",
+    "key_points": ["consume / mutate / read", "compiler infers from body", "subtyping among the three", "FnOnce is most permissive bound"],
+    "follow_ups": ["What's `move ||` actually do and when do you need it?", "How would you store a heterogeneous list of closures?"]
+  },
+  {
+    "topic_slug": "rust-closures-iter",
+    "question_en": "What does it mean that Rust iterators are \"lazy\", and what's the cost of a chain like `.map(...).filter(...).map(...).collect()`?",
+    "question_zh": "\"Rust 迭代器是惰性的\" 是什么意思？`.map.filter.map.collect()` 链的实际成本？",
+    "sample_answer_en": "Lazy means each adapter just wraps the previous iterator in a new type — none of the work happens until you call a consumer like `collect`, `sum`, or a `for` loop. The chain `.map().filter().map().collect()` builds a single fused iterator type at compile time; each element flows through the whole pipeline once before the next element starts, so there's no intermediate Vec. With inlining the whole thing usually compiles down to one loop indistinguishable from a hand-written version. So the abstraction cost is essentially zero — that's why iterator chains are idiomatic even in hot loops.",
+    "sample_answer_zh": "惰性=adapter 只包装类型，不做事；消费者（collect/sum/for）触发实际计算。链路是编译期 fused 类型——每个元素流过整个 pipeline 一次，没有中间 Vec。内联后等价于手写循环。抽象成本接近零，所以热路径里这种链是地道写法。",
+    "key_points": ["adapters wrap, consumers drive", "no intermediate collections", "fused at compile time", "zero-cost abstraction"],
+    "follow_ups": ["When does the iterator chain actually NOT compile down to a clean loop?", "What's `Iterator::fuse` and when does it matter?"]
+  },
+  {
+    "topic_slug": "rust-closures-iter",
+    "question_en": "Compare `iter()`, `iter_mut()`, and `into_iter()` on a Vec. What does each yield and when do you reach for it?",
+    "question_zh": "Vec 的 iter / iter_mut / into_iter 各产出什么？什么时候用哪个？",
+    "sample_answer_en": "`iter()` yields `&T` — immutable borrows, the Vec is still usable after. `iter_mut()` yields `&mut T` — mutable borrows for in-place updates, again Vec survives. `into_iter()` yields `T` — moves the values out, consuming the Vec. A `for x in v` loop calls `into_iter` and moves the Vec; `for x in &v` calls `iter` and just borrows. Most loops want `&v` because they don't need ownership; reach for `into_iter` when you're transforming and discarding the original collection.",
+    "sample_answer_zh": "iter 给 &T、iter_mut 给 &mut T、into_iter 给 T 并消耗 Vec。`for x in v` = into_iter（移动）；`for x in &v` = iter（借用）。多数循环用 &v；要转换并丢弃原集合时用 into_iter。",
+    "key_points": ["&T / &mut T / T", "into_iter consumes", "for loop sugar maps to these", "default to borrow"],
+    "follow_ups": ["What does `IntoIterator` do as a trait?", "Why does HashMap have weird tuple yields for these?"]
+  },
+  {
+    "topic_slug": "rust-closures-iter",
+    "question_en": "Walk me through what `.collect::<Result<Vec<_>, _>>()` does. Why is this so much better than a manual loop?",
+    "question_zh": "`.collect::<Result<Vec<_>, _>>()` 在干嘛？为什么比手写循环好？",
+    "sample_answer_en": "It turns an iterator of `Result<T, E>` into a single `Result<Vec<T>, E>`: collect succeeds with the full Vec only if every item was `Ok`, and short-circuits to the first `Err` otherwise. It's the moral equivalent of a manual loop with `?` inside, but it's one line and the type spells out the intent. The same trick works for `Option<Vec<T>>`. The hidden gem is that collect can also turn `Result<T,E>` items into other collections — `HashMap`, `BTreeMap`, even a custom `FromIterator` — using the same short-circuit logic.",
+    "sample_answer_zh": "把 `Iterator<Item=Result<T,E>>` 收成 `Result<Vec<T>,E>`——全 Ok 才有 Vec，否则短路到首个 Err。等价手写循环 + `?` 但一行更清晰。同样适用 Option。collect 还能短路收进 HashMap/BTreeMap 等任何 FromIterator。",
+    "key_points": ["short-circuit on first Err", "implicit FromIterator", "concise vs loop+?", "works for HashMap too"],
+    "follow_ups": ["What if you want to gather all errors instead of stopping at the first?", "How does this compose with itertools' `partition_result`?"]
+  },
+  {
+    "topic_slug": "rust-closures-iter",
+    "question_en": "Show me a hot-path optimization where switching from a closure to a function pointer matters.",
+    "question_zh": "给一个 \"闭包换函数指针\" 在热路径上有意义的例子。",
+    "sample_answer_en": "Most of the time closures and function pointers compile to the same code thanks to monomorphization. The case where it matters: storing many heterogeneous callbacks in a `Vec<Box<dyn Fn>>` — each box is a heap allocation and an indirect call. If your callbacks have no captured state, switching to `Vec<fn(...)>` makes each entry a single pointer, no heap, and the call is still indirect but cheaper than dyn dispatch. Real example: a parser dispatching on a token type to a handler function — function pointers compress the table dramatically. Caveat: function pointers can't capture anything, so this only works if state lives elsewhere.",
+    "sample_answer_zh": "通常单态化后等价。一个真正有差的场景：`Vec<Box<dyn Fn>>` 异构回调——每个 Box 一次堆分配 + 间接调用。若回调无捕获，换 `Vec<fn(...)>` 每项一个指针、无堆。典型场景：parser 按 token 类型分发到处理函数。代价：fn 指针不能捕获，状态要外放。",
+    "key_points": ["dyn Fn has heap + indirect cost", "fn pointer is one word", "no captures allowed", "dispatch tables"],
+    "follow_ups": ["What's the cost difference of `Box<dyn Fn>` vs `Arc<dyn Fn>` in a hot loop?", "How would you store a heterogeneous mix with captures cheaply?"]
+  },
+
+  {
+    "topic_slug": "rust-cargo",
+    "question_en": "Walk me through how Cargo features work and why they're sometimes a footgun.",
+    "question_zh": "Cargo 的 feature 怎么工作？为什么有时是坑？",
+    "sample_answer_en": "Features are named build switches declared in `[features]`; each can pull in optional dependencies or other features. Cargo unifies features across the whole dep graph — if crate A enables `serde/derive` and crate B doesn't, the unified resolution turns it on for everyone. The footgun: this means features must be *additive* — enabling more never breaks anyone. If you ever write a feature that disables something (`#[cfg(not(feature = \"x\"))]` removing an API), some downstream user enabling x will break a sibling that wanted x off. Tools like `cargo hack --feature-powerset` help test all combinations because the resolver picks the union, not your default.",
+    "sample_answer_zh": "feature 是命名构建开关，能引入可选依赖或其它 feature。Cargo 把整个 dep graph 的 feature 取并集——A 开了 `serde/derive` 全图都开。坑：feature 必须是加性（开启不破坏任何人）；写 \"开启 X 就移除 API\" 会害到希望关 X 的兄弟。`cargo hack --feature-powerset` 帮你测组合。",
+    "key_points": ["feature unification", "must be additive", "no api removal on enable", "powerset testing"],
+    "follow_ups": ["What's a 'default-features = false' and when do you need it?", "How does `dep:foo` syntax help?"]
+  },
+  {
+    "topic_slug": "rust-cargo",
+    "question_en": "Compare `[dependencies]`, `[dev-dependencies]`, and `[build-dependencies]`. What goes where and why does it matter for binary size and compile time?",
+    "question_zh": "dependencies / dev-dependencies / build-dependencies 各是什么？对体积和编译有什么影响？",
+    "sample_answer_en": "`dependencies` ship in your binary and library. `dev-dependencies` are only used by tests, examples, and benchmarks — they don't end up in your release artifact, so you can pull in heavy stuff like criterion or proptest without users paying for it. `build-dependencies` are linked into `build.rs` only — also absent from the final binary. Putting `tempfile` in `dependencies` when only your tests use it is a common mistake that bloats downstream binaries and adds compile time everyone has to pay. The fix is moving it; cargo-udeps and `cargo machete` can flag mismatches automatically.",
+    "sample_answer_zh": "dependencies 进最终二进制；dev 仅测试/例子/bench；build 仅 build.rs。把 tempfile 这种放进 dependencies 是常见错误——拖累下游编译和体积。cargo-udeps / cargo machete 能自动揪出错配。",
+    "key_points": ["dev/build absent from binary", "test-only deps in dev", "build.rs deps in build", "tools to audit"],
+    "follow_ups": ["When would you have the same dep in both [dependencies] and [build-dependencies]?", "What's the difference in versions resolved for each section?"]
+  },
+  {
+    "topic_slug": "rust-cargo",
+    "question_en": "Your CI build takes 12 minutes. Walk through the cargo-specific levers you'd pull to speed it up.",
+    "question_zh": "CI 跑 12 分钟，cargo 这边有哪些加速手段？",
+    "sample_answer_en": "First, cache `~/.cargo/registry` and the workspace `target/` directory keyed on `Cargo.lock` — incremental builds reuse all upstream crate work. Second, switch the registry to sparse — set `CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse` (default since 1.70) to skip the slow git index. Third, set `CARGO_INCREMENTAL=0` in CI; incremental adds overhead for one-shot builds and the cache from a previous run hits the same effect. Fourth, use `cargo-chef` or `sccache` to skip rebuilding upstream deps on dep-only changes. Fifth, parallelize: split `cargo test` into separate jobs by test target, and run clippy and fmt in parallel with tests since they don't share state.",
+    "sample_answer_zh": "缓存 ~/.cargo/registry 和 target/（key 用 Cargo.lock）；切 sparse registry（1.70+ 默认）；CI 关 CARGO_INCREMENTAL；cargo-chef / sccache 复用上游构建；并行：测试按 target 拆 job，clippy / fmt 与 tests 并跑。",
+    "key_points": ["cache target + registry", "sparse registry", "disable incremental in CI", "sccache or chef", "parallelize jobs"],
+    "follow_ups": ["What's the actual mechanism behind cargo-chef's layering?", "When does sccache hurt instead of help?"]
+  },
+  {
+    "topic_slug": "rust-cargo",
+    "question_en": "What's the difference between `cargo install` and `cargo build`, and what's the security story when running `cargo install` from crates.io?",
+    "question_zh": "`cargo install` 和 `cargo build` 有什么区别？从 crates.io 装东西的安全考量？",
+    "sample_answer_en": "`cargo build` produces artifacts in `target/`; `cargo install` builds and copies a binary into `~/.cargo/bin/`, making it globally available like a system package. Security: crates.io has no vetting beyond namespace ownership, so `cargo install foo` runs arbitrary build.rs and proc-macros at install time. Mitigations: pin versions with `--locked` so you build exactly what the publisher tested; use `cargo audit` to check the resolved tree for known CVEs; consider `cargo install --git` from a trusted fork if you don't trust the registry copy. The cargo team has been improving things — sparse registry, sandboxing proposals — but treat install as code execution.",
+    "sample_answer_zh": "build 产物在 target/，install 把 bin 拷到 `~/.cargo/bin/` 全局可用。安全：crates.io 仅命名空间审，build.rs 和 proc-macro 装时会执行任意代码。缓解：`--locked` 锁版本、`cargo audit` 检 CVE、不信任时 install --git 从可信 fork。一句话：install 等于跑代码，慎对。",
+    "key_points": ["install = arbitrary code execution", "--locked for reproducibility", "cargo audit for CVEs", "no vetting beyond ownership"],
+    "follow_ups": ["What's cargo-binstall and how does it change the risk?", "Have you set up a private registry mirror with vetting?"]
+  },
+  {
+    "topic_slug": "rust-cargo",
+    "question_en": "What does `cargo publish` actually upload, and what's a checklist before publishing a public crate?",
+    "question_zh": "`cargo publish` 实际上传什么？发布公共 crate 前的检查清单？",
+    "sample_answer_en": "Publish uploads a `.crate` tarball of your source tree filtered by `include`/`exclude` and `.gitignore` — no `target/`, no `Cargo.lock` for library crates. Pre-publish checklist: bump version per semver intent; update CHANGELOG; verify `cargo publish --dry-run` to catch missing license or readme; run `cargo package --list` to confirm what actually ships; ensure the README and rustdoc render correctly because docs.rs builds from the published tarball; double-check `categories` and `keywords` for discoverability; and tag the git commit so users can correlate the registry version to source. Once published, versions are immutable — yank only marks them, doesn't remove them.",
+    "sample_answer_zh": "上传 source tarball（受 include/exclude/gitignore 过滤，不带 target，库 crate 不带 lock）。清单：版本符合 semver、改 CHANGELOG、`publish --dry-run`、`package --list` 看实际打包、确认 README / rustdoc 渲染（docs.rs 用 tarball 重建）、categories 和 keywords、打 git tag。发了不能删，yank 只是标记。",
+    "key_points": ["tarball minus gitignore", "dry-run before publish", "package --list verification", "yank doesn't remove", "tag commit"],
+    "follow_ups": ["How do you handle pre-1.0 breaking changes responsibly?", "What's a yanked version actually mean for users?"]
+  },
+
+  {
+    "topic_slug": "rust-smart-pointers",
+    "question_en": "Compare `Box<T>`, `Rc<T>`, and `Arc<T>`. When does each show up?",
+    "question_zh": "Box / Rc / Arc 各自什么时候出现？",
+    "sample_answer_en": "`Box<T>` is single-ownership heap allocation — used when you need an owned value behind a pointer (trait objects, recursive types, large structs). `Rc<T>` is reference-counted shared ownership *within a single thread* — multiple owners, last one drops the value, but the refcount isn't atomic so it's cheaper than Arc but `!Send`. `Arc<T>` is the atomic, thread-safe version — needed any time the shared value can be accessed from multiple threads. The rule: Box unless you need sharing; Rc if sharing is single-threaded; Arc if it crosses threads. The atomic ops in Arc are cheap individually but show up in profiles under heavy contention.",
+    "sample_answer_zh": "Box 单一所有权的堆指针（trait object、递归类型、大结构体）。Rc 单线程引用计数共享所有权，便宜但 !Send。Arc 是原子版，跨线程必备。规则：默认 Box，单线程共享用 Rc，跨线程共享用 Arc。Arc 的原子操作单次便宜，高竞争下会显形。",
+    "key_points": ["single owner vs shared", "Rc not Send", "Arc atomic cost", "default to Box"],
+    "follow_ups": ["What's the cost of `Arc::clone` in cycles?", "When would `Rc<RefCell<T>>` beat `Arc<Mutex<T>>`?"]
+  },
+  {
+    "topic_slug": "rust-smart-pointers",
+    "question_en": "Explain `RefCell<T>` and how it relates to the borrow checker. When does using RefCell signal you should redesign?",
+    "question_zh": "RefCell 是什么？它和借用检查器什么关系？什么时候用 RefCell 该重新设计？",
+    "sample_answer_en": "`RefCell<T>` moves borrow checking from compile time to runtime — `.borrow()` and `.borrow_mut()` return guards, and violating the aliasing-XOR-mutation rule panics rather than failing to compile. It's the right tool when you have provably-safe interior mutability that the static checker can't see: implementing internal caches inside a `&self` method, or building cyclic graphs with `Rc<RefCell<T>>`. The smell that you should redesign: RefCell spreading through your public API, or panics in production. Often the answer is either using `Cell<T>` for `Copy` types, restructuring ownership, or switching to message passing if the issue is genuinely about concurrent mutation patterns.",
+    "sample_answer_zh": "RefCell 把借用检查推到运行时——borrow/borrow_mut 违规会 panic 而不是编译错。适合 \"我能证明安全但静态检查不到\"：&self 方法里改内部缓存、Rc<RefCell<T>> 搭循环图。重设计信号：RefCell 渗到公共 API、生产里 panic。常见出路：Cell（Copy 类型）、重组所有权、改消息传递。",
+    "key_points": ["runtime borrow check", "panics on violation", "interior mutability behind &self", "redesign smells"],
+    "follow_ups": ["What's the difference between Cell and RefCell?", "Why doesn't RefCell work across threads?"]
+  },
+  {
+    "topic_slug": "rust-smart-pointers",
+    "question_en": "Walk me through what `Deref` and `DerefMut` enable, and what \"deref coercion\" actually does at the call site.",
+    "question_zh": "Deref / DerefMut 让我们能干什么？deref coercion 在调用点实际做什么？",
+    "sample_answer_en": "`Deref::deref` defines what `*pointer` returns and lets a pointer-like type behave as if it were the inner value. Deref coercion is the compile-time rewrite that, when a function wants `&Target` but you give it `&Wrapper` where `Wrapper: Deref<Target = Target>`, automatically inserts the `.deref()` call. That's why you can pass `&String` to a function expecting `&str` — `String: Deref<Target = str>`. The chain is also transitive: `&Box<String>` coerces to `&str` because Box derefs to String which derefs to str. It only kicks in for references, not values, and the trait is intended for smart pointers, not general convenience operator overloading.",
+    "sample_answer_zh": "Deref::deref 定义 `*p` 返回什么，让指针类型当内部值用。deref coercion 是编译期改写：需要 &Target 而你给 &Wrapper（Wrapper: Deref<Target=Target>）时自动插 `.deref()`。所以 &String 能传给 &str 参数。可传递：&Box<String> → &str。只对引用生效，意图是指针类型不是普通操作符重载。",
+    "key_points": ["Deref defines *p", "auto-insert at call site", "transitive through references", "for pointer types only"],
+    "follow_ups": ["What's the 'deref polymorphism' anti-pattern?", "Why doesn't `String: Deref<Target = &str>` work?"]
+  },
+  {
+    "topic_slug": "rust-smart-pointers",
+    "question_en": "What does the `Drop` trait actually do, and what are the gotchas with manually implementing it?",
+    "question_zh": "Drop trait 实际做什么？手写实现有什么坑？",
+    "sample_answer_en": "`Drop::drop` runs when a value goes out of scope, in deterministic order: locals are dropped in reverse declaration order, struct fields in declaration order, and explicitly-dropped values right at the `drop()` call. Gotchas: you can't call `drop()` from inside the `Drop` impl itself — that would be infinite recursion through dropck — so for cleanup you usually write `let _x = mem::take(&mut self.handle)`. You also can't move out of `&mut self` in drop, which forces things like `Option::take`. And panicking inside drop while another panic is unwinding aborts the process, so destructors must be panic-safe.",
+    "sample_answer_zh": "Drop::drop 在值出作用域时跑，顺序确定（local 倒序、struct 字段正序、drop() 显式立即）。坑：drop 里不能再调 drop（无限递归），通常 `mem::take` 取值再清理；不能从 &mut self move 出，需要 Option::take 之类；drop 里 panic 撞上正在 unwind 的另一次 panic 直接 abort，destructor 要 panic 安全。",
+    "key_points": ["deterministic order", "no manual drop() inside Drop", "mem::take pattern", "panic-in-drop aborts"],
+    "follow_ups": ["What's `ManuallyDrop` for?", "How does `mem::forget` interact with Drop?"]
+  },
+  {
+    "topic_slug": "rust-smart-pointers",
+    "question_en": "Show me an actual use case for `Rc<RefCell<T>>` and one for `Arc<Mutex<T>>`. How do you decide between them?",
+    "question_zh": "Rc<RefCell<T>> 和 Arc<Mutex<T>> 各举一个真实用例。怎么选？",
+    "sample_answer_en": "`Rc<RefCell<T>>` shows up when you build a graph or DOM-like structure in single-threaded code — each node has shared ownership and interior mutability for child links. `Arc<Mutex<T>>` shows up when multiple threads update shared state, like a connection pool, a metrics aggregator, or a cache. The choice is purely about threading: if the data never crosses a thread, Rc+RefCell is cheaper (no atomic ops, no blocking). If it might, you have to use Arc+Mutex. A common mistake is reaching for Arc+Mutex defensively in code that's actually single-threaded — that's atomic overhead and lock contention you don't need.",
+    "sample_answer_zh": "Rc<RefCell<T>> 用于单线程图/树（DOM 节点共享所有权 + 内部可变）；Arc<Mutex<T>> 用于多线程共享状态（连接池、指标聚合器、缓存）。选哪个看是否跨线程——不跨就别用 Arc+Mutex，平白付原子操作和锁竞争。",
+    "key_points": ["graph/DOM in single thread", "shared mutable across threads", "atomic cost matters", "don't over-engineer"],
+    "follow_ups": ["When would you reach for parking_lot's Mutex over std's?", "What's the deadlock risk pattern with Arc<Mutex<T>>?"]
+  },
+
+  {
+    "topic_slug": "rust-concurrency",
+    "question_en": "Explain `Send` and `Sync`. What does each mean and which one allows what?",
+    "question_zh": "Send 和 Sync 分别是什么？各自允许什么？",
+    "sample_answer_en": "`Send` means it's safe to *move* the type across thread boundaries — you can transfer ownership from one thread to another. `Sync` means it's safe for multiple threads to *reference* the type at the same time — `&T` can cross thread boundaries. They're auto-traits, automatically implemented based on contents: `Vec<i32>` is both, `Rc<T>` is neither because the refcount isn't atomic, and `Cell<T>` is `Send` but not `Sync` because interior mutation without synchronization across threads would race. The bound `T: Send + Sync` is what `Arc<T>` typically requires for shared cross-thread state.",
+    "sample_answer_zh": "Send：可跨线程转移所有权。Sync：可跨线程同时 &T。Auto trait，按字段推导：Vec<i32> 两者都是；Rc 都不是（refcount 非原子）；Cell 是 Send 不是 Sync（内部可变无同步会 race）。跨线程共享状态典型要求 Arc<T> + T: Send + Sync。",
+    "key_points": ["Send = move across", "Sync = &T across", "auto traits", "Cell is Send !Sync"],
+    "follow_ups": ["Why is `MutexGuard` not Send?", "How would you opt out of Send for a wrapper type?"]
+  },
+  {
+    "topic_slug": "rust-concurrency",
+    "question_en": "What's the difference between `std::sync::Mutex` and `parking_lot::Mutex`? Why might you reach for parking_lot?",
+    "question_zh": "std::sync::Mutex 和 parking_lot::Mutex 有什么差别？为什么用 parking_lot？",
+    "sample_answer_en": "Both serialize access to shared data, but parking_lot is typically faster (no syscall fast path, more compact representation — 1 byte vs std's larger), supports poisoning-free recovery so a panic in one thread doesn't poison the lock for others, and offers richer primitives like `RwLock` with fair upgrades and timeouts. The cost: it's a third-party dependency, doesn't compose with std's `Condvar` quite the same way, and on some platforms the perf gap narrowed after std improvements. Reach for it in highly contended hot paths, or for the timeout/no-poison ergonomics. For typical app code, std is fine.",
+    "sample_answer_zh": "二者都串行化访问。parking_lot 通常更快（fast path 不进 syscall、表示更紧凑）、无 poison、支持超时和 fair RwLock。代价：第三方依赖、和 std::Condvar 配合略不同、近年 std 进步缩小差距。高竞争热路径或要 timeout/no-poison 时选；一般 app std 够用。",
+    "key_points": ["parking_lot faster + smaller", "no poisoning", "timeout APIs", "std is fine for most"],
+    "follow_ups": ["What does lock poisoning actually do in std?", "When would you reach for an async Mutex instead?"]
+  },
+  {
+    "topic_slug": "rust-concurrency",
+    "question_en": "Walk me through channels in Rust: mpsc, mpmc, oneshot, broadcast. Which do you reach for and when?",
+    "question_zh": "Rust 里的 channel：mpsc / mpmc / oneshot / broadcast，怎么选？",
+    "sample_answer_en": "MPSC (multiple producers, single consumer) is the std default — fan-in from many threads into one worker. MPMC (multi-consumer) like crossbeam-channel lets a pool of workers compete for messages — typical worker queue. Oneshot is a single-message channel — perfect for request/response patterns where you spawn work and await its result. Broadcast (tokio::sync::broadcast) fans messages to all subscribers — pub/sub style. The choice is pattern-driven: pipelines use mpsc, worker pools use mpmc, RPC-ish patterns use oneshot, events use broadcast.",
+    "sample_answer_zh": "MPSC 是 std 默认，多生产单消费（fan-in）。MPMC 用 crossbeam，worker pool 抢消息。Oneshot 一次性，RPC 请求/响应。Broadcast（tokio）发给所有订阅者，pub/sub。按模式选：pipeline → mpsc，pool → mpmc，请求响应 → oneshot，事件 → broadcast。",
+    "key_points": ["fan-in vs worker pool", "oneshot for request/response", "broadcast for pub/sub", "match pattern to channel"],
+    "follow_ups": ["What's bounded vs unbounded and when does each backpressure correctly?", "How does crossbeam-channel achieve its performance?"]
+  },
+  {
+    "topic_slug": "rust-concurrency",
+    "question_en": "Explain message-passing vs shared-state concurrency in Rust. When does each shine?",
+    "question_zh": "消息传递 vs 共享状态并发，Rust 里各自什么时候出彩？",
+    "sample_answer_en": "Message passing — \"don't communicate by sharing memory; share memory by communicating\" — uses channels to hand off ownership between threads, so each piece of data has exactly one writer at a time. This pairs perfectly with Rust's ownership model and tends to be deadlock-free if you avoid synchronous request/response loops. Shared state with `Arc<Mutex<T>>` is the right call when many threads need read or update access to the same logical resource — connection pools, counters, caches — because piping all access through a channel would bottleneck on the channel reader. Rule of thumb: pipelines and worker pools = channels; shared resources = locks.",
+    "sample_answer_zh": "消息传递：channel 转移所有权，每份数据同时只有一个写者，配 Rust 所有权很自然，多数情况不死锁。共享状态 Arc<Mutex<T>> 适合连接池、计数器、缓存——一切通过 channel 反而瓶颈在读端。pipeline / worker pool → channel；共享资源 → 锁。",
+    "key_points": ["channel transfers ownership", "no shared writer", "shared state for resources", "match topology"],
+    "follow_ups": ["What's an actor model implementation look like on top of channels in Rust?", "When does a shared cache need lock striping or sharding?"]
+  },
+  {
+    "topic_slug": "rust-concurrency",
+    "question_en": "You see a hang in a Rust service that uses `Arc<Mutex<T>>`. Walk me through your debugging approach.",
+    "question_zh": "服务用 Arc<Mutex<T>> 卡死了，你的排查思路？",
+    "sample_answer_en": "First, get a stack trace from every thread — `gdb attach` then `thread apply all bt`, or `rust-lldb`, or in production `perf` plus heap dumps. The pattern to look for: two threads each holding one lock and waiting on the other — classic deadlock. Second, check whether the hang is a lock or just a stuck I/O wait — async runtimes can look like deadlocks when a future is parked on a never-completing oneshot. Third, instrument with `parking_lot::deadlock::check_deadlock()` in dev builds, or add `tracing` spans around each lock acquisition with the holding thread id. Fix patterns: enforce lock-ordering globally, split the lock into smaller scopes, or move to lock-free / channel-based design where possible.",
+    "sample_answer_zh": "先取所有线程栈（gdb thread apply all bt / rust-lldb），看 \"两个线程各持一锁等对方\" 的经典死锁。区分锁等 vs IO 卡死（async 卡 oneshot 像死锁）。开发期 parking_lot::deadlock::check_deadlock，或 tracing 包裹锁获取记线程 id。修复：全局锁序、缩小锁作用域，或改无锁/channel。",
+    "key_points": ["all-thread backtrace", "deadlock signature", "lock vs IO wait", "lock ordering or split"],
+    "follow_ups": ["How does tokio-console help here for async code?", "What's a 'lock striping' approach for a high-contention cache?"]
+  },
+
+  {
+    "topic_slug": "rust-async",
+    "question_en": "Explain `async`/`await` in Rust. What is a Future and what does `.await` actually do?",
+    "question_zh": "Rust 的 async / await：Future 是什么？.await 到底做了什么？",
+    "sample_answer_en": "An `async fn` returns a Future — a state machine the compiler generates from your code, where each `.await` point is a possible suspension. A Future doesn't run until you poll it, and the runtime polls it whenever the resources it's waiting on are ready. `.await` is the suspension point: it returns control to the runtime if the awaited future isn't ready, and the runtime resumes the parent future when a waker fires. So `async` in Rust is *zero-cost stackless coroutines* — no extra threads, no per-task stack, just a struct holding the state.",
+    "sample_answer_zh": "async fn 返回 Future——编译器把你的代码生成成状态机，每个 .await 是潜在挂起点。Future 不 poll 不动；runtime 看 ready 就 poll，没 ready 就交还控制权等 waker 唤醒。所以 Rust async 是零成本无栈协程：无额外线程、无任务栈，只是个状态结构体。",
+    "key_points": ["state machine compilation", "lazy, polled by runtime", "wakers drive resumption", "stackless coroutines"],
+    "follow_ups": ["What's `Pin` and why does Future require it?", "How does the size of a Future grow with await points?"]
+  },
+  {
+    "topic_slug": "rust-async",
+    "question_en": "Compare `tokio::spawn` vs `tokio::task::spawn_blocking` vs `std::thread::spawn`. When do you use each?",
+    "question_zh": "tokio::spawn / spawn_blocking / std::thread::spawn 各自什么时候用？",
+    "sample_answer_en": "`tokio::spawn` schedules a Future onto the async runtime — use it for cooperative async work that yields at `.await` points. `spawn_blocking` puts CPU- or syscall-heavy work onto a separate blocking thread pool so it doesn't starve async tasks — anything that would otherwise hold a worker thread for more than ~10ms goes here (file I/O on platforms without true async, heavy computation, blocking C libraries). `std::thread::spawn` is a bare OS thread, no runtime — use it for long-lived threads outside the async ecosystem or when you need full control. Mixing them wrong is a classic perf bug: a blocking sleep in `tokio::spawn` blocks a runtime worker.",
+    "sample_answer_zh": "tokio::spawn 上 async runtime，跑协作式 async。spawn_blocking 上专门的 blocking 线程池，跑 CPU 密集或会阻塞超过约 10ms 的（文件 IO、重计算、阻塞 C 库），避免饿死 async 任务。std::thread::spawn 是裸 OS 线程，无 runtime，长生命周期或脱离 async 时用。混错典型坑：tokio::spawn 里 thread::sleep 阻塞 worker。",
+    "key_points": ["async vs blocking pool", "10ms threshold", "bare OS thread for non-async", "common perf bug"],
+    "follow_ups": ["How does `tokio::task::yield_now` help in CPU-bound async loops?", "What's a 'blocking executor' and when would you build your own?"]
+  },
+  {
+    "topic_slug": "rust-async",
+    "question_en": "What's `Pin` and why does it exist? Why does `Future` require self-pinning?",
+    "question_zh": "Pin 是什么？为什么 Future 需要 self pinning？",
+    "sample_answer_en": "Pin is a contract that a value won't be moved after it's pinned — its address is stable for the rest of its life. Futures generated from `async` blocks are often self-referential — a borrow into an earlier local variable lives across an `.await` — and moving such a struct would invalidate that internal pointer. So polling requires `Pin<&mut Self>` to statically guarantee the Future hasn't moved. Most user code never touches Pin directly because runtimes pin tasks for you; you encounter it when you implement Future or Stream by hand, or when you want to hold one across an await (`Box::pin`, `pin!` macro).",
+    "sample_answer_zh": "Pin 保证值固定地址不再 move。async 生成的 Future 常自引用（await 跨 borrow），move 会让内部指针失效。所以 poll 用 Pin<&mut Self> 静态保证未移动。日常 async 代码碰不到——runtime 帮你 pin；手写 Future/Stream 或要跨 await 持有时才用 Box::pin / pin! 宏。",
+    "key_points": ["address stability contract", "Futures may self-reference", "pin makes polling safe", "user code rarely touches it"],
+    "follow_ups": ["What's `Unpin` and which types are Unpin?", "When would `pin_project` help?"]
+  },
+  {
+    "topic_slug": "rust-async",
+    "question_en": "Walk me through how `tokio::select!` works. What are common bugs and how do you avoid them?",
+    "question_zh": "tokio::select! 怎么工作？常见 bug 和规避？",
+    "sample_answer_en": "`select!` polls multiple futures concurrently and takes the first that completes, dropping the others. Common bug one: cancellation safety — if a branch isn't cancellation-safe, dropping it mid-await loses data, classic case is `channel.recv()` which is safe but a buffered read isn't. Common bug two: starvation — `select!` picks branches randomly by default, but if one branch always wins, others never run; use `biased;` only when you genuinely want priority. Common bug three: holding `&mut` across `.await` inside a select makes the branch non-droppable. Mitigation: prefer cancellation-safe primitives (oneshot, channel recv), wrap dangerous branches in `Box::pin` so they survive multiple select iterations.",
+    "sample_answer_zh": "select! 同时 poll 多个 future、第一个 ready 的赢，其它被 drop。常见 bug：1) 取消安全——分支不安全（如缓冲读）被 drop 会丢数据；2) 饿死——默认随机，如总有一个赢，别人没机会，要优先用 `biased;`；3) 跨 await 持 &mut 让分支无法 drop。缓解：用 cancel-safe 原语（oneshot、recv），危险分支 Box::pin 跨迭代复用。",
+    "key_points": ["first-ready wins", "cancellation safety", "starvation under bias", "Box::pin for reuse"],
+    "follow_ups": ["What does 'cancellation safe' mean formally?", "When would you use FuturesUnordered instead of select!?"]
+  },
+  {
+    "topic_slug": "rust-async",
+    "question_en": "You see high tail-latency in a tokio service. Walk through your debugging steps.",
+    "question_zh": "tokio 服务尾延迟高，你的排查步骤？",
+    "sample_answer_en": "First, attach tokio-console to see per-task busy time, scheduling delay, and stuck tasks — that usually pinpoints whether tail latency comes from worker starvation, lock contention, or a blocking call in async context. Second, look for `spawn_blocking` candidates that aren't using it — file I/O on Linux without io_uring blocks workers, as does any CPU-heavy work. Third, profile with `perf` or `cargo flamegraph` to identify hot paths and unexpected syscalls. Fourth, audit lock holders inside `.await` — holding a std Mutex across await blocks workers; if you must, switch to `tokio::sync::Mutex` which yields, or shrink the critical section. Fifth, check runtime config: too few workers, oversubscribed core pinning, or default `LIFO` slot causing latency under bursts.",
+    "sample_answer_zh": "tokio-console 看每个任务 busy / scheduling delay / stuck 状态；找该上 spawn_blocking 却没上的（文件 IO、CPU 重活）；perf / flamegraph 找热路径和意外 syscall；审 `.await` 跨锁——std Mutex 持过 await 阻塞 worker，换 tokio Mutex 或缩临界区；查 runtime 配置（worker 数、core pinning、LIFO slot）。",
+    "key_points": ["tokio-console", "spawn_blocking misuse", "blocking lock across await", "runtime config", "flamegraph"],
+    "follow_ups": ["How does the LIFO slot affect tail latency under bursts?", "When would you abandon tokio for glommio or monoio?"]
+  },
+
+  {
+    "topic_slug": "rust-oop",
+    "question_en": "Rust doesn't have classes or inheritance. How would you replicate the kinds of designs that use inheritance in Java or C++?",
+    "question_zh": "Rust 没有类和继承，Java/C++ 里用继承的设计在 Rust 里怎么实现？",
+    "sample_answer_en": "Composition over inheritance: a struct holds whatever inner pieces it needs, often delegating via `Deref` or explicit methods. For polymorphism, traits replace abstract base classes — a function takes `impl Trait` or `&dyn Trait` instead of a base pointer. For shared behavior, default trait methods serve as concrete \"inherited\" implementations. For \"is-a\" hierarchies, sum types (enums) often model the variants more honestly than inheritance trees: `Shape` becomes `enum Shape { Circle(...), Square(...) }`. The end result is usually flatter and easier to reason about because you can't surprise yourself with overridden virtual methods five layers up.",
+    "sample_answer_zh": "组合 over 继承：struct 内嵌组件，必要时 Deref 或显式方法转发。多态用 trait 替代抽象基类（impl Trait / dyn Trait）。共享行为用 default trait method。\"is-a\" 层级常用 enum 更诚实（Shape → Circle/Square）。结果通常更扁、更可推理，没有五层虚函数覆盖的惊吓。",
+    "key_points": ["composition over inheritance", "trait replaces base class", "default methods", "enum for variant hierarchy"],
+    "follow_ups": ["What's the 'deref polymorphism' anti-pattern in Rust?", "When does duplicating fields beat extracting a 'base' struct?"]
+  },
+  {
+    "topic_slug": "rust-oop",
+    "question_en": "What is object safety, and why can some traits be used as `dyn Trait` while others can't?",
+    "question_zh": "什么是 object safety？为什么有的 trait 能 dyn，有的不能？",
+    "sample_answer_en": "Object safety is the set of constraints a trait must meet to be usable as `dyn Trait`. The big rules: methods can't return `Self` (the concrete type isn't known at the vtable call site), methods can't have generic type parameters (each instantiation would need its own vtable entry), and the trait can't require `Sized` for itself. The reason behind all of it is that `dyn Trait` is a fat pointer (data pointer + vtable) with a fixed-size vtable per concrete type, so anything that depends on the unerased type at call time can't fit. If you hit a non-object-safe trait, the workarounds are usually splitting it into an object-safe parent trait plus a generic extension trait, or using enums instead.",
+    "sample_answer_zh": "object safety 是 trait 能否 dyn 化的约束。核心规则：方法不能返回 Self（具体类型未知）、不能有泛型参数（每个实例化要单独 vtable 项）、trait 本身不能要求 Self: Sized。本质：dyn Trait 是胖指针 + 固定大小 vtable，依赖未擦类型的调用塞不进去。绕：拆 object-safe 父 trait + 泛型扩展 trait，或者用 enum。",
+    "key_points": ["fat pointer with fixed vtable", "no Self return", "no generic methods", "split or enum workaround"],
+    "follow_ups": ["How does the `where Self: Sized` clause let you keep generic methods?", "What about async fn in traits — is that object-safe now?"]
+  },
+  {
+    "topic_slug": "rust-oop",
+    "question_en": "Compare `Box<dyn Trait>` and `&dyn Trait`. What's the difference and when do you reach for each?",
+    "question_zh": "Box<dyn Trait> 和 &dyn Trait 有什么区别？什么时候用哪个？",
+    "sample_answer_en": "Both are fat pointers — data pointer plus vtable pointer — so call cost is the same. `&dyn Trait` is a borrow with a lifetime; the data is owned somewhere else and you just hold a reference, no allocation. `Box<dyn Trait>` owns the trait object on the heap — the most common form when you need to *store* heterogeneous values (in a Vec, in a struct field) where ownership has to be transferable. Use `&dyn Trait` for short-lived parameters like callback functions; use `Box<dyn Trait>` for collections, return types when the concrete type varies, or when the trait object outlives any specific stack frame.",
+    "sample_answer_zh": "都是胖指针，调用开销相同。&dyn 是带生命周期的借用，无分配；Box<dyn> 在堆上拥有 trait object，需要 *存* 异构值（Vec、struct 字段）、能转移所有权时用。参数和回调用 &dyn；集合、变化的返回类型、超过栈帧生命周期用 Box<dyn>。",
+    "key_points": ["both fat pointers", "& is borrow no alloc", "Box owns on heap", "match to ownership need"],
+    "follow_ups": ["When would `Rc<dyn Trait>` or `Arc<dyn Trait>` be appropriate?", "What's the cost of indirect dispatch compared to direct call?"]
+  },
+  {
+    "topic_slug": "rust-oop",
+    "question_en": "Explain the typestate pattern in Rust. Give a concrete example of when it earns its keep.",
+    "question_zh": "typestate 模式是什么？什么时候值得用？",
+    "sample_answer_en": "Typestate encodes a state machine in the type system: each state is a different type, transitions are methods that consume `self` and return a different type. The compiler enforces \"you can't call `send` on a `RequestBuilder` until you've called `url`\" because the type literally doesn't have a `send` method until you transition. A concrete example: an HTTP request builder where unbuilt requests can't be sent and sent requests can't be modified — `Request<Pending>` exposes `body(...)` returning `Request<Ready>`, which exposes `send()`. Pays off when forgetting a state transition is a real bug class; doesn't pay off for trivial flows because it doubles the type surface.",
+    "sample_answer_zh": "typestate=类型编码状态机，每个状态一个类型，转移是消耗 self 返回另一类型的方法。编译器强制 \"调 send 前必须先设 url\"。例子：HTTP request builder——Request<Pending> 有 body() 返回 Request<Ready>，Ready 才有 send()。值得用：忘记状态转移是真实 bug 类；不值得：流程平凡，类型爆炸不偿。",
+    "key_points": ["state as type", "transitions consume self", "compiler enforces order", "type-surface tradeoff"],
+    "follow_ups": ["What's the relationship between typestate and sealed traits?", "How does this interact with serde when types vary by state?"]
+  },
+  {
+    "topic_slug": "rust-oop",
+    "question_en": "You're designing a plugin system in Rust where plugins are loaded dynamically and call into the host. Walk me through the approaches and tradeoffs.",
+    "question_zh": "用 Rust 设计插件系统（动态加载、回调宿主），有哪些方案？各自取舍？",
+    "sample_answer_en": "Three serious options. One: native dynamic libraries via `libloading` calling C ABI exports — fastest, but every type at the boundary has to be FFI-safe and Rust's stdlib types can't cross the boundary directly. Two: ABI-stable Rust like the `abi_stable` crate — keeps it ergonomic-ish but constrains design choices. Three: WebAssembly with `wasmtime` — slower but the safest sandbox, language-agnostic, and you don't have to trust the plugin author. For a serious production plugin host I'd default to wasm now because the sandboxing dominates other considerations; if perf is critical and plugins are first-party, the C ABI dance is still the answer.",
+    "sample_answer_zh": "三种主流：1) C ABI 动态库（libloading）——最快但所有边界类型必须 FFI-safe，标准库类型不能直接过；2) abi_stable 这类 Rust ABI 稳定层——人体工学好但选择受限；3) wasm（wasmtime）——慢但沙箱安全、语言无关、不用信任作者。生产 plugin host 默认 wasm，沙箱压倒一切；性能关键且插件第一方时仍是 C ABI。",
+    "key_points": ["libloading + C ABI", "abi_stable middle ground", "wasm for sandboxing", "trust dictates choice"],
+    "follow_ups": ["What's the perf gap between native and wasm plugins for compute-heavy work?", "How would you let plugins call back into the host safely?"]
+  },
+
+  {
+    "topic_slug": "rust-patterns",
+    "question_en": "Compare refutable and irrefutable patterns in Rust. Which contexts allow which?",
+    "question_zh": "可反驳和不可反驳模式有什么区别？什么上下文允许哪种？",
+    "sample_answer_en": "An irrefutable pattern always matches — `let x = 5;` or `let (a, b) = pair;`. A refutable pattern can fail to match — `Some(x)`, `0`, `Ok(v)`. Contexts split accordingly: `let`, function parameters, `for` loops require irrefutable patterns because there's no failure branch. `if let`, `while let`, `match` arms accept refutable patterns because they have a fall-through. `let else` is the bridge — it accepts a refutable pattern but requires an `else` block that diverges. The compiler enforces these rules so you can't accidentally write code that silently doesn't match.",
+    "sample_answer_zh": "不可反驳=总能匹配（let x = 5、let (a,b) = pair）；可反驳=可能失败（Some(x)、0、Ok(v)）。let、函数参数、for 要不可反驳（没失败分支）；if let / while let / match 接受可反驳；let else 是桥——可反驳但要 else 分流。编译器强制这些规则。",
+    "key_points": ["irrefutable always matches", "refutable may fail", "context dictates which", "let else bridges"],
+    "follow_ups": ["Why is `for x in ...` an irrefutable context?", "What does the compiler error for refutable-in-let look like?"]
+  },
+  {
+    "topic_slug": "rust-patterns",
+    "question_en": "Explain match guards (`if` clauses in arms) and a case where they're exactly the right tool.",
+    "question_zh": "match guard（arm 里的 if）是什么？什么场景刚好用它？",
+    "sample_answer_en": "A match guard is `pattern if condition => ...` — the arm matches only when the pattern matches *and* the condition is true. They're the right tool when the condition depends on bindings the pattern introduces, like `Some(x) if x > 0 => positive(x)`. The catch: the compiler can't see through the guard for exhaustiveness, so adding a guarded arm doesn't satisfy the must-handle-all-variants check. Without guards you'd have to nest a match or break the case out into an `if let` chain; guards keep related cases together in one expression.",
+    "sample_answer_zh": "`pattern if condition =>`——模式 + 条件同时成立才匹配。适合条件依赖模式绑定的变量（Some(x) if x > 0 => ...）。坑：编译器不能透过 guard 推穷尽，加了 guarded arm 不算覆盖完。没 guard 就得嵌套 match 或 if let 链，guard 把相关分支收在一起。",
+    "key_points": ["pattern + condition", "uses bindings from pattern", "doesn't help exhaustiveness", "keeps related cases together"],
+    "follow_ups": ["What does the compiler emit when only a guarded arm matches a variant?", "When is a guard preferable to an extra match arm?"]
+  },
+  {
+    "topic_slug": "rust-patterns",
+    "question_en": "Explain `@` bindings in patterns. Give a real example where it earns its keep.",
+    "question_zh": "`@` 绑定是什么？给一个真实场景的例子。",
+    "sample_answer_en": "The `@` operator binds a variable to the value matched by a sub-pattern, so you can test a structure *and* capture it at the same time. Real example: `match age { age @ 0..=12 => say_child(age), age @ 13..=19 => say_teen(age), _ => say_adult() }` — without `@` you'd either repeat the range check (`if let 0..=12 = age`) or restructure into nested matches. Another: `Some(point @ Point { x: 0, .. })` matches an Origin-on-y-axis Point and binds the whole Point for downstream use. It's a small ergonomic win that comes up surprisingly often once you start looking for it.",
+    "sample_answer_zh": "`@` 让你测结构的同时绑值。例子：`age @ 0..=12 => say_child(age)`——一行内既检查范围又拿到 age，无需重复检查。再如 `Some(point @ Point { x: 0, .. })` 匹配 y 轴原点同时捕整个 Point。小但常用的人体工学。",
+    "key_points": ["bind while pattern-checking", "avoids repetition", "works inside complex patterns", "small but frequent"],
+    "follow_ups": ["How does this interact with move semantics?", "When does `@` make a pattern harder to read?"]
+  },
+  {
+    "topic_slug": "rust-patterns",
+    "question_en": "Walk through destructuring a complex nested struct in a `match` arm. What's the readability ceiling and when do you break out helpers?",
+    "question_zh": "在 match arm 里解构复杂嵌套 struct——可读性的天花板在哪？什么时候抽 helper？",
+    "sample_answer_en": "Destructuring is brilliant for two or three layers: `Event::Click { target: Button { label, .. }, position: Point { x, y } }` reads beautifully and gives you all the bindings you need. The ceiling is around four levels deep or when the pattern wraps onto multiple lines — at that point, naming the intermediate values via helper functions (`if let Some(label) = event.button_label()`) reads better. Same goes for the `..` shorthand: ignoring three fields with `..` is fine, but if half the struct is `..` you're probably reaching into a struct that should expose a smaller view via a method or trait.",
+    "sample_answer_zh": "两三层解构最佳：`Event::Click { target: Button { label, .. }, position: Point { x, y } }` 优雅且全拿到。超过四层或要折行就该抽 helper（`event.button_label()`）。`..` 忽略三四个字段还行，半边都是 `..` 说明该提供更小的视图方法或 trait。",
+    "key_points": ["2-3 layers ideal", "extract helpers past that", "named helpers improve docs", "abuse of `..` signals refactor"],
+    "follow_ups": ["When does a deconstructing `let` beat a match for clarity?", "How do you handle structs with private fields you can't destructure?"]
+  },
+  {
+    "topic_slug": "rust-patterns",
+    "question_en": "Show an example where pattern matching dramatically simplifies code compared to if/else, and one where it's actually worse.",
+    "question_zh": "给一个 match 比 if/else 大幅简化代码的例子，和一个 match 反而更差的例子。",
+    "sample_answer_en": "Better: parsing a token stream. `match self.tokens.next() { Some(Token::Ident(name)) => ..., Some(Token::Number(n)) => ..., Some(Token::Eof) => ..., None => ... }` is one expression, fully exhaustive, fail-loud on new variants. The if/else version would be a string of `if let` chains with no exhaustiveness guarantee. Worse: range checks on a single number where you mostly care about \"is it small or large\" — `if n < 100 { ... } else if n < 1000 { ... } else { ... }` reads more naturally than the match form `match n { 0..100 => ..., 100..1000 => ..., _ => ... }` because there's no enum being destructured and the conditions don't share structure.",
+    "sample_answer_zh": "更优：token 流解析——match 一表达式穷尽所有 variant，新增 variant 立即编译错；if let 链做不到。更差：单数字的 \"小/中/大\" 范围判断——`if n < 100 ... else if n < 1000 ...` 比 `match n { 0..100 => ..., 100..1000 => ... }` 更自然，没 enum 可解构、条件无共享结构。",
+    "key_points": ["match wins on enum/variant", "match wins on exhaustiveness", "if/else wins for unrelated ranges", "match overuse adds noise"],
+    "follow_ups": ["How do range patterns interact with exhaustiveness?", "When does Clippy suggest converting one to the other?"]
+  },
+
+  {
+    "topic_slug": "rust-advanced-features",
+    "question_en": "What does the `unsafe` keyword actually unlock? List the powers and the obligations.",
+    "question_zh": "unsafe 实际解锁了什么能力？带来什么义务？",
+    "sample_answer_en": "`unsafe` unlocks five superpowers: dereferencing raw pointers, calling unsafe functions, implementing unsafe traits, accessing or modifying mutable static variables, and accessing fields of `union`s. The obligation is that *you* now uphold the invariants the compiler normally enforces — no aliasing of `&mut`, no use-after-free, no data races, valid bit patterns for types. unsafe doesn't disable the borrow checker for safe code; it just lets you do things the checker can't see. The cardinal rule: any unsafe block that, when called with safe-looking arguments from safe code, can cause UB, is a soundness bug — the unsafety must be encapsulated so the public API stays safe.",
+    "sample_answer_zh": "unsafe 解锁五项：解引用裸指针、调 unsafe fn、impl unsafe trait、读写 mutable static、访问 union 字段。义务：原本编译器替你守的不变量现在你守——&mut 不能 alias、无 UAF、无 data race、位模式合法。unsafe 不关借用检查，只是让你做检查器看不到的事。铁律：unsafe 块若从安全调用方传安全参数能造 UB，就是 unsound——必须封装到公开 API 仍然安全。",
+    "key_points": ["five superpowers", "uphold invariants yourself", "encapsulate to keep API safe", "soundness vs safety"],
+    "follow_ups": ["What's the difference between safe API and sound API?", "When would you mark a function `unsafe` even though the body is safe?"]
+  },
+  {
+    "topic_slug": "rust-advanced-features",
+    "question_en": "Compare `macro_rules!` (declarative macros) and proc macros. When do you reach for each?",
+    "question_zh": "macro_rules! 和 proc macro 怎么选？",
+    "sample_answer_en": "`macro_rules!` is pattern-matching on token trees — declared inline, compile-time hygienic, easy to ship in the same crate. Use it for repetitive but structural code patterns: `vec![]`, `assert_eq!`, small DSLs. Proc macros are real Rust code that takes a `TokenStream`, manipulates it, and emits a `TokenStream` — they require a separate proc-macro crate and a procmacro2/syn/quote workflow but can do anything: parse arbitrary syntax, derive traits, generate hundreds of lines. Reach for `macro_rules!` when the transform is local and shape-based; reach for proc macros when you need real parsing or are generating big chunks (serde derive, sqlx query!, tokio::main).",
+    "sample_answer_zh": "macro_rules!：token tree 模式匹配，inline 卫生宏，简单。vec![]、assert_eq!、小 DSL 都用它。proc macro：真 Rust 代码 TokenStream → TokenStream，要单独 crate、走 syn/quote，能做任何事——derive 整个 impl、解析任意语法、生成几百行（serde、sqlx::query!、tokio::main）。局部形变就用 macro_rules!，要解析或生成大块用 proc macro。",
+    "key_points": ["macro_rules pattern-based", "proc macros are Rust code", "proc macros need separate crate", "match scope to need"],
+    "follow_ups": ["What's the cost of proc macros on compile time?", "When would you use a build.rs instead of either?"]
+  },
+  {
+    "topic_slug": "rust-advanced-features",
+    "question_en": "Explain function pointers vs `Box<dyn Fn>`. What's the runtime cost difference and what can each do?",
+    "question_zh": "函数指针和 Box<dyn Fn> 有什么不同？运行时代价？各自能做什么？",
+    "sample_answer_en": "A function pointer (`fn(i32) -> i32`) is just an address — one machine word, no allocation, direct indirect call. It can't capture anything from its environment, so it only works for plain functions and non-capturing closures. `Box<dyn Fn(i32) -> i32>` is a fat pointer (data + vtable) plus a heap allocation, so it's costlier per call and per construction, but it can hold any closure including ones that capture state. Performance gap on a single call is small but real. Tables of callbacks where all entries are stateless gain a lot from `fn`; mixed-capture tables need `Box<dyn>`.",
+    "sample_answer_zh": "fn(i32)->i32 是一个机器字、无分配、直接间接调，但不能捕获——只接普通函数和无捕获闭包。Box<dyn Fn(i32)->i32> 胖指针 + 堆分配，能装任何闭包包括带捕获的，单次调用稍贵。callback 表全无捕获用 fn；有捕获用 Box<dyn>。",
+    "key_points": ["fn is one word no alloc", "Box<dyn Fn> is fat pointer + heap", "fn can't capture", "capture forces Box"],
+    "follow_ups": ["What's `impl Fn` in a return position and how does it compare?", "When is `&dyn Fn` enough?"]
+  },
+  {
+    "topic_slug": "rust-advanced-features",
+    "question_en": "What's the `#[repr(C)]` attribute, why does it exist, and what does it cost?",
+    "question_zh": "`#[repr(C)]` 是什么？为什么存在？有什么代价？",
+    "sample_answer_en": "By default Rust can reorder struct fields to minimize padding — great for memory efficiency, terrible for FFI because the layout isn't predictable. `#[repr(C)]` forces fields to be laid out in declaration order with C's padding rules, so the struct is binary-compatible with the corresponding C struct. Cost: you give up field reordering, which means a struct of `(u8, u64, u8)` will be 24 bytes under repr(C) but could be 16 under default repr. You only put it on types that cross the FFI boundary or that need stable layout for serialization; not as a blanket optimization.",
+    "sample_answer_zh": "默认 Rust 可重排字段减 padding。#[repr(C)] 强制按声明顺序按 C 的 padding 规则，跨 FFI 时二进制兼容。代价：放弃重排，(u8,u64,u8) 在 repr(C) 下 24 字节，默认可压到 16。只在 FFI 边界或需要稳定布局序列化时用，不要无脑加。",
+    "key_points": ["FFI compatibility", "no field reorder", "predictable layout", "padding cost"],
+    "follow_ups": ["What does `#[repr(transparent)]` do that `#[repr(C)]` doesn't?", "How do you handle unions across FFI?"]
+  },
+  {
+    "topic_slug": "rust-advanced-features",
+    "question_en": "Walk me through what a real-world `unsafe impl Send for MyType` looks like. What's the bar for getting it right?",
+    "question_zh": "实战中 `unsafe impl Send for MyType` 长什么样？怎么算写对？",
+    "sample_answer_en": "You write it when you've wrapped a non-Send primitive — say a raw pointer or a foreign handle — but you've designed the wrapper so cross-thread use is genuinely safe. The bar: every way the wrapper can be used from another thread must preserve every invariant the inner type required of single-threaded use. Typical justifications: the raw pointer is only ever read after construction (so racy reads are fine because writes don't exist), or all mutation goes through a Mutex inside the wrapper, or the C library is documented thread-safe. The proof is in the comment you write above the `unsafe impl` explaining *why* — and the audit your reviewer should give it. Get this wrong and you have a silent data race that LLVM is free to miscompile.",
+    "sample_answer_zh": "包了非 Send 原语（裸指针、外部 handle），但你保证跨线程使用是安全的。门槛：包装器跨线程使用的任意方式都不破坏内部的不变量。常见理由：构造后只读（无写就无 race）、所有变更走内部 Mutex、C 库文档保证线程安全。证明就是 unsafe impl 上方那段 \"为什么安全\" 的注释，留给 reviewer 审。写错就是隐秘 data race，LLVM 有权 miscompile。",
+    "key_points": ["wrapper preserves invariants", "common justifications", "comment + review", "silent UB on mistake"],
+    "follow_ups": ["How is this different from `unsafe impl Sync`?", "What's the typical pattern in tokio for ensuring task Sendness?"]
+  }
+]

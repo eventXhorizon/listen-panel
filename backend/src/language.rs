@@ -161,6 +161,27 @@ pub fn essay_translate_user_prompt(paragraphs_json: &str) -> String {
     )
 }
 
+/// Interview Q&A generation. English-only — the target is English-language
+/// technical interviews for AI/Rust engineers.
+pub fn interview_generate_system_prompt() -> &'static str {
+    EN_INTERVIEW_GENERATE_SYSTEM_PROMPT
+}
+
+pub fn interview_generate_user_prompt(
+    topic_title_en: &str,
+    topic_title_zh: &str,
+    source_url: Option<&str>,
+    count: usize,
+) -> String {
+    let source_line = match source_url {
+        Some(url) => format!("\n参考材料: {url}"),
+        None => String::new(),
+    };
+    format!(
+        "面试主题: {topic_title_en} ({topic_title_zh}){source_line}\n\n请围绕这个主题,生成 {count} 道高级(senior)级别的英文技术面试题。"
+    )
+}
+
 pub fn cloze_generate_user_prompt(transcript: &str, difficulty: &str) -> String {
     let guidance = match difficulty {
         "easy" => "难度档 = easy:用词通俗,目标 8-10 个空。词汇 ≈ 6 成,语法 ≈ 4 成。语法挖空优先介词、冠词、基础时态。",
@@ -396,6 +417,45 @@ function 必须是: 'thesis' | 'evidence' | 'counter' | 'transition' | 'conclusi
 paragraph_index 必须从 0 开始,与 body 中按 \\\\n\\\\n 切分后的段落对齐,每段恰好一个 note。\n\
 \n\
 **特别注意**:不要改写原文的句子;你的任务是【提取 + 注释】,不是【改写】。如果原文长度超过 3000 词,**不要截断**,但可以省略明显非正文的章节标记。";
+
+pub const EN_INTERVIEW_GENERATE_SYSTEM_PROMPT: &str = "你是资深 Rust / AI 工程师,正在面试一位高级岗位(senior / staff)候选人,使用英文进行面试。\n\
+给定一个面试主题(对应 Rust Book 某一章或 AI/Agent 方向的某个子领域),你要生成若干道高质量的面试问答。\n\
+\n\
+每道题必须达到 senior 级别的深度:\n\
+- 不要问 \"What is X\" 这种百度即可的死背题。\n\
+- 优先考问 trade-off、why、how it works under the hood、failure modes、design decisions、与其他语言/方案的对比。\n\
+- 可以贴一段代码让候选人解释或挑刺。\n\
+- 可以问 \"You see X in production, walk me through your debugging approach\" 这类实战题。\n\
+\n\
+sample_answer_en 必须是【真实面试场景的口语化英文回答】,而不是教科书 / 文档 / AI 八股:\n\
+- 4-7 句话之间,有具体细节、有理由、有比较。\n\
+- 用面试官能听懂的方式讲清楚机制(\"the compiler does X because Y, which is why Z\")。\n\
+- 避免 \"In conclusion\" \"It is important to note that\" 这类废话。\n\
+- 允许带 1-2 行精炼代码 / 命令行片段,如果它能让答案更扎实。\n\
+\n\
+sample_answer_zh 是 2-4 句中文要点翻译,不是逐句翻——抓住答案的骨架。\n\
+\n\
+key_points 是 3-6 个关键词或概念(英文短语),候选人答这题必须答到这些点。\n\
+follow_ups 是 1-3 个面试官可能追问的题目(英文,问句形式)。\n\
+\n\
+严格 JSON,不要 markdown 代码块。格式:\n\
+{\n\
+  \"questions\": [\n\
+    {\n\
+      \"question_en\": \"面试官的英文问题\",\n\
+      \"question_zh\": \"问题的中文翻译(1 句即可)\",\n\
+      \"sample_answer_en\": \"高级岗位水准的英文回答,4-7 句\",\n\
+      \"sample_answer_zh\": \"答案的中文要点,2-4 句\",\n\
+      \"key_points\": [\"keyword1\", \"keyword2\", \"keyword3\"],\n\
+      \"follow_ups\": [\"Follow-up question 1?\", \"Follow-up question 2?\"]\n\
+    }\n\
+  ]\n\
+}\n\
+\n\
+硬性要求:\n\
+- 题目之间不要重复主题或角度——5 道题应当覆盖概念/对比/底层/调试/设计 等不同切面。\n\
+- 所有英文必须自然地道,像真人面试官说话。\n\
+- 不要返回额外字段、不要解释、不要 markdown。";
 
 pub const EN_ESSAY_TRANSLATE_SYSTEM_PROMPT: &str = "你是英译中翻译,服务对象是中文母语的英语学习者。\n\
 输入是一个英文段落数组,你要给每段输出对应的中文翻译。\n\
