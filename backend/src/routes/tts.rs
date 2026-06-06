@@ -261,15 +261,46 @@ fn prepare_for_tts(text: &str, language: &str) -> String {
     static BACKTICK_SPAN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = BACKTICK_SPAN
         .get_or_init(|| regex::Regex::new(r"`([^`]+)`").expect("backtick regex"));
-    re.replace_all(text, |caps: &regex::Captures<'_>| {
-        spoken_symbol(&caps[1]).unwrap_or_else(|| caps[1].to_string())
-    })
-    .into_owned()
+    re.replace_all(text, |caps: &regex::Captures<'_>| expand_inner(&caps[1]))
+        .into_owned()
+}
+
+/// Decide what to say in place of a backtick span's inner content. Three
+/// cascading attempts:
+///   1. exact match in the symbol table (`?`, `!`, `::`, `->`, ...)
+///   2. known Rust prefix where the symbol Azure drops is the leading char
+///      or two — `&T`, `&mut T`, `*mut T`, etc.
+///   3. fall through: hand the inner content back as-is (backticks stripped)
+fn expand_inner(inner: &str) -> String {
+    if let Some(name) = spoken_symbol(inner) {
+        return name;
+    }
+    // Order matters: longer prefixes first so `&mut T` doesn't match `&`.
+    // The trailing space in the source prefix forces the match to land on
+    // a real syntactic boundary, not inside an identifier like `&muted`.
+    const PREFIXES: &[(&str, &str)] = &[
+        ("&mut ", "ampersand mut "),
+        // `&'a T` lifetimes — speak the apostrophe as "tick" so the listener
+        // can disambiguate from a regular identifier. Azure otherwise drops
+        // the apostrophe and runs the lifetime letter into the next word.
+        ("&'", "ampersand tick "),
+        ("*mut ", "star mut "),
+        ("*const ", "star const "),
+        // Plain `&T`, `&str`, `&self`. Keep last so `&mut` and `&'` win first.
+        ("&", "ampersand "),
+        ("*", "star "),
+    ];
+    for (prefix, replacement) in PREFIXES {
+        if let Some(rest) = inner.strip_prefix(prefix) {
+            return format!("{replacement}{rest}");
+        }
+    }
+    inner.to_string()
 }
 
 /// Mapping for the symbols Azure mispronounces or drops. Returns `None` for
-/// anything we don't have a special name for — caller falls back to the raw
-/// inner content (backticks stripped).
+/// anything we don't have a special name for — caller falls back to the
+/// prefix-expansion logic in `expand_inner`.
 fn spoken_symbol(inner: &str) -> Option<String> {
     Some(
         match inner {
@@ -484,5 +515,35 @@ mod tests {
     fn prepare_handles_arrow_and_fat_arrow() {
         let out = prepare_for_tts("`->` versus `=>` in match arms.", "en");
         assert_eq!(out, "arrow versus fat arrow in match arms.");
+    }
+
+    #[test]
+    fn prepare_expands_reference_prefix() {
+        let out = prepare_for_tts("Use `&T` and `&mut T` together.", "en");
+        assert_eq!(out, "Use ampersand T and ampersand mut T together.");
+    }
+
+    #[test]
+    fn prepare_expands_reference_with_concrete_types() {
+        let out = prepare_for_tts(
+            "Functions usually take `&str` instead of `&String`.",
+            "en",
+        );
+        assert_eq!(
+            out,
+            "Functions usually take ampersand str instead of ampersand String."
+        );
+    }
+
+    #[test]
+    fn prepare_expands_lifetime_reference() {
+        let out = prepare_for_tts("`&'a T` carries a lifetime.", "en");
+        assert_eq!(out, "ampersand tick a T carries a lifetime.");
+    }
+
+    #[test]
+    fn prepare_expands_raw_pointer_prefix() {
+        let out = prepare_for_tts("`*mut T` and `*const T` are raw.", "en");
+        assert_eq!(out, "star mut T and star const T are raw.");
     }
 }

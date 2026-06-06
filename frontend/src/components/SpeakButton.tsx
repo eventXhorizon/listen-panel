@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Loader2, Volume2 } from 'lucide-react';
+import { Square, Volume2 } from 'lucide-react';
 import type { MaterialLanguage } from '../types';
-import { speakWord } from '../lib/audio';
+import { speakWord, stopSpeech } from '../lib/audio';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -26,7 +26,14 @@ export default function SpeakButton({
       : 'border-border bg-card text-muted-foreground hover:border-foreground/30 hover:text-foreground';
 
   async function onSpeak() {
-    if (busy) return;
+    // Toggle: a click during playback stops, instead of being swallowed by
+    // a busy guard. Different buttons each manage their own busy state, but
+    // stopSpeech operates on the singleton playback the audio module tracks
+    // so any speaker button can stop any in-flight clip.
+    if (busy) {
+      stopSpeech();
+      return;
+    }
     setBusy(true);
     try {
       await speakWord(word, materialId, language);
@@ -44,9 +51,9 @@ export default function SpeakButton({
         e.stopPropagation();
         onSpeak();
       }}
-      disabled={busy || !word.trim()}
-      title="朗读"
-      aria-label={`朗读 ${word}`}
+      disabled={!word.trim()}
+      title={busy ? '停止朗读' : '朗读'}
+      aria-label={busy ? `停止朗读 ${word}` : `朗读 ${word}`}
       className={cn(
         'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         variantClass,
@@ -54,7 +61,7 @@ export default function SpeakButton({
       )}
     >
       {busy ? (
-        <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+        <Square aria-hidden="true" className="size-3 fill-current" />
       ) : (
         <Volume2 aria-hidden="true" className="size-3.5" />
       )}
