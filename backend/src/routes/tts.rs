@@ -157,7 +157,13 @@ async fn cached_azure_speech(
     anchor: Anchor,
     language: &str,
 ) -> Result<Response> {
-    let cache_path = cache_path(cfg, text, anchor, language);
+    // Prepare upfront so the cache key matches the actual audio content.
+    // If two raw inputs only differ in backtick-formatting around symbols,
+    // they synthesize the same audio and should share a cache entry.
+    // It also means a code change to `prepare_for_tts` naturally invalidates
+    // every previously cached entry — the new hash misses, Azure regenerates.
+    let prepared = prepare_for_tts(text, language);
+    let cache_path = cache_path(cfg, &prepared, anchor, language);
     match fs::read(&cache_path).await {
         Ok(bytes) => {
             tracing::debug!(path = %cache_path.display(), "tts cache hit");
@@ -172,7 +178,7 @@ async fn cached_azure_speech(
         }
     }
 
-    let bytes = match azure_speech(http, cfg, text, language).await? {
+    let bytes = match azure_speech(http, cfg, &prepared, language).await? {
         Ok(bytes) => bytes,
         Err(response) => return Ok(response),
     };
@@ -202,6 +208,8 @@ async fn azure_speech(
     let url = format!("https://{region}.tts.speech.microsoft.com/cognitiveservices/v1");
     let voice = cfg.voice_for_language(language);
     let xml_lang = cfg.xml_lang_for(language);
+    // `text` is already passed through `prepare_for_tts` by the caller
+    // (`cached_azure_speech`) so the cache key matches the audio content.
     let ssml = format!(
         "<speak version='1.0' xml:lang='{xml_lang}'><voice name='{voice}'>{}</voice></speak>",
         escape_xml(text)
@@ -233,6 +241,59 @@ async fn azure_speech(
     }
 
     Ok(Ok(res.bytes().await?))
+}
+
+/// Substitutes backtick-wrapped code symbols with their spoken English names
+/// before TTS synthesis. Azure ignores backticks and reads bare punctuation
+/// like `?` as sentence intonation rather than speaking the symbol — so
+/// "How does \`?\` desugar" comes out without the question mark being said
+/// aloud at all. We expand only the common one-or-two-char Rust / code
+/// symbols that don't have a natural spoken form; multi-char identifiers
+/// like `Option<T>` keep their content (backticks stripped) since Azure
+/// reads them acceptably as "Option T".
+///
+/// English-only. Other languages have different conventions and don't hit
+/// the same Rust-symbol problem in practice.
+fn prepare_for_tts(text: &str, language: &str) -> String {
+    if Language::normalize(language) != Language::English.code() {
+        return text.to_string();
+    }
+    static BACKTICK_SPAN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = BACKTICK_SPAN
+        .get_or_init(|| regex::Regex::new(r"`([^`]+)`").expect("backtick regex"));
+    re.replace_all(text, |caps: &regex::Captures<'_>| {
+        spoken_symbol(&caps[1]).unwrap_or_else(|| caps[1].to_string())
+    })
+    .into_owned()
+}
+
+/// Mapping for the symbols Azure mispronounces or drops. Returns `None` for
+/// anything we don't have a special name for — caller falls back to the raw
+/// inner content (backticks stripped).
+fn spoken_symbol(inner: &str) -> Option<String> {
+    Some(
+        match inner {
+            "?" => "question mark",
+            "!" => "bang",
+            "&" => "ampersand",
+            "&mut" => "ampersand mut",
+            "*" => "star",
+            "->" => "arrow",
+            "=>" => "fat arrow",
+            "::" => "double colon",
+            ".." => "dot dot",
+            "..=" => "dot dot equals",
+            "==" => "double equals",
+            "!=" => "not equals",
+            "<=" => "less than or equal",
+            ">=" => "greater than or equal",
+            "|" => "pipe",
+            "||" => "double pipe",
+            "&&" => "double ampersand",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 fn escape_xml(s: &str) -> String {
@@ -385,5 +446,43 @@ mod tests {
         let path = cache_path(&cfg, "こんにちは", Anchor::Material(42), "ja");
         let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
         assert!(name.starts_with("azure_ja_こんにちは_"));
+    }
+
+    #[test]
+    fn prepare_expands_backticked_question_mark() {
+        let out = prepare_for_tts("How does `?` desugar for Option?", "en");
+        assert_eq!(out, "How does question mark desugar for Option?");
+    }
+
+    #[test]
+    fn prepare_keeps_sentence_punctuation_intact() {
+        // Trailing `?` is sentence intonation, not a backtick span — leave it.
+        let out = prepare_for_tts("Is this idiomatic?", "en");
+        assert_eq!(out, "Is this idiomatic?");
+    }
+
+    #[test]
+    fn prepare_strips_backticks_around_identifiers() {
+        // `Option<T>` has no special name — drop backticks, let Azure read it.
+        let out = prepare_for_tts("Use `Option<T>` instead of null.", "en");
+        assert_eq!(out, "Use Option<T> instead of null.");
+    }
+
+    #[test]
+    fn prepare_handles_multiple_spans_in_one_line() {
+        let out = prepare_for_tts("`?` and `!` and `::` all matter.", "en");
+        assert_eq!(out, "question mark and bang and double colon all matter.");
+    }
+
+    #[test]
+    fn prepare_is_noop_for_japanese() {
+        let out = prepare_for_tts("`?` 使う", "ja");
+        assert_eq!(out, "`?` 使う");
+    }
+
+    #[test]
+    fn prepare_handles_arrow_and_fat_arrow() {
+        let out = prepare_for_tts("`->` versus `=>` in match arms.", "en");
+        assert_eq!(out, "arrow versus fat arrow in match arms.");
     }
 }
