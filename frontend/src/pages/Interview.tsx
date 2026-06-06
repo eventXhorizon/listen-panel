@@ -20,6 +20,8 @@ import type {
   InterviewTrack,
 } from '../types';
 import SpeakButton from '../components/SpeakButton';
+import { AnswerMarkdown } from '../lib/answer-markdown';
+import { stripMarkdownForTts } from '../lib/strip-markdown';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -460,16 +462,17 @@ function QuestionCard({
               <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Sample answer (EN)
               </h3>
-              <SpeakButton word={question.sample_answer_en} language="en" />
+              <SpeakButton
+                word={stripMarkdownForTts(question.sample_answer_en)}
+                language="en"
+              />
               {question.provider === 'fallback' && (
                 <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">
                   Gemini 兜底
                 </span>
               )}
             </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-              {question.sample_answer_en}
-            </p>
+            <AnswerMarkdown text={question.sample_answer_en} />
           </section>
 
           {question.sample_answer_zh && (
@@ -477,9 +480,10 @@ function QuestionCard({
               <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 中文要点
               </h3>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                {question.sample_answer_zh}
-              </p>
+              <AnswerMarkdown
+                text={question.sample_answer_zh}
+                tone="muted"
+              />
             </section>
           )}
 
