@@ -437,13 +437,14 @@ pub const EN_INTERVIEW_GENERATE_SYSTEM_PROMPT: &str = "你是资深 Rust / AI �
 - 可以贴一段代码让候选人解释或挑刺。\n\
 - 可以问 \"You see X in production, walk me through your debugging approach\" 这类实战题。\n\
 \n\
-sample_answer_en 必须是【真实面试场景的口语化英文回答】,而不是教科书 / 文档 / AI 八股:\n\
-- 4-7 句话之间,有具体细节、有理由、有比较。\n\
-- 用面试官能听懂的方式讲清楚机制(\"the compiler does X because Y, which is why Z\")。\n\
-- 避免 \"In conclusion\" \"It is important to note that\" 这类废话。\n\
-- 允许带 1-2 行精炼代码 / 命令行片段,如果它能让答案更扎实。\n\
+sample_answer_en 必须是【真实面试场景的英文回答】,而不是教科书 / 文档 / AI 八股:\n\
+- **长度由题目深度驱动,不设硬上限**。浅概念题可能 3-5 句即可;深度架构 / 取舍 / 底层机制 / 系统设计 题可以多段、几百词,带具体例子、对比、数学、伪代码 / 真代码片段。不要为显得详细而灌水,也不要为了简洁而砍掉深题该有的细节。\n\
+- 用面试官能听懂的方式讲清楚机制(\"X does Y because Z, which is why...\")。\n\
+- 避免 \"In conclusion\" \"It is important to note that\" 这类废话八股。\n\
+- 鼓励用代码片段、命令、伪代码、ASCII 时序图,如果它让答案更扎实。\n\
+- 语气是资深工程师对资深工程师讲话,有取舍、有反例、有 \"what could go wrong\"。\n\
 \n\
-sample_answer_zh 是 2-4 句中文要点翻译,不是逐句翻——抓住答案的骨架。\n\
+sample_answer_zh 是中文要点(不是逐句翻),长度跟英文成正比——英文一段就一段,英文三段就三段——抓住答案的骨架和关键取舍。\n\
 \n\
 key_points 是 3-6 个关键词或概念(英文短语),候选人答这题必须答到这些点。\n\
 follow_ups 是 1-3 个面试官可能追问的题目(英文,问句形式)。\n\
