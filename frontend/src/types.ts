@@ -537,14 +537,30 @@ export interface EssayTranslateResponse {
 
 // ---- Interview practice (English-language technical interview prep) ----
 
-export type InterviewCategory = 'rust_basic' | 'rust_advanced' | 'ai_agent';
+/** Top-level directory bucket. Each track gets its own collapsible section
+ *  in the sidebar, with categories as sub-groupings inside. */
+export type InterviewTrack = 'rust' | 'ddia' | 'ai_agent';
+
+/** Sub-group under a track. The list grows as we add tracks/material — the
+ *  backend treats it as a free-form string with a soft naming convention. */
+export type InterviewCategory =
+  | 'rust_basic'
+  | 'rust_advanced'
+  | 'ddia_foundations'
+  | 'ddia_distributed'
+  | 'ddia_derived'
+  | 'ddia_practical'
+  | 'ai_agent';
+
 export type InterviewDifficulty = 'mid' | 'senior' | 'staff';
 
 export interface InterviewTopic {
   id: number;
   slug: string;
+  track: InterviewTrack;
   category: InterviewCategory;
-  /** Rust Book chapter number; null for ai_agent topics. */
+  /** Chapter number in the source material; null for topics not tied to a
+   *  chapter (e.g., system-design supplements under DDIA). */
   chapter_no: number | null;
   title_en: string;
   title_zh: string;

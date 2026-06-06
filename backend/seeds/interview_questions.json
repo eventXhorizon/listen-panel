@@ -917,5 +917,742 @@
     "sample_answer_zh": "包了非 Send 原语（裸指针、外部 handle），但你保证跨线程使用是安全的。门槛：包装器跨线程使用的任意方式都不破坏内部的不变量。常见理由：构造后只读（无写就无 race）、所有变更走内部 Mutex、C 库文档保证线程安全。证明就是 unsafe impl 上方那段 \"为什么安全\" 的注释，留给 reviewer 审。写错就是隐秘 data race，LLVM 有权 miscompile。",
     "key_points": ["wrapper preserves invariants", "common justifications", "comment + review", "silent UB on mistake"],
     "follow_ups": ["How is this different from `unsafe impl Sync`?", "What's the typical pattern in tokio for ensuring task Sendness?"]
+  },
+
+  {
+    "topic_slug": "ddia-rsm",
+    "question_en": "Reliability, scalability, and maintainability are the three big concerns in DDIA Chapter 1. Pick one and explain why it's hardest to get right at scale.",
+    "question_zh": "可靠/可扩展/可维护这三件事里，哪一件在大规模下最难做对？为什么？",
+    "sample_answer_en": "Maintainability, by far. Reliability has well-known patterns — redundancy, retries, circuit breakers — and scalability has measurable knobs like sharding and caching. Maintainability degrades silently: a system that ships fast becomes one nobody understands a year later, and the cost shows up as outages, slow features, and onboarding pain. The three sub-properties Kleppmann calls out — operability, simplicity, evolvability — all require investment that doesn't show up on a dashboard, so it's the first to be cut under deadline pressure. The practical fix is to treat docs, runbooks, and test coverage as load-bearing, not as cleanup work.",
+    "sample_answer_zh": "可维护性最难。可靠性有冗余/重试/熔断等成熟套路、可扩展性有分片/缓存等可量化手段；可维护性会悄悄退化，一年后没人懂的系统会以宕机/慢交付/上手痛的形式付账。三个子属性（可运维、简单、可演化）都需要不上仪表盘的投入，所以最先被砍。务实的修法是把文档/runbook/测试覆盖当负载部件。",
+    "key_points": ["operability simplicity evolvability", "silent degradation", "no dashboard signal", "first to be cut"],
+    "follow_ups": ["How do you measure maintainability before a crisis hits?", "Which org structure best preserves evolvability?"]
+  },
+  {
+    "topic_slug": "ddia-rsm",
+    "question_en": "What's the difference between response time and throughput, and which one do you optimize first for a user-facing API?",
+    "question_zh": "response time 和 throughput 有什么区别？做用户 API 时先优化哪个？",
+    "sample_answer_en": "Throughput is requests handled per unit time; response time is how long one request takes from the user's perspective, including queueing, network, and processing. For a user-facing API, optimize response time first — specifically tail percentiles like p95 and p99 — because user perception is dominated by the worst experiences, not the average. A system can have great throughput numbers and miserable users if p99 latency spikes. The relationship is tied by Little's Law: throughput equals concurrency divided by response time, so you can't dramatically improve one without affecting the other.",
+    "sample_answer_zh": "吞吐是单位时间处理多少请求；响应时间是用户视角一次请求耗时（含排队/网络/处理）。用户 API 先优化响应时间，特别是 p95/p99 尾延迟——用户体感由最差几个请求决定，不是平均。两者由 Little's Law 联系：吞吐 = 并发/响应时间。",
+    "key_points": ["throughput vs latency", "tail percentiles", "Little's Law", "user perception"],
+    "follow_ups": ["Why does average latency lie?", "How do you measure tail latency without breaking the bank on storage?"]
+  },
+  {
+    "topic_slug": "ddia-rsm",
+    "question_en": "You're told to make a service \"10x more reliable.\" How do you turn that into actionable engineering work?",
+    "question_zh": "老板说让服务 \"可靠性提升 10 倍\"，你怎么把这翻译成工程动作？",
+    "sample_answer_en": "First, define what reliability means for this service — usually an SLO on availability and/or latency over a rolling window. Get current numbers; if you're at 99.9%, 10x means 99.99% — three vs four nines, the error budget shrinks from 8.7 hours/year to 53 minutes/year. Then identify the top causes of outages from postmortems: it's almost always a small number of root causes (config errors, deploy regressions, dependency failures) covering 80% of downtime. Invest there — better deploys, dependency isolation, config testing — before chasing the long tail. Finally, instrument so you can detect regressions inside the new budget, not after burning it.",
+    "sample_answer_zh": "先定义可靠性（通常是 availability/latency 的 SLO + 滚动窗口）。99.9% → 99.99% 意味着错误预算从 8.7 小时/年降到 53 分钟/年。从事故复盘里找 top 故障源（多半是配置/发布/依赖问题占 80%），先投这些；最后做检测让你在烧光预算前发现退化。",
+    "key_points": ["SLO definition", "error budget arithmetic", "Pareto on root causes", "detect before burn"],
+    "follow_ups": ["What's the right SLO window — 7 days vs 28 days?", "When does chasing more nines actually hurt the product?"]
+  },
+  {
+    "topic_slug": "ddia-rsm",
+    "question_en": "Compare vertical scaling, horizontal scaling, and shared-nothing architecture. When is each the right answer?",
+    "question_zh": "纵向扩展、横向扩展、shared-nothing 架构怎么选？",
+    "sample_answer_en": "Vertical scaling — bigger box — is the simplest and works until you hit the largest machine or your single-node failure becomes unacceptable. It's the right call when traffic is moderate and operational simplicity is worth more than infinite headroom. Horizontal scaling spreads load across many machines; it requires statelessness or a way to partition state, but gives you essentially unbounded capacity and fault tolerance. Shared-nothing is the specific horizontal pattern where each node owns its data — no shared disk, no shared memory — which is what makes systems like Cassandra and BigTable cost-effective at scale. Default to vertical until measurements force the move; horizontal complexity is real.",
+    "sample_answer_zh": "纵向：换大机器，简单，适合中等流量+看重运维简洁。横向：分布到多机，需要无状态或可分片，容量近无界、容错。Shared-nothing 是横向的一种：每节点持自己的数据、无共享盘/内存——Cassandra/BigTable 在大规模下成本可控就靠它。默认纵向、数据逼你换才横向，横向的复杂度是真的。",
+    "key_points": ["complexity tradeoff", "shared-nothing partitions state", "stateless first", "measurement-driven"],
+    "follow_ups": ["What's the elephant in the room with vertical scaling?", "Where does shared-disk (e.g., Aurora) fit?"]
+  },
+  {
+    "topic_slug": "ddia-rsm",
+    "question_en": "What's a fault, what's a failure, and why does the distinction matter when designing reliable systems?",
+    "question_zh": "fault 和 failure 有什么区别？为什么这个区分对可靠性设计重要？",
+    "sample_answer_en": "A fault is one component deviating from spec — a disk returning corrupt bits, a node crashing, a network packet getting lost. A failure is the system as a whole not delivering its service. The point of fault tolerance is to prevent faults from becoming failures: redundancy, retries, replication, error correction. This framing forces you to enumerate the faults you accept, the ones you tolerate, and the ones you let propagate. Netflix's Chaos Monkey literally injects faults to prove the system tolerates them — you can't claim fault tolerance you've never tested.",
+    "sample_answer_zh": "fault 是某个部件偏离规格（坏盘、节点崩、丢包）；failure 是系统整体不交付服务。容错的目的就是阻止 fault 升级成 failure（冗余/重试/复制/纠错）。这个区分逼你列清楚：哪些 fault 接受、哪些容忍、哪些放任。Chaos Monkey 就是注 fault 来证明系统真容错——没测过的容错都是吹的。",
+    "key_points": ["fault is local, failure is global", "tolerate by design", "Chaos engineering proves it", "enumerate failure modes"],
+    "follow_ups": ["What faults are typically NOT worth tolerating?", "How does this map to Byzantine vs crash-fault models?"]
+  },
+
+  {
+    "topic_slug": "ddia-data-models",
+    "question_en": "Walk me through the tradeoffs of relational vs document databases. When does a document model become the wrong call?",
+    "question_zh": "关系型 vs 文档型，取舍是什么？什么时候文档模型反而是错的？",
+    "sample_answer_en": "Document databases win when your data is naturally self-contained — a JSON blob with nested fields you load and save as one unit, like a user profile or a CMS article. Schema flexibility and locality (one fetch reads the whole thing) are real wins. They lose hard when your access patterns need joins across documents, when you need consistency across documents, or when many-to-many relationships emerge — at that point you're either denormalizing painfully or writing application-side joins, both of which the relational model handles cleanly with foreign keys and transactions. Many teams reach for documents for flexibility, then quietly grow a relational schema-in-spirit inside their JSON.",
+    "sample_answer_zh": "文档库适合自包含数据（嵌套 JSON 一把读写，profile/CMS）——schema 灵活、局部性好。但需要跨文档 join/一致性/多对多关系时就崩——要么痛苦地反范式、要么写应用层 join。很多团队为灵活性选文档，最后在 JSON 里悄悄长出一个关系 schema。",
+    "key_points": ["locality wins for self-contained docs", "joins and many-to-many hurt", "schema flexibility tradeoff", "schema-on-read vs schema-on-write"],
+    "follow_ups": ["What's the schema-on-read vs schema-on-write distinction in practice?", "How would you migrate a document model to relational?"]
+  },
+  {
+    "topic_slug": "ddia-data-models",
+    "question_en": "When would you actually reach for a graph database over a relational schema with foreign keys?",
+    "question_zh": "什么时候真该用图数据库，而不是关系表 + 外键？",
+    "sample_answer_en": "When traversal depth becomes part of the query and varies per request — friend-of-friend, path-finding in a knowledge graph, recursive permission checks. Relational gets ugly fast here: you either write recursive CTEs (postgres can do them but performance falls off a cliff past a few hops) or do N+1 query patterns from the app. Graph DBs like Neo4j model edges as first-class with O(1) hop, so a 5-hop traversal that's painful in SQL is natural in Cypher. The catch: most so-called \"graph problems\" turn out to be 1-2 hop joins, which relational handles fine; reach for a graph DB only when the depth is actually variable and significant.",
+    "sample_answer_zh": "当遍历深度可变且是查询的核心时（friend-of-friend、知识图谱寻路、递归权限）。关系库要么写递归 CTE（postgres 能写但几跳后性能崩）要么 N+1 查询。Neo4j 这种把边当一等公民、跳一次 O(1)，5 跳遍历在 Cypher 很自然。但多数 \"图问题\" 其实是 1-2 跳 join，关系库 OK，深度真的可变且大时再用图。",
+    "key_points": ["variable traversal depth", "recursive CTE pain", "O(1) edge traversal", "most cases stay relational"],
+    "follow_ups": ["How does the property graph model compare to RDF / triple stores?", "What does Cypher look like for friend-of-friend?"]
+  },
+  {
+    "topic_slug": "ddia-data-models",
+    "question_en": "Explain the impedance mismatch between OOP code and relational tables. How do modern frameworks paper over it, and where do they leak?",
+    "question_zh": "OOP 代码和关系表之间的 \"impedance mismatch\" 是什么？现代框架怎么糊弄、哪儿漏？",
+    "sample_answer_en": "Objects have nested structure (a User has Addresses which have Geos), but relational rows are flat — you join your way to the nested view. ORMs translate between the two automatically, which is convenient until they generate N+1 queries because lazy-loading hit a loop, or eager-load too much because you didn't tell them what you actually need. They also leak when you express something idiomatic in SQL — window functions, recursive queries, partial indexes — and find no ergonomic ORM way to express it. The mature pattern is: ORM for trivial CRUD, hand-written SQL for hot paths and complex queries, and don't pretend the leak isn't there.",
+    "sample_answer_zh": "对象嵌套（User → Address → Geo）但行是平的，要 join 拼成嵌套视图。ORM 自动翻译，但 lazy-loading 撞循环就 N+1、eager 又过加载；遇到 window/递归/部分索引这类 SQL 地道写法，ORM 没有人体工学表达。成熟模式：trivial CRUD 用 ORM，热路径和复杂查询手写 SQL，别假装漏不存在。",
+    "key_points": ["nested objects vs flat rows", "N+1 from lazy loading", "ORM can't express SQL idioms", "hybrid pattern"],
+    "follow_ups": ["What's the cost of ORM round-trips at high QPS?", "When does an ORM actively make code worse to read?"]
+  },
+  {
+    "topic_slug": "ddia-data-models",
+    "question_en": "What's the schema-on-read vs schema-on-write tradeoff, and what gotchas come with each?",
+    "question_zh": "schema-on-read 和 schema-on-write 各是什么？各自的坑？",
+    "sample_answer_en": "Schema-on-write enforces the schema at insert time — relational DBs, classic example — so every reader can trust what it sees. The cost: migrations are expensive and downtime-risk for large tables. Schema-on-read accepts anything (document DBs, raw JSON in S3) and applies structure at read time, so writes are cheap and you can mix old and new formats. The gotcha is that readers must defensively handle every schema version that's ever existed, and bugs from mismatched field expectations surface at read, often in production. The pragmatic split is: schema-on-write for system-of-record data, schema-on-read for logs / events / analytics ingest.",
+    "sample_answer_zh": "schema-on-write 写时校验（关系库），读者放心但迁移大表贵。schema-on-read 任写（文档库、S3 JSON），写便宜可混版本，但读者必须防御所有历史 schema，字段错配 bug 在读时才浮现。务实分工：record-of-truth 用 write，日志/事件/分析摄入用 read。",
+    "key_points": ["enforced at write vs read", "migration cost vs flexibility", "reader defensive code", "use-case-driven choice"],
+    "follow_ups": ["How does Avro's schema registry split the difference?", "When does schema-on-read become a maintenance disaster?"]
+  },
+  {
+    "topic_slug": "ddia-data-models",
+    "question_en": "You're modeling a social network's friend relationships. Walk me through three storage options and which one you'd ship.",
+    "question_zh": "建模社交网络的好友关系，三种存储方案各自取舍。你最后选哪个？",
+    "sample_answer_en": "Option one: relational with a `friendships(user_a, user_b)` table — simple, transactional, easy to query \"who are my friends.\" Scales to ~hundreds of millions of edges before becoming painful. Option two: document DB with each user's friend list embedded — fast read for one user but bidirectional updates need two writes and there's no easy \"users with mutual friends.\" Option three: graph DB — natural for traversal, friend-of-friend in one query, but operational maturity and ecosystem are weaker. For a real product I'd ship relational with proper indexes and read replicas; reach for a graph DB only when product features explicitly need deep traversal. Many big social networks famously run on sharded MySQL exactly because relational scales further than people assume.",
+    "sample_answer_zh": "选项 1：关系表 friendships(a,b)——简单、事务、查我朋友易，几亿边内 OK。选项 2：文档库每个 user 嵌入好友列表——单用户读快，但双向更新要写两次、求共同好友难。选项 3：图库——遍历天然，但生态运维弱。生产选关系 + 索引 + 读副本；图库等深度遍历真成为产品功能再说。很多大社交就跑在分片 MySQL 上。",
+    "key_points": ["relational scales further than expected", "doc DB hurts bidirectional", "graph DB for traversal-heavy", "ecosystem maturity matters"],
+    "follow_ups": ["How would you handle the celebrity / hot-key problem here?", "What's the cost of sharding by user_id when queries are bidirectional?"]
+  },
+
+  {
+    "topic_slug": "ddia-storage",
+    "question_en": "Compare B-trees and LSM-trees as storage structures. When does each shine?",
+    "question_zh": "B-tree 和 LSM-tree 这两种存储结构怎么对比？各自适合什么场景？",
+    "sample_answer_en": "B-trees update in place: a write touches one or two pages on disk, reads are fast because the tree is balanced and lookup is O(log n). LSM-trees buffer writes in memory and flush sorted runs to disk, then merge them in the background — writes are essentially append-only, so sequential throughput is huge, but reads may have to check multiple levels. B-trees win for read-heavy OLTP with predictable latency (Postgres, MySQL default). LSM-trees win for write-heavy workloads where throughput matters more than tail-latency consistency (Cassandra, RocksDB). The other axis is write amplification: B-trees pay it per write at random offsets, LSMs pay it via compaction in the background — different problems, not free for either.",
+    "sample_answer_zh": "B-tree 原地更新，写两页、读 O(log n) 平衡；LSM 内存缓冲、有序段刷盘、后台合并——写顺序、吞吐大，读要查多层。读多 OLTP + 稳定延迟用 B-tree（PG/MySQL 默认）；写多 + 吞吐优先用 LSM（Cassandra/RocksDB）。写放大都有：B-tree 在写时付，LSM 在 compaction 付。",
+    "key_points": ["update-in-place vs append", "random vs sequential write", "read amplification vs compaction", "use case matters"],
+    "follow_ups": ["What's read amplification and how do bloom filters help?", "How does RocksDB tune compaction in production?"]
+  },
+  {
+    "topic_slug": "ddia-storage",
+    "question_en": "Explain how a hash index works and why most databases don't use it as their primary index.",
+    "question_zh": "hash 索引怎么工作？为什么多数数据库不把它当主索引？",
+    "sample_answer_en": "A hash index keeps an in-memory map from key to disk offset; lookups are O(1). Writes append to a log file and update the map. Limitations: it must fit in memory (one entry per key), it doesn't support range queries because there's no key ordering, and the merge/compaction story for old log segments adds complexity. Most databases need range scans for ORDER BY, GROUP BY, and time-based queries, which hash can't do. B-trees and LSM-trees both maintain key order so they support range and equality lookups uniformly, which is why they're the default. Hash indexes still show up — Redis hash sets, Postgres' optional hash index for equality-only — but as supporting roles.",
+    "sample_answer_zh": "hash 索引在内存里维护 key→offset 映射，O(1) 查；写追加+更新 map。限制：必须装得下内存、不支持范围查询（无顺序）、老段合并复杂。多数库需要 ORDER BY/GROUP BY/时间范围，hash 做不到，所以默认 B-tree/LSM（有序）。hash 仅在 equality-only 角色出现（Redis hash、PG 可选 hash 索引）。",
+    "key_points": ["O(1) lookup", "must fit in memory", "no range queries", "supporting role only"],
+    "follow_ups": ["When does PG's hash index actually beat btree?", "How does Bitcask use a hash index in practice?"]
+  },
+  {
+    "topic_slug": "ddia-storage",
+    "question_en": "What's the difference between OLTP and OLAP workloads, and why do they typically use different storage engines?",
+    "question_zh": "OLTP 和 OLAP 工作负载有什么区别？为什么用不同的存储引擎？",
+    "sample_answer_en": "OLTP — online transaction processing — is many small reads/writes touching a few rows each: place an order, look up a user. Latency-sensitive, point queries dominate, row-oriented storage wins because reading one row touches one page. OLAP — online analytical processing — is few large scans aggregating millions of rows over a few columns: monthly revenue by region. Column-oriented storage wins because you read only the columns you aggregate, compressed densely, and CPU can vectorize over them. Trying to use a row store for OLAP burns IO scanning data you'll discard; trying to use a column store for OLTP makes point writes expensive because each column file needs updating. Modern systems split: Postgres for OLTP, ClickHouse/BigQuery/DuckDB for OLAP, with ETL between.",
+    "sample_answer_zh": "OLTP 多个小读写、点查一两行（订单、查用户），延迟敏感，行存赢——读一行碰一页。OLAP 少量大扫描+聚合（按地区算月营收），列存赢——只读需要的列、压缩密、CPU 向量化。用错代价：行存做 OLAP 浪费 IO 扫废数据；列存做 OLTP 点写贵（每列文件都要改）。生产分家：PG 做 OLTP，ClickHouse/BigQuery/DuckDB 做 OLAP，中间 ETL。",
+    "key_points": ["row vs column orientation", "point query vs aggregation", "compression on columns", "split systems with ETL"],
+    "follow_ups": ["What's HTAP and is it a real category?", "How does columnar compression work — RLE, dictionary, etc.?"]
+  },
+  {
+    "topic_slug": "ddia-storage",
+    "question_en": "Walk me through what \"compaction\" does in an LSM-tree and what goes wrong when you tune it badly.",
+    "question_zh": "LSM-tree 里 compaction 在做什么？调错会出什么问题？",
+    "sample_answer_en": "Compaction merges smaller sorted segments into larger ones, discarding deleted and overwritten entries along the way. Without it, reads slow down because you'd query more and more segments, and disk usage blows up from tombstones. Tuning is a balance: aggressive compaction keeps reads fast but burns IO and CPU you'd want for serving traffic. Lazy compaction conserves resources but causes \"compaction debt\" — long-tail read latency creeps up, then a panic compaction crushes the cluster. Two real failure modes: leveled compaction storms during a hot key burst, and tiered compaction running out of disk before merging finishes. The RocksDB community has spent years tuning this; pick a strategy that matches your read/write ratio and monitor compaction backlog.",
+    "sample_answer_zh": "compaction 把小段合大段、清掉删除/覆盖。不做：读越来越慢（查更多段）+ 墓碑撑爆磁盘。激进 compaction 读快但烧 IO/CPU；懒 compaction 省资源但欠债——尾延迟悄涨，恐慌 compaction 压垮集群。真实故障：leveled 在热 key 突发时风暴、tiered 没合完先爆盘。RocksDB 调了多年——按读写比选策略，监控积压。",
+    "key_points": ["merge + discard tombstones", "aggressive vs lazy tradeoff", "compaction debt", "monitor backlog"],
+    "follow_ups": ["What's the difference between leveled and tiered compaction strategies?", "How do bloom filters interact with compaction levels?"]
+  },
+  {
+    "topic_slug": "ddia-storage",
+    "question_en": "Your query takes 30 seconds doing a sequential scan of a 100M-row table. Walk me through how you'd decide what index to add.",
+    "question_zh": "查询对一张 1 亿行表做顺序扫描跑 30 秒，怎么决定加什么索引？",
+    "sample_answer_en": "First run EXPLAIN ANALYZE to confirm the seq scan and see the filter conditions and join order. Identify the most selective predicate — the one that eliminates the most rows — and consider an index on that column. If the query filters on multiple columns, a composite index ordered by selectivity often wins. Check cardinality: an index on a low-cardinality column (boolean, status enum) usually doesn't help because the planner reverts to a scan. Watch out for the \"sorted output\" case: if the query already needs ORDER BY, a btree on that column kills two birds. Add the index in a low-traffic window (CREATE INDEX CONCURRENTLY in Postgres), re-analyze, and verify the new plan before considering further changes.",
+    "sample_answer_zh": "先 EXPLAIN ANALYZE 确认 seq scan 和谓词。挑最选择性的谓词加索引；多列就考虑复合索引（按选择性排）。低基数（bool/状态）别加，planner 会回退扫描。如果有 ORDER BY，btree 同时省排序。低峰期 CREATE INDEX CONCURRENTLY、再 analyze、验证新计划。",
+    "key_points": ["EXPLAIN ANALYZE first", "selectivity drives index choice", "composite index ordering", "concurrent index creation"],
+    "follow_ups": ["When does an index hurt performance instead of helping?", "What's a covering index and when is it worth the disk?"]
+  },
+
+  {
+    "topic_slug": "ddia-encoding",
+    "question_en": "Compare JSON, Protobuf, and Avro as wire formats. Where does each shine?",
+    "question_zh": "JSON / Protobuf / Avro 这三种线格式怎么对比？各自适合什么场景？",
+    "sample_answer_en": "JSON is human-readable and ubiquitous; you pay in size — typically 2-3x larger than binary formats — and parse cost. It's the right call for low-volume APIs and anything humans debug by curl. Protobuf is compact binary with a schema in a .proto file, codegen for clients, and forward/backward compat by tag numbers. Great for internal RPC where every byte and microsecond matters. Avro is also binary but uses a separate schema per file — perfect for big-data files in S3 where each file embeds its writer schema and readers reconcile. The choice axis: human-readability for APIs, throughput for service RPC, schema-evolution-with-files for data lakes.",
+    "sample_answer_zh": "JSON 可读、通用，体积 2-3 倍 binary、解析贵——低量 API 和 curl 调试场景。Protobuf 紧凑二进制、有 .proto schema、codegen、按 tag 兼容——内部 RPC 在意字节和微秒时选它。Avro 也是二进制，schema 跟文件走——数据湖文件理想，每个文件带写时 schema、读时调和。轴：API 可读用 JSON、服务 RPC 用 protobuf、数据湖用 Avro。",
+    "key_points": ["human-readable vs binary", "schema-in-file vs schema-in-codegen", "size/CPU cost", "use-case axis"],
+    "follow_ups": ["How does Cap'n Proto differ from Protobuf?", "What's the schema registry pattern for Avro in Kafka?"]
+  },
+  {
+    "topic_slug": "ddia-encoding",
+    "question_en": "Explain forward and backward compatibility in a schema. What rules must a Protobuf change follow to be both?",
+    "question_zh": "schema 的 forward / backward compatibility 是什么？protobuf 改动要遵循什么规则才能两个都满足？",
+    "sample_answer_en": "Backward compat: new code reads old data. Forward compat: old code reads new data. Both are required in any rolling deployment where producers and consumers update at different times. Protobuf rules: never change a tag number, never change a field's type (in incompatible ways), don't remove a required field (but proto3 has no required), and add new fields as optional with sensible defaults. New code should treat absent fields as the default; old code ignores unknown tag numbers, which is what makes forward compat free. Renaming a field is fine because tag numbers are the contract; renaming a tag is a breaking change disguised as a rename.",
+    "sample_answer_zh": "backward：新代码读旧数据。forward：旧代码读新数据。滚动发布要求两者都满足。Protobuf 规则：tag 号不改、字段类型不破坏性改、不要删 required（proto3 也无 required）、新字段加为 optional+默认值。新代码按默认处理缺字段；旧代码忽略未知 tag——forward 兼容免费送。改名是安全的（tag 号才是契约），改 tag 是伪装的破坏。",
+    "key_points": ["backward = new reads old", "forward = old reads new", "tag numbers are the contract", "default values for missing fields"],
+    "follow_ups": ["What about deprecating a field — what's the safe sequence?", "How does this interact with Kafka topic schemas?"]
+  },
+  {
+    "topic_slug": "ddia-encoding",
+    "question_en": "REST, GraphQL, and gRPC are the big three for service APIs. What's the deciding criterion when you pick?",
+    "question_zh": "REST / GraphQL / gRPC 这三种 API 风格，选型的决定性标准是什么？",
+    "sample_answer_en": "Client diversity. REST's strength is universality — anything that speaks HTTP can call you — so it wins for public APIs where consumers are unknown. GraphQL wins when the client is a UI that needs flexible shapes and aggressive over/under-fetching control; you pay in server complexity. gRPC wins for internal microservice meshes where you control both ends, want strict typing via Protobuf, and care about HTTP/2 streaming and low overhead. A common pattern: REST/GraphQL at the edge facing apps and partners, gRPC between services internally. \"Which is fastest\" is the wrong question — they solve different coupling problems.",
+    "sample_answer_zh": "看客户端多样性。REST 通用——HTTP 即可调，公共 API 适合。GraphQL 适合 UI 需要灵活字段、控过/欠取，代价是服务端复杂。gRPC 适合内部 mesh——两端可控、Protobuf 强类型、HTTP/2 流式、开销低。常见组合：边缘 REST/GraphQL 对前端/伙伴，内部服务间 gRPC。\"哪个快\" 是错问题，他们解的耦合问题不同。",
+    "key_points": ["client diversity drives choice", "REST for public", "GraphQL for UI flexibility", "gRPC for internal mesh"],
+    "follow_ups": ["How do you do schema evolution on a public REST API?", "When does HTTP/2 streaming actually beat polling?"]
+  },
+  {
+    "topic_slug": "ddia-encoding",
+    "question_en": "What happens when an old service receives a request encoded with a newer schema it doesn't fully understand?",
+    "question_zh": "老服务收到一个用新 schema 编码的请求，会发生什么？",
+    "sample_answer_en": "Depends on the encoding. Protobuf and Avro both encode tag/index plus value, so an old service sees unknown fields and silently skips them — the request still parses, the new data just doesn't influence behavior. JSON similarly: most parsers ignore unknown keys. The danger is that the old service then re-encodes the message for downstream — for example, a proxy reading a request, modifying one field, and writing it back. If it does naive JSON parse+serialize, the unknown fields are lost; in Protobuf, you have to explicitly preserve unknown fields (proto3 does this by default now). This is exactly the situation forward compatibility was designed for; the moment you re-encode is when it gets tested.",
+    "sample_answer_zh": "看编码格式。Protobuf/Avro 编码 tag/index+值，老服务遇未知字段静默跳过——能解析、不影响行为。JSON 大多 parser 忽略未知 key。风险在 \"老服务再编码\" 时：朴素 JSON parse+serialize 丢未知字段；Protobuf 必须显式保留 unknown fields（proto3 默认保留）。这正是 forward compat 设计场景，再编码就是测试场。",
+    "key_points": ["unknown fields skipped on decode", "re-encoding loses them naively", "preserve unknowns in proxies", "forward compat tested at re-encode"],
+    "follow_ups": ["What's the proto3 'unknown fields' policy and how did it change?", "How would you write a test that catches this regression?"]
+  },
+  {
+    "topic_slug": "ddia-encoding",
+    "question_en": "You're rolling out a Protobuf change that adds a new field. Walk me through the deployment order and what could go wrong.",
+    "question_zh": "上一个 protobuf 改动加新字段，部署顺序怎么走？哪儿会出事？",
+    "sample_answer_en": "Roll out consumers first, then producers. Consumers tolerate the absence of the new field (because it's optional with a default), so the order \"old producers → new consumers\" is safe. If you roll producers first, old consumers receive messages with the unknown field — fine in Protobuf because they skip it, but anything that relies on the field's value gets old behavior. The gotcha is when the new field carries semantic information that flips an old code path's behavior — like a `tax_exempt: true` flag whose absence used to mean \"taxable\" but you forgot the consumer side still treats it that way. The principle: every schema change needs a deployment plan that pairs both sides, not just the wire format.",
+    "sample_answer_zh": "先 consumer 后 producer——新字段是 optional+默认，消费者容忍缺失，旧 producer→新 consumer 安全。反过来旧 consumer 收到带未知字段消息没事（skip），但依赖该字段值的逻辑还是旧行为。坑在新字段带语义翻转：tax_exempt:true 缺失旧逻辑当 taxable，你忘了 consumer 端还是这样处理。原则：每次 schema 改要配套部署计划，不只看 wire format。",
+    "key_points": ["consumers first", "default-aware code path", "semantic flips are dangerous", "deployment plan, not just format"],
+    "follow_ups": ["What's the 'expand-contract' pattern for schema migration?", "How do you back out a schema change after rollout?"]
+  },
+
+  {
+    "topic_slug": "ddia-replication",
+    "question_en": "Compare leader-based, multi-leader, and leaderless replication. Where does each work, and where does it fall over?",
+    "question_zh": "主从、多主、无主复制各适合什么？各自栽在哪儿？",
+    "sample_answer_en": "Leader-based (single leader + followers) is the default — Postgres, MySQL, Kafka. All writes go to one node, replicate to followers, simple consistency. Falls over when leader can't handle write volume, or geographically (leader latency dominates). Multi-leader allows writes at multiple sites, used for multi-datacenter and offline clients (collaborative editing). The pain is conflict resolution: two writers can update the same key, and you need CRDTs, last-write-wins, or app-level merge. Leaderless (Cassandra, Dynamo) skips the leader entirely — clients write to multiple replicas, conflicts resolved at read with read-repair or anti-entropy. Strong write throughput, but operational complexity and weaker consistency by default. Rule: leader unless you have a specific reason — geo, latency, write-throughput — to pay the conflict tax.",
+    "sample_answer_zh": "主从默认（PG/MySQL/Kafka），写一节点、复制到 followers，一致性简单；写量上不来或跨地域时崩。多主允许多站点写（多数据中心、离线协作），痛在冲突解决（CRDT/LWW/应用合并）。无主（Cassandra/Dynamo）跳过 leader，客户端写多副本、读时修复——写吞吐强、运维复杂、默认弱一致。规则：默认主从，除非地域/延迟/吞吐逼你付冲突税。",
+    "key_points": ["single leader is default", "multi-leader needs conflict resolution", "leaderless trades simplicity for throughput", "conflict tax"],
+    "follow_ups": ["How does Riak handle conflicts as part of the read?", "What's CRDT and when does it really save you?"]
+  },
+  {
+    "topic_slug": "ddia-replication",
+    "question_en": "What is replication lag, what are the user-visible anomalies it creates, and how do you fix them?",
+    "question_zh": "replication lag 是什么？造成什么用户能看到的异常？怎么修？",
+    "sample_answer_en": "Lag is the time delta between a write hitting the leader and being visible on a follower. Three classic anomalies: read-your-writes — you post a comment and don't see it because your next read went to a stale follower; monotonic reads — your timeline jumps backward because two reads hit followers with different lag; consistent-prefix reads — you see a reply before the message it replied to, because they got partitioned across followers. Fixes are pattern-by-pattern: read-your-writes by routing recent writers to the leader for a window, monotonic by sticking a session to a follower, consistent-prefix by routing related entities to the same shard. None of these come free; usually the answer is \"acknowledge lag in the UX\" plus targeted routing for the worst cases.",
+    "sample_answer_zh": "lag = 主写完到从可见的时间差。三类异常：read-your-writes（发完评论刷不到）、monotonic reads（时间线倒退）、consistent-prefix（看到回复早于原贴）。修：read-your-writes 把近写用户路由 leader 一段；monotonic 把 session 绑同一 follower；consistent-prefix 让相关实体进同一分片。不免费，多数时候 UX 上承认 + 重点路由。",
+    "key_points": ["read-your-writes", "monotonic reads", "consistent prefix", "routing fixes"],
+    "follow_ups": ["How does Cassandra's tunable consistency relate to these?", "What's the 'session consistency' guarantee?"]
+  },
+  {
+    "topic_slug": "ddia-replication",
+    "question_en": "Synchronous vs asynchronous replication: what's the tradeoff and when does \"semi-sync\" pay off?",
+    "question_zh": "同步 vs 异步复制怎么选？semi-sync 什么时候值得？",
+    "sample_answer_en": "Synchronous: leader waits for follower ack before confirming the write. Strong durability — if leader dies, the synced follower has the data. The cost is latency, and if the follower is slow or dead, writes block. Asynchronous: leader confirms immediately, replicates in background. Fast writes, but data committed but not yet replicated is lost on leader failure. Semi-sync — wait for at least one follower among many — strikes a balance: durability against single-node failure without one slow follower blocking all writes. Postgres synchronous_commit, MySQL semi-sync, and Raft's quorum are all variations on this theme. Pick async for low-stakes data, semi-sync for normal OLTP, full sync only for financial-grade durability where the cost is worth it.",
+    "sample_answer_zh": "sync：leader 等 follower ack 才回——强 durability，慢/挂的 follower 阻塞写。async：leader 立即回，后台复制——快，但故障时丢已提交未复制数据。semi-sync：N 个 follower 至少 1 个 ack——单节点故障 durability + 不被一个慢从拖死。PG synchronous_commit / MySQL semi-sync / Raft quorum 都是这思路。低价值用 async，常规 OLTP semi-sync，金融级才全 sync。",
+    "key_points": ["durability vs latency", "semi-sync is the practical middle", "quorum patterns", "match to value"],
+    "follow_ups": ["How does Raft's quorum write differ from MySQL's semi-sync?", "What happens when the synced follower falls behind?"]
+  },
+  {
+    "topic_slug": "ddia-replication",
+    "question_en": "What's a \"split brain\" in leader-based replication, what causes it, and how do real systems prevent it?",
+    "question_zh": "主从复制里的 split brain 是什么？怎么造成的？真实系统怎么防？",
+    "sample_answer_en": "Split brain: two nodes both think they're the leader, both accept writes, and the data forks. Causes are network partitions where the old leader doesn't realize it's been demoted, or asymmetric partitions where part of the cluster sees one leader and part sees another. Real prevention uses quorum-based election (Raft, etcd, ZooKeeper) — a leader can only commit a write with majority ack, so a minority partition can't make progress. Fencing tokens are the operational complement: every leader gets a monotonically increasing epoch number, and any operation tagged with an old epoch is rejected by storage. STONITH (\"shoot the other node in the head\") is the brutal physical version for HA pairs. The principle: be paranoid about who can speak for the system.",
+    "sample_answer_zh": "split brain：两节点都自认 leader、都接受写、数据分叉。起因：网络分区让老 leader 不知自己被罢免、非对称分区让集群一半看 A 一半看 B。防：quorum 选举（Raft/etcd/ZK）——多数 ack 才提交，少数派分区做不了事。栅栏 token：每任 leader 有递增 epoch，存储端拒旧 epoch。STONITH 是 HA 对的物理版。原则：对 \"谁能代表系统\" 偏执。",
+    "key_points": ["quorum election prevents", "fencing tokens", "epoch monotonicity", "STONITH for HA"],
+    "follow_ups": ["What's a fencing token and how does it get to storage?", "Why is single-node primary + standby easy to misconfigure into split brain?"]
+  },
+  {
+    "topic_slug": "ddia-replication",
+    "question_en": "You're seeing 10-second replication lag on read replicas during peak traffic. Walk me through your debugging approach.",
+    "question_zh": "高峰期看到读副本有 10 秒 lag，你的排查路径？",
+    "sample_answer_en": "First, confirm where the lag is: leader's WAL/binlog generation rate, network throughput, or replica's apply rate. Most replication lag comes from replica falling behind on apply, not from network. Check replica's CPU, disk IO, and whether long-running queries on the replica are blocking apply (in Postgres, hot_standby_feedback can cause this; in MySQL, single-threaded SQL thread is the classic bottleneck). Look at the write workload on the leader: a burst of large transactions or bulk inserts can flood the replica. Mitigations: parallel apply (MySQL 5.7+, Postgres logical replication), splitting hot tables to a separate shard, throttling bulk writes, or scaling up the replica's IO. If lag is regular peak-driven, you're at the limit of single-replica apply — time for sharding or a different replication strategy.",
+    "sample_answer_zh": "先定位 lag 在哪：leader 产 WAL 速度、网络、还是从端 apply 慢。多数是 apply 端跟不上。看从机 CPU/IO、长查询是否阻 apply（PG hot_standby_feedback、MySQL 单线程 SQL thread 是经典坑）。看 leader 写工作负载：大事务/批量插入会淹从。修：并行 apply（MySQL 5.7+、PG 逻辑复制）、热表分片、限流批量写、从机扩 IO。规律性高峰 lag 就是 apply 到顶——该分片或换复制策略。",
+    "key_points": ["locate the bottleneck", "single-threaded apply", "hot_standby_feedback", "parallel apply / sharding"],
+    "follow_ups": ["How does Postgres logical replication's worker model help?", "When would you switch to physical streaming vs logical?"]
+  },
+
+  {
+    "topic_slug": "ddia-partitioning",
+    "question_en": "Compare range-based and hash-based partitioning. When does each create problems?",
+    "question_zh": "范围分区 vs 哈希分区，各自什么时候出问题？",
+    "sample_answer_en": "Range partitioning splits keys by lexicographic or numeric range — partition 1 holds keys A-M, partition 2 N-Z. Great for range scans (\"all logs from Tuesday\") and easy to reason about. Falls apart with skewed key distributions: time-based keys create a hot partition on the current time range; alphabetic keys on a popular language pile up on one partition. Hash partitioning hashes the key first, so the distribution is uniform regardless of key shape, eliminating most hot-spot problems. The cost: range scans now require querying every partition and merging, because consecutive keys land on different partitions. Most production systems use hash for OLTP and range for time-series, accepting their respective downsides.",
+    "sample_answer_zh": "范围分区按字典/数字切——便于范围扫（\"周二所有日志\"），但偏斜键会热点（时间键打当下、流行语言键堆同分区）。哈希分区先 hash，分布均匀、无热点；代价：范围扫要查所有分区合并（连续键散到不同分区）。OLTP 多用哈希，时序多用范围，各认各的代价。",
+    "key_points": ["range good for scans, bad for skew", "hash uniform but no range scan", "time series favors range", "OLTP favors hash"],
+    "follow_ups": ["What's consistent hashing and why does it help with rebalancing?", "How does Cassandra's token ring relate to this?"]
+  },
+  {
+    "topic_slug": "ddia-partitioning",
+    "question_en": "What's a hot partition, what causes it, and what are the patterns to prevent or fix it?",
+    "question_zh": "热点分区是什么？怎么造成？预防/修复模式？",
+    "sample_answer_en": "A hot partition handles disproportionate traffic — one shard takes 50% of QPS while others sit idle. Common causes: a celebrity user on a sharded social system, a viral item on an e-commerce platform, time-based keys writing all to \"today.\" Prevention: hash-distribute keys when possible, prepend a random suffix to spread celebrity writes across multiple sub-keys (then aggregate at read), or shard by composite key like (user_id, hash). Detection: monitor per-shard QPS, lock wait, replication lag — they're the early signals. Acute fixes: split the hot shard offline, or rebalance the hot key to its own dedicated shard temporarily. The honest truth: hot keys are the single most common cause of \"my sharded system isn't scaling\" tickets.",
+    "sample_answer_zh": "热点分区一个分片扛了不成比例流量——一分片 50% QPS，其它闲着。常见：明星用户、爆款商品、时间键全写 \"今天\"。预防：哈希分布、给爆款 key 加随机后缀打散（读时聚合）、复合 key 分片。检测：监控分片 QPS/锁等待/复制 lag。急救：离线劈分片、把热 key 独占分片。真相：热 key 是 \"分片系统不弹性\" 的第一大原因。",
+    "key_points": ["disproportionate load", "celebrities and virals", "random suffix to spread", "monitor per-shard metrics"],
+    "follow_ups": ["How would you architect for a known celebrity user?", "What's the 'sub-key explosion' trade-off for hot keys?"]
+  },
+  {
+    "topic_slug": "ddia-partitioning",
+    "question_en": "Walk me through rebalancing strategies when you add a node to a sharded cluster. What goes wrong with the naive approach?",
+    "question_zh": "分片集群加一个节点时的再平衡策略。naive 方法会出什么问题？",
+    "sample_answer_en": "Naive: hash key mod N. Add a node and N changes, so nearly every key remaps to a different shard — you move almost all data and serve from cold caches for hours. The solution is consistent hashing: map nodes to points on a ring, keys go to the next node clockwise — adding a node only moves the keys between it and its neighbor, roughly 1/N of total data. Real systems add virtual nodes (vnodes) per physical node so the load distribution is smoother. Other strategies: fixed-partition count where you start with way more partitions than nodes and assign multiples per node (Cassandra/Riak style), or directory-based where a coordinator maps key→shard explicitly (HBase, Spanner). All three keep adds proportional and predictable.",
+    "sample_answer_zh": "naive：hash key mod N——加节点 N 变，几乎所有 key 重映射，搬光数据 + 冷缓存好几小时。一致性哈希：节点上环，key 走顺时针下一节点——加节点只搬它和邻居之间的 key，约 1/N。实战加 vnodes 让分布更平滑。或固定分区数：起步分区 >> 节点，每节点多分区（Cassandra/Riak）。或目录式：协调器显式映射（HBase/Spanner）。三种都让加节点的代价可预期。",
+    "key_points": ["mod N reshuffles everything", "consistent hashing moves 1/N", "vnodes smooth distribution", "fixed-partition or directory alternatives"],
+    "follow_ups": ["What's the catch with vnodes and how many should you pick?", "How does Spanner avoid consistent hashing entirely?"]
+  },
+  {
+    "topic_slug": "ddia-partitioning",
+    "question_en": "Secondary indexes on a partitioned database — local vs global — what's the trade-off?",
+    "question_zh": "分区数据库的二级索引：local 和 global 各自的取舍？",
+    "sample_answer_en": "Local (per-partition) indexes store the index alongside the data — each shard has an index of its own keys. Cheap to write because you only update one shard's index, but querying \"all users where email = X\" requires scatter-gather across every partition. Global indexes maintain a single, separate index covering all partitions, often partitioned by the indexed value — one query reads one shard's worth. Writes get expensive: updating a row may have to update the index in a different shard, which is a cross-partition transaction. The real-world pattern is local for OLTP where most queries hit the primary key shard, with global indexes added selectively for queries that genuinely need cross-shard reads.",
+    "sample_answer_zh": "local（分区内）：索引随数据，每分片建自己的——写便宜（只改一分片），但 \"按 email 查所有用户\" 要 scatter-gather 全分区。global：跨分区的单一索引（按索引值分片）——一查一分片。写变贵：改一行可能要跨分片改索引（跨分区事务）。生产默认 local，必要的跨分片查询才补 global。",
+    "key_points": ["local cheap write expensive read", "global cheap read expensive write", "cross-partition tx for global writes", "default local + selective global"],
+    "follow_ups": ["How does DynamoDB implement global secondary indexes?", "What's the consistency story for global index writes?"]
+  },
+  {
+    "topic_slug": "ddia-partitioning",
+    "question_en": "You're sharding a 2TB orders table by user_id, but many queries are by order_id alone. Walk through how you'd handle this.",
+    "question_zh": "按 user_id 分片 2TB 订单表，但很多查询只用 order_id，怎么办？",
+    "sample_answer_en": "Three options. One: include the shard key in the order_id itself — encode user_id (or its hash prefix) into the order_id, so order lookups can extract the shard directly. Cheapest and used by Stripe-style ID schemes. Two: maintain a global secondary index from order_id to shard — lookup the index, then read the shard. Adds a hop but keeps order_id opaque. Three: scatter-gather across all shards for order_id queries — works but doesn't scale; only acceptable if these queries are rare. I'd ship option one for any new schema; for an existing table I'd add option two and migrate clients to use it. The deeper lesson: shard keys are part of your public API even when they don't look like it.",
+    "sample_answer_zh": "三选：1) 把 user_id 编进 order_id（取 hash 前缀），按 order_id 能直接定位分片——Stripe 风格 ID 最便宜。2) 全局二级索引 order_id→shard，多一跳但 order_id 不透传。3) scatter-gather 全分片——能跑但不弹性，只在这类查询稀少时凑合。新 schema 直接 1；存量补 2 并迁移客户端。深层：shard key 是公共 API 的一部分。",
+    "key_points": ["embed shard hint in id", "global index hop", "scatter-gather doesn't scale", "shard key as API"],
+    "follow_ups": ["What does a Stripe-style composite ID look like?", "How does this complicate ID generation in a distributed system?"]
+  },
+
+  {
+    "topic_slug": "ddia-transactions",
+    "question_en": "Define ACID and walk me through what each letter actually guarantees and where it's commonly misunderstood.",
+    "question_zh": "讲一下 ACID 每个字母真正保证什么？哪儿常被误解？",
+    "sample_answer_en": "Atomicity: all operations in a transaction commit or none do — most people get this right. Consistency: the database invariants hold before and after; this one is mostly the application's job, not the database's, and Kleppmann calls it \"vague.\" Isolation: concurrent transactions don't interfere, which sounds simple but the SQL standard defines four levels and most databases default to weaker than people think. Durability: committed data survives crashes — turns out to be qualified, since fsync isn't always honored, replicated durability is its own thing, and storage failures can lose committed data. The big trap: \"my DB is ACID\" is often heard as \"my DB serializes my transactions,\" which is only true if you specifically requested SERIALIZABLE isolation.",
+    "sample_answer_zh": "原子性：要么全提交要么全不——大家懂。一致性：业务不变式成立——主要是应用的活，库帮不上多少，Kleppmann 说这字模糊。隔离性：并发事务不互扰——SQL 标准四档，多数库默认弱于你以为。持久性：提交后扛得住崩——但 fsync 未必信、复制持久性是另一回事、存储故障也丢已提交数据。大坑：\"ACID\" 常被听成 \"串行化\"，只有显式要 SERIALIZABLE 才真。",
+    "key_points": ["Atomicity is well understood", "Consistency is mostly app's job", "Isolation default is weaker than expected", "Durability is qualified"],
+    "follow_ups": ["What does Postgres's default isolation level actually allow?", "How is durability complicated by replication?"]
+  },
+  {
+    "topic_slug": "ddia-transactions",
+    "question_en": "Walk through the isolation levels — read uncommitted, read committed, repeatable read, serializable — with a concrete anomaly each prevents.",
+    "question_zh": "依次讲一下四个隔离级别，每个用一个具体异常说明它防什么。",
+    "sample_answer_en": "Read uncommitted allows dirty reads — you see another transaction's uncommitted changes; if it rolls back you read a value that never existed. Read committed prevents dirty reads but allows non-repeatable reads — within one transaction, reading the same row twice gives different values because another transaction committed in between. Repeatable read pins each row to its value at the transaction start, preventing non-repeatable reads, but allows phantom reads — a SELECT with a predicate sees new rows inserted by another committed transaction. Serializable prevents everything by making transactions behave as if executed one after another; in practice implemented via SSI in Postgres or 2PL in classical DBs. Each level trades concurrency for safety; default is usually read committed because serializable hurts throughput.",
+    "sample_answer_zh": "read uncommitted 允许脏读（看到未提交、对方 rollback 你读到 phantom 值）。read committed 防脏读但有 non-repeatable read（同事务两次读同一行结果不同）。repeatable read 把每行钉到事务开始的值，防 NR read，但有 phantom read（带谓词 SELECT 看到新增行）。serializable 全防——像串行执行（PG 用 SSI、经典库用 2PL）。每档拿并发换安全，默认 read committed 因为 serializable 伤吞吐。",
+    "key_points": ["dirty / non-repeatable / phantom / serializable", "each level prevents one more anomaly", "concurrency vs safety trade", "default is read committed"],
+    "follow_ups": ["How does SSI detect serialization conflicts?", "What's snapshot isolation and how does it differ from repeatable read?"]
+  },
+  {
+    "topic_slug": "ddia-transactions",
+    "question_en": "Explain snapshot isolation and why it's been the default for so many modern OLTP systems.",
+    "question_zh": "snapshot isolation 是什么？为什么是现代 OLTP 的默认？",
+    "sample_answer_en": "Snapshot isolation gives each transaction a consistent view of the database as of its start time — every read returns committed data from that snapshot, regardless of concurrent writes. Implemented with multi-version concurrency control (MVCC): writes don't overwrite, they add a new version tagged with the transaction's ID, and reads skip versions that started after them. The win: long read transactions don't block writers, writers don't block readers — a huge concurrency improvement over 2PL. The gotcha: it doesn't prevent write skew or phantom anomalies — two transactions reading the same data and writing based on it can both commit consistent-with-their-snapshot but inconsistent overall. That's why Postgres added SSI (serializable snapshot isolation) — it tracks read dependencies and aborts one of a conflicting pair at commit.",
+    "sample_answer_zh": "snapshot isolation 每个事务看到自己开始时刻的一致视图——读已提交版本，不阻写。MVCC 实现：写加版本带 tx id、读跳晚于自己的版本。赢在长读不阻写、写不阻读。坑：不防 write skew/phantom——两事务读同一数据各自写都按自己快照一致但整体不一致。所以 PG 又加了 SSI（serializable snapshot isolation），追踪读依赖、提交时挑一个 abort。",
+    "key_points": ["consistent snapshot per tx", "MVCC implementation", "readers don't block writers", "write skew still possible"],
+    "follow_ups": ["What's write skew with a concrete example?", "How expensive is SSI's tracking overhead?"]
+  },
+  {
+    "topic_slug": "ddia-transactions",
+    "question_en": "What's a distributed transaction and why are they hard? Walk through 2PC and its known failure modes.",
+    "question_zh": "分布式事务是什么？为什么难？讲 2PC 和它的已知故障模式。",
+    "sample_answer_en": "A distributed transaction commits atomically across multiple participants — typically multiple shards or databases. 2PC (two-phase commit) is the classic protocol: a coordinator asks all participants to prepare (durably write but not commit), then if all say yes, sends commit; otherwise abort. The brutal failure mode: coordinator crashes after prepare but before commit, participants are stuck holding prepared transactions, blocked on shared resources, until coordinator recovers. The locks held during prepare can also pile up under load. 3PC and Paxos Commit theoretically solve the blocking but add complexity. Modern systems usually avoid distributed transactions entirely — use sagas, idempotent retries, eventual consistency, or shard so transactions stay local. 2PC has a place in heterogeneous transaction managers like XA but is increasingly rare in new designs.",
+    "sample_answer_zh": "分布式事务跨多个参与者（多分片/多库）原子提交。2PC 经典：coordinator 让所有参与者 prepare（持久化但不提交）→ 全 yes 就 commit、否则 abort。狠故障：coordinator 在 prepare 后 commit 前崩，参与者卡着 prepared 事务、锁着共享资源等恢复。Prepare 锁也会高负载堆积。3PC/Paxos Commit 理论上解阻但加复杂度。现代多用 saga/幂等重试/最终一致/分片让事务本地——2PC 主要在 XA 这类异构场景，新设计越来越少。",
+    "key_points": ["coordinator + prepare + commit", "blocking on coordinator crash", "lock buildup", "saga / eventual as alternatives"],
+    "follow_ups": ["What's the saga pattern and how does compensation work?", "Why does Spanner use 2PC and how does it survive the failure modes?"]
+  },
+  {
+    "topic_slug": "ddia-transactions",
+    "question_en": "You're designing an account transfer between two banks A and B in different services. Walk me through how you'd guarantee \"money doesn't disappear.\"",
+    "question_zh": "设计跨服务 A→B 银行转账，怎么保证 \"钱不会消失\"？",
+    "sample_answer_en": "If both accounts are in one DB, a single transaction does it. They're not, so you need a multi-step protocol. Most pragmatic: outbox + saga. A's service debits in a local transaction and writes a \"transfer-initiated\" event to an outbox table within the same transaction. A separate worker reads the outbox and calls B's credit API with an idempotency key. B credits in its own local transaction, keyed on the idempotency key so retries don't double-credit, then publishes a confirmation event. If B fails or times out, A's saga compensates by reversing the debit. The invariants are: every step is locally atomic, every cross-service call is idempotent, and there's a reconciliation job that catches stuck transfers. \"Real 2PC across services\" is technically possible but operationally fragile; outbox + saga is what banks actually run.",
+    "sample_answer_zh": "同库一事务搞定；跨服务用 outbox + saga。A 服务本地事务里扣款 + 写 \"transfer-initiated\" 到 outbox。worker 读 outbox 拿幂等 key 调 B 的入账 API，B 本地事务以幂等 key 防双入账，发确认事件。B 失败/超时则 A 的 saga 补偿冲销。三不变：每步本地原子、跨服务调用幂等、对账作业兜底。跨服务真 2PC 技术上能做但运维脆，outbox+saga 是银行实际跑的。",
+    "key_points": ["outbox + saga", "idempotent cross-service calls", "compensation for failures", "reconciliation job"],
+    "follow_ups": ["What's the outbox pattern's failure mode?", "When does a saga compensation itself fail and what then?"]
+  },
+
+  {
+    "topic_slug": "ddia-troubles",
+    "question_en": "What are partial failures and why are they specifically nasty in distributed systems?",
+    "question_zh": "什么是部分失败？为什么在分布式系统里特别讨厌？",
+    "sample_answer_en": "Partial failures: some parts of the system work, others don't, and the working parts can't tell which is which. A request to a downstream service times out — was the request lost, did the response get lost, or is the service slow? You don't know, and the answer changes whether retrying is safe. Contrast a single-machine program where things either work or crash visibly. The whole field of distributed systems exists because partial failure is the default mode, not the exception. The mitigations — timeouts, retries with backoff, idempotency keys, circuit breakers — all assume partial failure and try to bound its damage rather than prevent it.",
+    "sample_answer_zh": "部分失败：系统部分能用、部分不能，能用的部分不知道哪一部分坏了。下游超时——请求丢了？响应丢了？还是慢？不知道，但重试是否安全取决于这个答案。对比单机程序要么成要么明显崩。整个分布式领域存在就因为部分失败是默认。缓解（timeout/退避重试/幂等 key/熔断）都假设它会发生、只是限制伤害。",
+    "key_points": ["unknown state on timeout", "default mode not exception", "mitigations bound damage", "idempotency essential"],
+    "follow_ups": ["What's the difference between an at-least-once and at-most-once retry?", "When is the right answer 'don't retry at all'?"]
+  },
+  {
+    "topic_slug": "ddia-troubles",
+    "question_en": "Clocks in distributed systems: why can't you trust them, and what's the practical alternative?",
+    "question_zh": "分布式系统的时钟为啥不可信？务实的替代是什么？",
+    "sample_answer_en": "Two issues. One: wall clocks (time-of-day) drift, jump backward via NTP adjustments, and can differ between nodes by tens or hundreds of milliseconds — using them to order events across nodes is unreliable. Two: monotonic clocks don't go backward but only make sense within a single machine. Practical patterns: never use wall clocks to decide ordering across nodes; use logical clocks (Lamport timestamps, vector clocks) for causality, or use a service like Spanner's TrueTime that exposes uncertainty intervals. For request timing, use monotonic clocks within a process. The principle: clocks are observations of physical time, not authoritative ordering of events.",
+    "sample_answer_zh": "两个问题：1) wall clock 会漂、NTP 会跳回、节点间差几十-几百 ms——拿它跨节点排序不可信。2) 单调时钟不回退但只在单机有意义。实战：跨节点排序不用 wall clock，用逻辑时钟（Lamport/vector）或带不确定区间的 TrueTime；进程内计时用单调钟。原则：时钟是物理时间的观测，不是事件排序的权威。",
+    "key_points": ["wall clock drift and jump", "monotonic is single-machine only", "logical clocks for ordering", "TrueTime exposes uncertainty"],
+    "follow_ups": ["How does Lamport timestamps actually work?", "What's TrueTime's commit-wait and why does it matter?"]
+  },
+  {
+    "topic_slug": "ddia-troubles",
+    "question_en": "Explain the Byzantine vs crash failure models and why most systems only handle crash failures.",
+    "question_zh": "Byzantine 故障和 crash 故障各是什么？为什么多数系统只处理后者？",
+    "sample_answer_en": "Crash failures: a node either works correctly or stops; it never sends wrong messages. Byzantine failures: a node can do anything, including sending contradictory or malicious messages — buggy software, hardware corruption, or an actively malicious actor. Crash-tolerant systems need a majority of correct nodes (N/2+1) to make progress, Raft and most consensus protocols assume this model. Byzantine-tolerant systems like PBFT need 2/3 honest, do way more message rounds, and are much more expensive. Most production systems are crash-tolerant because the operators control the nodes and trust the binaries — Byzantine assumptions are reserved for blockchains and high-security applications where you don't trust the participants. The cost-benefit usually doesn't pencil for ordinary services.",
+    "sample_answer_zh": "crash 故障：节点要么对要么停，不发错消息。Byzantine：可以做任何事——bug、硬件位翻、恶意行为。crash 容忍系统需多数 N/2+1 正确（Raft 等假设这个）；Byzantine 容忍（PBFT）需 2/3 诚实、消息轮数多得多、贵很多。生产多数是 crash 容忍——你控制节点、信任二进制；Byzantine 假设留给区块链和高安全。普通服务里不划算。",
+    "key_points": ["crash = stops cleanly", "Byzantine = can lie", "N/2+1 vs 2N/3+1", "trust model dictates choice"],
+    "follow_ups": ["When does corrupted memory effectively give you Byzantine behavior?", "How does PBFT's message complexity compare to Raft?"]
+  },
+  {
+    "topic_slug": "ddia-troubles",
+    "question_en": "What's a fencing token and how does it stop a stale leader from corrupting data?",
+    "question_zh": "fencing token 是什么？怎么防止过期 leader 破坏数据？",
+    "sample_answer_en": "Imagine a leader holding a lock on shared storage. The leader pauses (GC, swap, network partition), the lock service times it out and grants leadership to a new node. The old leader wakes up, still thinks it has the lock, and writes to storage — corrupting data. Fencing tokens fix this: every time the lock service grants leadership, it issues a monotonically increasing token number. Every write to storage must include the current token, and storage rejects writes with a token lower than the highest it's seen. So the old leader's write — with the old token — gets refused. Real implementations: ZooKeeper's zxid is a fencing token; etcd's revision number works similarly. The crucial bit is that storage participates in enforcement, not just the lock service.",
+    "sample_answer_zh": "leader 持共享存储锁，自己暂停（GC/换页/分区），锁服务超时另选 leader。老 leader 醒来还自以为持锁、写存储——破坏。fencing token 修法：锁服务每次授权发一个递增 token，写存储必须带当前 token，存储拒绝 token 低于已见最大的写。老 leader 带旧 token 写直接被拒。实战：ZK 的 zxid、etcd 的 revision 就是这模式。关键：存储参与执行，不只是锁服务。",
+    "key_points": ["stale leader after timeout", "monotonic token from lock service", "storage enforces highest seen", "zxid / etcd revision"],
+    "follow_ups": ["What if storage itself is sharded — how does token enforcement scale?", "Why is it dangerous to delegate token check to the client?"]
+  },
+  {
+    "topic_slug": "ddia-troubles",
+    "question_en": "You're seeing intermittent timeouts in a service mesh — sometimes fast, sometimes 30s. Walk me through your debugging.",
+    "question_zh": "服务网格里间歇性超时，有时秒级有时 30 秒，怎么排查？",
+    "sample_answer_en": "First, separate latency from timeouts and quantify both per dependency — distributed tracing (Jaeger, Tempo) shows the spans. Look at whether timeouts cluster on one downstream service or one specific deployment, and whether they correlate with a known event (deploy, traffic spike, GC pause). Check the four classic causes: GC pauses on either side, connection pool exhaustion (every request waits to grab a connection), DNS resolution stalls (default TTL is short, cache thrash hurts), and TCP retransmit storms during network blips. Look at p99 vs p50 on the actual network — if RTT is fine but request latency spikes, it's in-process. Mitigations depend: tune GC, raise pool limits with care, cache DNS aggressively, add retries with deadlines that respect SLOs. Don't add retries without thinking — retries amplify failure under load.",
+    "sample_answer_zh": "先把延迟和超时分开、按依赖量化——分布式追踪（Jaeger/Tempo）看 span。看超时是否集中在某下游/某次发布、是否和事件相关（发布/流量峰/GC）。四个经典源：双端 GC、连接池耗尽（每个请求等连接）、DNS 卡顿（TTL 短、缓存抖）、网络瞬断的 TCP 重传风暴。看实际网络 p99 vs p50，RTT 没事但请求延迟尖刺 = 进程内。修法看情况：调 GC、谨慎扩池、激进缓存 DNS、加带 deadline 的重试。盲加重试会在高负载下放大故障。",
+    "key_points": ["distributed tracing first", "GC / pool / DNS / TCP retrans", "p99 vs p50 separates net vs process", "retries amplify under load"],
+    "follow_ups": ["How does connection pool sizing fail subtly?", "When does adding a retry make the incident worse?"]
+  },
+
+  {
+    "topic_slug": "ddia-consistency",
+    "question_en": "Define linearizability and explain why it's the strongest single-object consistency model.",
+    "question_zh": "linearizability 是什么？为啥它是最强的单对象一致性模型？",
+    "sample_answer_en": "Linearizability means every operation appears to take effect at a single instant between its invocation and response, and the order of those instants matches real time. Concretely: once a write completes, any subsequent read on any node sees that value or a later one. It's the strongest because it gives you the illusion of a single up-to-date copy across all nodes — no stale reads, no monotonic violations. Implementation requires consensus (Raft, Paxos) or external coordination because nodes must agree on order. The cost is latency and availability: CAP says you can't have linearizability + availability under partition, so most systems weaken to sequential or eventual to keep serving traffic. Use it for primary keys, locks, and unique-constraint checks; relax for product catalogs and feeds.",
+    "sample_answer_zh": "linearizability：每个操作仿佛在 invoke 和 return 之间某瞬间生效、且这些瞬间的顺序符合真实时间。具象：写完成后，任意节点的后续读都见到这值或更新。最强是因为它给你 \"一份最新副本\" 的错觉——无脏读、无单调违背。实现要共识（Raft/Paxos）或外部协调。代价：延迟+可用性，CAP 说分区下不可能 linearizability + 可用，所以多数系统弱化到 sequential 或 eventual。用在主键/锁/唯一约束；商品/feed 放宽。",
+    "key_points": ["effect at a single instant", "real-time order respected", "requires consensus", "CAP cost"],
+    "follow_ups": ["What's the difference between linearizability and serializability?", "Can you achieve linearizability with leader-based replication alone?"]
+  },
+  {
+    "topic_slug": "ddia-consistency",
+    "question_en": "Compare linearizability, sequential consistency, and eventual consistency with a concrete user-visible scenario.",
+    "question_zh": "用一个具体用户场景对比 linearizability / sequential / eventual。",
+    "sample_answer_en": "Scenario: you post a comment on a social feed at 12:00:00, your friend reads the feed at 12:00:01. Linearizability: your friend sees your comment, guaranteed, because real-time order is respected. Sequential consistency: your friend sees your comment if the system happens to order things that way, but the model only requires *some* total order consistent with each client's program order — it might \"replay\" later if they refresh. Eventual consistency: your friend may or may not see it now; the system promises they will eventually if no further writes happen. The user-visible result: linearizability feels like a single source of truth, sequential feels mostly right but can surprise, eventual feels broken to users who expect immediacy. Different models for different value of data.",
+    "sample_answer_zh": "你 12:00:00 发评论，朋友 12:00:01 刷。linearizability：朋友必看到（尊重真实时间）。sequential：系统给某种总序+各客户端程序序，朋友可能看到也可能晚刷到。eventual：现在不一定看到，最终（无后续写）会。用户体感：linear 像单一真相，sequential 多数对偶尔意外，eventual 对求即时的用户像坏了。看数据价值选模型。",
+    "key_points": ["linear respects real-time", "sequential respects program order", "eventual gives no time bound", "user perception varies"],
+    "follow_ups": ["When is eventual consistency exactly the right call?", "What's causal consistency and where does it fit?"]
+  },
+  {
+    "topic_slug": "ddia-consistency",
+    "question_en": "Explain the CAP theorem and why \"pick two\" is a misleading summary.",
+    "question_zh": "讲一下 CAP 定理，为啥 \"三选二\" 是误导性总结？",
+    "sample_answer_en": "CAP says: during a network partition between nodes, you must choose between consistency (linearizability) and availability — you can't have both. The \"pick two of CAP\" framing is misleading because partition isn't optional; networks partition. So the real choice is between CP (refuse writes during partition, preserve consistency) and AP (accept writes from both sides, accept divergence). Outside of partitions, you can have both — CAP doesn't apply. Brewer himself walked back the framing, and Abadi's PACELC extends it: even without partitions, you choose between latency and consistency. The useful question isn't \"which two letters\" but \"during a partition, do I refuse writes or accept divergence?\"",
+    "sample_answer_zh": "CAP：网络分区时必须在一致性（linearizability）和可用性之间选一个，不能两全。\"三选二\" 误导在分区不是可选的——网络会分区。真正选择是 CP（分区时拒写、保一致）vs AP（两边都收、接受分叉）。无分区时两者都能有，CAP 不管。Brewer 自己也澄清过。PACELC 拓展：无分区也得在 latency 和一致性之间选。有用问题是 \"分区时拒写还是接受分叉\"，不是 \"哪两个字母\"。",
+    "key_points": ["partition is not optional", "CP vs AP during partition", "PACELC extends", "frame as policy choice"],
+    "follow_ups": ["What's PACELC and how is it more useful?", "Why does 'eventual consistency' often hide a CP system in practice?"]
+  },
+  {
+    "topic_slug": "ddia-consistency",
+    "question_en": "Walk me through Raft at a high level. What does each phase do, and what's the safety property it preserves?",
+    "question_zh": "高层讲一下 Raft。各阶段做什么？保证什么安全属性？",
+    "sample_answer_en": "Raft has three pieces: leader election, log replication, and safety. Election: when a follower times out without hearing from a leader, it becomes a candidate, increments its term, votes for itself, and asks others. A node only votes once per term and only for candidates whose log is at least as up-to-date as its own. Replication: leader appends entries to its log and sends to followers; an entry commits when a majority has it. Safety: leader completeness — once an entry is committed in some term, every future leader has it — guarantees consensus. The simplification over Paxos is having a single leader at a time, which removes most of the complexity in exchange for slightly higher latency during leader failover.",
+    "sample_answer_zh": "Raft 三块：选 leader、复制日志、安全。选举：follower 超时未收 leader 心跳就成 candidate、增 term、投自己、问别人。每节点一 term 一票，只投日志至少和自己一样新的。复制：leader 追加日志并发给 followers，多数有了即 commit。安全：leader completeness——某 term 提交过的条目所有后续 leader 都有——保共识。比 Paxos 简化点：同时一 leader，复杂度降但故障切换延迟稍高。",
+    "key_points": ["election with term and log-up-to-date check", "replication via majority", "leader completeness safety", "single leader simplification"],
+    "follow_ups": ["What happens if two candidates split the vote?", "How does Raft handle the 'liveness' issue with random timeouts?"]
+  },
+  {
+    "topic_slug": "ddia-consistency",
+    "question_en": "What's quorum reads and writes, and how do R + W > N get you consistency?",
+    "question_zh": "quorum 读写是什么？R + W > N 怎么给你一致性？",
+    "sample_answer_en": "In Dynamo-style systems with N replicas, a write needs W acks and a read needs R replies. If R + W > N, the read set and write set overlap by at least one replica, so any read after a successful write sees at least one replica that has the new value. The client picks the highest version. Common configs: N=3, W=2, R=2 — gives you survival of one node failure with quorum overlap. The catch: quorums don't give you linearizability — concurrent writes can still create conflicts and read-repair vs anti-entropy isn't instant. They give you \"latest committed wins with high probability\" plus tunable durability and availability. For true linearizability you need a leader and consensus, not just quorums.",
+    "sample_answer_zh": "Dynamo 风格 N 副本，写要 W 个 ack、读要 R 个回。R+W>N → 读写集合至少重叠一个副本，写完后读必见至少一份新值，客户端取最高版本。常见 N=3 W=2 R=2，扛一节点挂 + 重叠。坑：quorum 不给 linearizability，并发写仍冲突、read-repair/anti-entropy 非实时。给你 \"高概率最新赢\" + 可调持久性和可用性。真要 linearizability 还得 leader + 共识。",
+    "key_points": ["R + W > N overlaps", "tunable durability/availability", "not linearizable", "leader + consensus for linear"],
+    "follow_ups": ["What's sloppy quorum and when is it dangerous?", "How does Dynamo handle concurrent writes — vector clocks?"]
+  },
+
+  {
+    "topic_slug": "ddia-batch",
+    "question_en": "What does MapReduce do conceptually, and why is it the foundation of so many batch systems even though most teams don't write raw MR jobs anymore?",
+    "question_zh": "MapReduce 概念上做了什么？为啥多数团队不再写裸 MR，但它仍是批处理基石？",
+    "sample_answer_en": "MapReduce gives you two phases: map applies a function to each input record and emits key-value pairs; reduce groups all values per key and applies a function. The framework handles distribution, partitioning by key, sorting, and fault tolerance — your code just specifies the two functions. Conceptually it's a way to express embarrassingly parallel work plus a single aggregation step. Modern systems — Spark, Flink, Beam — extend the model with in-memory data flow, richer operators, and DAG optimization, but the same map-and-reduce primitives live underneath. Teams don't write MR directly because the API is verbose and lacks pipelines; Spark's RDD/DataFrame is the practical replacement. The MR model is the foundation for thinking about distributed batch as: split input, process locally, shuffle, aggregate.",
+    "sample_answer_zh": "MapReduce 两阶段：map 给每条记录算并发 KV，reduce 按 key 聚合。框架包分发/分区/排序/容错，代码只写两函数。本质：embarrassingly 并行 + 一次聚合。Spark/Flink/Beam 拓展成内存数据流、更多算子、DAG 优化，底层还是 map+reduce。团队不写裸 MR 因为 API 啰嗦+无 pipeline，Spark RDD/DataFrame 是实用替代。模型是分布式批处理思考方式：切输入、本地算、shuffle、聚合。",
+    "key_points": ["map + reduce primitives", "framework handles distribution", "Spark/Flink build on it", "split-process-shuffle-aggregate mental model"],
+    "follow_ups": ["What's the cost of MR's mandatory shuffle phase and how does Spark reduce it?", "When does a DAG engine beat MR meaningfully?"]
+  },
+  {
+    "topic_slug": "ddia-batch",
+    "question_en": "Walk me through what happens during a shuffle in a batch system, and why it's the typical performance bottleneck.",
+    "question_zh": "批处理里的 shuffle 在做什么？为啥它是典型性能瓶颈？",
+    "sample_answer_en": "Shuffle moves data between machines so that records with the same key end up on the same reducer. Each mapper writes intermediate output partitioned by reduce key; each reducer fetches its partition from every mapper across the network, then sorts and merges. It's the bottleneck because it requires writing intermediate data to disk (or memory) and transferring it across the network — both expensive at scale. Skewed keys make it worse: one reducer waits on a giant partition while others sit idle. Mitigations: combiner functions to pre-aggregate locally, salting hot keys, broadcasting small tables to avoid shuffle on joins, and choosing partition counts that match cluster size. \"Shuffle\" is also why developers learn to tune Spark — most slowness traces back to it.",
+    "sample_answer_zh": "shuffle 跨机搬数据让同 key 进同 reducer。每个 mapper 按 reduce key 分区写中间输出，每 reducer 从每个 mapper 拉自己分区、排序合并。瓶颈：要写磁盘+跨网络，量大都贵。倾斜键更糟——一个 reducer 等大分区其它闲。修：combiner 本地预聚合、热 key 加 salt 打散、小表 broadcast 跳过 join shuffle、分区数匹配集群。\"shuffle\" 也是 Spark 调优的核心。",
+    "key_points": ["redistribute by key", "intermediate disk + network", "skew is the killer", "combiner / broadcast / salt mitigations"],
+    "follow_ups": ["What's a broadcast join and when does it pay off?", "How does Spark's adaptive query execution help with skew?"]
+  },
+  {
+    "topic_slug": "ddia-batch",
+    "question_en": "Compare MapReduce and Spark as execution models. What does Spark actually do better?",
+    "question_zh": "MapReduce 和 Spark 执行模型对比。Spark 真正强在哪？",
+    "sample_answer_en": "MR materializes intermediate state to HDFS between every map and reduce — durable but slow. A multi-stage pipeline writes and reads HDFS once per stage, which is a huge IO tax. Spark builds a DAG of operations, keeps intermediate state in memory (or disk if it overflows), and pipelines stages — typically 10-100x faster for iterative workloads like ML or graph algorithms. Spark also has richer APIs: DataFrames, SQL, MLlib, streaming — one engine for many use cases instead of writing custom MR per task. The cost: Spark's memory management is more complex; you'll spend time tuning executor memory and partition counts. MR still wins for pure throughput on simple one-shot jobs over enormous data because the model is dead-simple.",
+    "sample_answer_zh": "MR 每个 map/reduce 之间往 HDFS 物化中间状态——稳但慢；多阶段 pipeline 每阶段写读 HDFS 一次，IO 税巨大。Spark 用 DAG，中间状态内存（满了落盘）+ 阶段流水化，迭代任务（ML/图）快 10-100x。API 还更富：DataFrame/SQL/MLlib/streaming 一个引擎多用途，不用每个任务写 MR。代价：内存管理复杂、executor 内存和分区数要调。MR 在简单一次性巨数据吞吐还是赢，模型死简单。",
+    "key_points": ["MR materializes per stage", "Spark in-memory DAG", "iterative workloads benefit most", "richer API surface"],
+    "follow_ups": ["What's an RDD's lineage and how does it enable fault tolerance?", "When does Spark spill to disk and how do you avoid it?"]
+  },
+  {
+    "topic_slug": "ddia-batch",
+    "question_en": "How would you join two large tables in a batch system efficiently? Walk through sort-merge vs broadcast join.",
+    "question_zh": "批处理里高效 join 两大表，sort-merge 和 broadcast join 怎么选？",
+    "sample_answer_en": "Sort-merge: shuffle both tables so equal keys land on the same reducer, sort within each partition, then merge. Works for any two tables but pays the full shuffle cost on both sides. Broadcast join: send the small table to every reducer, then stream the large table once and probe the small one in memory — no shuffle of the large table. Broadcast wins when the small table fits in memory (~tens of MB to a few GB depending on cluster), which often happens with dimension tables in a star schema. The catch: pick the threshold wrong and you OOM the executors. Spark's AQE will pick broadcast dynamically based on actual sizes if you let it. Sort-merge is the safe default; broadcast is the optimization when the size asymmetry is real.",
+    "sample_answer_zh": "sort-merge：两表都 shuffle 让同 key 进同 reducer、分区内排、合并——通用但两边都付 shuffle 代价。broadcast：小表发到每 reducer、大表流式扫描内存里 probe——大表无 shuffle。broadcast 适合小表能装内存（几十 MB - 几 GB）+ 维表/事实表场景。坑：阈值设错 executor OOM。Spark AQE 会按实际尺寸动态选。默认 sort-merge，量级悬殊时 broadcast。",
+    "key_points": ["sort-merge shuffles both", "broadcast skips big-table shuffle", "small-table memory limit", "AQE dynamic choice"],
+    "follow_ups": ["What's a bucketed join and when does it shine?", "How would you handle join skew where one key has billions of rows?"]
+  },
+  {
+    "topic_slug": "ddia-batch",
+    "question_en": "What's the relationship between a batch system and a data warehouse, and where do they overlap or stay separate?",
+    "question_zh": "批处理系统和数据仓库什么关系？哪里重叠、哪里分家？",
+    "sample_answer_en": "Historically distinct: batch systems (MR, Spark) process raw files in object storage and produce derived data; warehouses (Snowflake, BigQuery, Redshift) store query-optimized columnar tables and serve analyst SQL. They overlap where modern warehouses run their own batch engines (BigQuery is essentially Dremel+storage), and where tools like dbt orchestrate SQL transformations as batch jobs. The lines blur in the lakehouse pattern — Iceberg/Delta tables in S3 with both a Spark engine and a warehouse engine reading the same files. The separation that still holds: batch is the right tool for arbitrary code and ingestion from messy sources; the warehouse wins for SQL ergonomics, governance, and analyst self-service. Most companies run both in a pipeline.",
+    "sample_answer_zh": "历史上分家：批处理（MR/Spark）处理对象存储原始文件、产派生数据；数仓（Snowflake/BigQuery/Redshift）存查询优化的列存表、跑分析 SQL。重叠：现代数仓自带批引擎（BigQuery = Dremel+存储），dbt 这类把 SQL 变换编排成批作业。lakehouse 模式更模糊——Iceberg/Delta 表在 S3，Spark 和数仓都读同一批文件。仍分家的部分：批处理擅长任意代码 + 乱源摄入；数仓擅长 SQL 人体工学、治理、分析师自助。多数公司管道里两个都有。",
+    "key_points": ["batch for code + ingestion", "warehouse for SQL + governance", "lakehouse blurs the line", "both in pipeline"],
+    "follow_ups": ["What's the lakehouse architecture and what does it actually solve?", "When is dbt the right wrapper around SQL?"]
+  },
+
+  {
+    "topic_slug": "ddia-stream",
+    "question_en": "What's stream processing and where does it beat batch processing fundamentally?",
+    "question_zh": "流处理是什么？相比批处理它在什么本质上赢？",
+    "sample_answer_en": "Stream processing handles events as they arrive — continuous unbounded data — rather than running over a finite dataset. The win is latency: batch jobs run hourly or daily; streams process within seconds or sub-second. When users react to alerts, fraud detection has to fire before the transaction completes, or a dashboard needs to show real-time KPIs, batch can't get there. The cost: streams have to deal with out-of-order events, late arrivals, exactly-once semantics, and stateful operations that batch handles trivially by re-running. Frameworks like Flink and Kafka Streams make the tradeoffs explicit. The honest summary: batch for re-computability and big aggregations, stream for time-to-insight, and many shops run both.",
+    "sample_answer_zh": "流处理把事件按到达顺序连续处理（无界数据），不是跑有限数据集。赢在延迟：批小时/天级，流秒级或亚秒级。报警响应、欺诈识别、实时仪表盘——批做不到。代价：要处理乱序、晚到、恰好一次、状态算子（批可以重跑搞定）。Flink/Kafka Streams 把权衡显式化。务实：批做可重算+大聚合，流做时效，多数公司都跑。",
+    "key_points": ["unbounded continuous events", "low latency wins", "out-of-order and late arrivals", "exactly-once complexity"],
+    "follow_ups": ["What's the Lambda vs Kappa architecture debate?", "Why is exactly-once 'exactly-once effect' not actually exactly-once delivery?"]
+  },
+  {
+    "topic_slug": "ddia-stream",
+    "question_en": "What's event sourcing and how does it relate to stream processing?",
+    "question_zh": "事件溯源是什么？和流处理什么关系？",
+    "sample_answer_en": "Event sourcing means the application's source of truth is an append-only log of events, and the current state is derived by replaying or aggregating those events. Instead of UPDATE user SET balance = 100, you append a Deposited(amount=20) event; the balance is the sum. This pairs naturally with stream processing because the event log IS a stream — Kafka topics, EventStoreDB, or a database CDC feed. Benefits: full audit trail, easy time-travel debugging, derived views can be rebuilt by replay. Costs: you have to design events to be forward-compatible forever, snapshotting is needed for performance, and queries that need point-in-time state are harder. Best fit: domains with strong audit needs or where derived views are many — finance, supply chain, collaborative apps.",
+    "sample_answer_zh": "事件溯源：应用真相是 append-only 事件日志，当前态由重放/聚合事件得出。不是 UPDATE user SET balance=100，而是追加 Deposited(20)；balance 是累加。和流处理天然配——事件日志就是流（Kafka topic/EventStoreDB/DB CDC）。好处：完整审计、时间穿梭调试、派生视图可重建。代价：事件必须永远前向兼容、性能要 snapshot、点查较难。适合强审计或派生视图多的领域——金融/供应链/协作应用。",
+    "key_points": ["append-only events as truth", "state via replay", "pairs with stream processing", "audit + replay benefits"],
+    "follow_ups": ["What's the snapshotting strategy for event-sourced systems?", "How does CQRS pair with event sourcing?"]
+  },
+  {
+    "topic_slug": "ddia-stream",
+    "question_en": "Explain change data capture (CDC). How does it bridge databases and stream processing?",
+    "question_zh": "CDC 是什么？它怎么把数据库和流处理桥起来？",
+    "sample_answer_en": "CDC captures every row-level change in a database — inserts, updates, deletes — and emits them as a stream of change events. Implementations: query-based polling (slow, lossy), trigger-based (intrusive), or log-based (Debezium reading Postgres WAL, MySQL binlog) which is what production uses. The bridge: now your transactional database's state changes become a Kafka topic that downstream consumers can react to — search index rebuilds, cache invalidations, replicas to a warehouse, fraud alerts. This is how most companies do \"database to data lake\" without nightly batch jobs. The catch: schema changes need careful handling, deletes can be tombstones, and exactly-once requires both the database log and the stream platform cooperating.",
+    "sample_answer_zh": "CDC 抓库里每个行级变更（增删改）发成事件流。实现：查询轮询（慢丢）、触发器（侵入）、日志（Debezium 读 PG WAL/MySQL binlog）——生产用日志式。桥梁：事务库的状态变成 Kafka 主题，下游可订阅——搜引擎重建、缓存失效、复制到数仓、欺诈告警。这是 \"库→数据湖\" 不靠夜间批的主流做法。坑：schema 改要小心、删变墓碑、恰好一次需库日志和流平台合作。",
+    "key_points": ["row-level change events", "log-based via WAL/binlog", "drives search/cache/lake replication", "schema and exactly-once concerns"],
+    "follow_ups": ["What's Debezium and what makes it production-ready?", "How does CDC handle a primary key change?"]
+  },
+  {
+    "topic_slug": "ddia-stream",
+    "question_en": "What does \"exactly-once\" really mean in stream processing? Where does it get oversold?",
+    "question_zh": "流处理里的 \"恰好一次\" 真正意思是什么？哪儿被过度宣传？",
+    "sample_answer_en": "Exactly-once is shorthand for exactly-once *effect* — the visible state changes from processing a message happen exactly once even if the message is replayed or the system crashes. It's not exactly-once delivery; the underlying message can be delivered many times. Achievable with idempotent writes, two-phase commit between the stream and the sink, or transactional offsets like Kafka's read-process-write transactions. The oversell: \"exactly-once\" doesn't extend to side effects outside the system — if you call an external API or send an email, that's still at-least-once unless you build idempotency into the external system. Vendors love the phrase because it sounds like magic; engineers know it's just \"effectively idempotent within our trust boundary.\"",
+    "sample_answer_zh": "\"恰好一次\" 是 \"恰好一次效果\" 的简写——可见状态变更恰好生效一次，即使消息重放或崩溃。不是恰好一次投递；底层消息可能投多次。靠幂等写、流和 sink 的 2PC、或 Kafka transactional read-process-write 实现。过度宣传：边界外副作用没救——调外部 API 或发邮件还是 at-least-once，除非外部系统也幂等。供应商爱这词因为像魔法，工程师知道是 \"信任边界内的有效幂等\"。",
+    "key_points": ["effect not delivery", "transactional offsets", "external side effects don't get it", "marketing oversell"],
+    "follow_ups": ["How does Kafka's transactional producer actually work?", "What's the cost of exactly-once in throughput?"]
+  },
+  {
+    "topic_slug": "ddia-stream",
+    "question_en": "Windowing in stream processing — tumbling, sliding, session — when does each show up?",
+    "question_zh": "流处理里的窗口：tumbling / sliding / session，各自什么场景？",
+    "sample_answer_en": "Tumbling: fixed, non-overlapping windows — \"events per minute.\" Simplest, used for periodic counts and aggregations. Sliding: fixed-size, overlapping — \"rolling 5-minute count, updated every 30 seconds.\" Good for smoothing and detecting recent trends, more expensive because events belong to multiple windows. Session: dynamic windows defined by gaps in event time — \"user activity within 30 minutes of last action.\" Perfect for user-session analytics where you don't know in advance how long a session will be. The complications all stack: with late arrivals, you need a watermark to decide when a window closes, and with out-of-order events you face whether to update emitted results or hold them open longer. Pick the window to match the question; pick the watermark to match your tolerance for latency vs completeness.",
+    "sample_answer_zh": "tumbling：固定不重叠（每分钟计数），最简单、周期聚合。sliding：固定重叠（滚动 5 分钟、每 30 秒更新），平滑+趋势，但事件属多个窗口、更贵。session：按事件时间空隙动态切（30 分钟无动作即结束），用户会话分析理想。复杂度叠加：晚到要 watermark 决定窗口关闭，乱序要决定是否更新已发结果或延长。窗口配问题、watermark 配延迟/完整性容忍度。",
+    "key_points": ["tumbling = periodic", "sliding = rolling trend", "session = activity gaps", "watermark for late arrivals"],
+    "follow_ups": ["What's a watermark and how does Flink set it?", "When do you choose processing time vs event time?"]
+  },
+
+  {
+    "topic_slug": "ddia-future",
+    "question_en": "Kleppmann argues for \"unbundling the database\" in the final chapter. What's the idea and where do you see it in practice?",
+    "question_zh": "Kleppmann 在末章讲 \"拆解数据库\"，思路是什么？实战哪里看到？",
+    "sample_answer_en": "Traditional databases bundle storage, indexing, replication, and transactions into a monolith. Unbundling means treating these as separable components built from streams and logs: an event log is the source of truth, derived views (search index, cache, analytic store) are independent consumers, and consistency between them is handled by stream processing. You see this in modern stacks: Kafka as the log, ElasticSearch for full-text, Redis for cache, ClickHouse for analytics, all kept in sync via CDC or stream jobs. The win is each component is optimized for its job; the cost is operational complexity and the burden of maintaining derived views correctly. The bet is that we'll keep getting better at this complexity, and the flexibility pays off long-term.",
+    "sample_answer_zh": "传统库把存储/索引/复制/事务捆成单体。拆解意为把它们当流和日志构成的可分离组件：事件日志是真相，派生视图（搜索/缓存/分析）是独立消费者，一致性靠流处理。实战常见：Kafka 当日志、ES 全文、Redis 缓存、ClickHouse 分析，全靠 CDC/流作业同步。赢在每组件专精，代价是运维复杂 + 派生视图维护负担。赌的是社区越来越擅长这种复杂度。",
+    "key_points": ["log as source of truth", "derived views as consumers", "stream processing maintains consistency", "complexity vs specialization"],
+    "follow_ups": ["What's the materialized view pattern in this architecture?", "Where does this fall short compared to a unified database?"]
+  },
+  {
+    "topic_slug": "ddia-future",
+    "question_en": "End-to-end correctness — Kleppmann talks about idempotency and end-to-end argument. What does it mean for system design?",
+    "question_zh": "Kleppmann 讲的端到端正确性、幂等、end-to-end argument 对系统设计什么意义？",
+    "sample_answer_en": "The end-to-end argument says reliability properties must be checked at the endpoints, not just along the path — if a TCP layer guarantees ordered delivery but the application crashes mid-processing, the receiver hasn't really gotten the message. Applied to distributed systems: an HTTP retry is safe only if the operation is idempotent end-to-end, including any downstream effects. So instead of trusting middle layers, you give each operation an idempotency key, the receiver dedupes by that key, and retries are safe across the whole pipeline. This is how Stripe makes payments resilient, how good message queues prevent double-processing, and how distributed locks survive coordinator failures. The principle: don't trust the wire; trust the contract at the endpoints.",
+    "sample_answer_zh": "end-to-end argument：可靠性属性必须在端点验，不只是路径上——TCP 保有序但应用处理中崩，接收方其实没收到。分布式应用：HTTP 重试只在操作端到端幂等时安全（含下游副作用）。给每次操作幂等 key、接收方按 key 去重，重试在全链安全。Stripe 支付、好消息队列防双消费、分布式锁扛协调者挂都用这模式。原则：别信线路，信端点契约。",
+    "key_points": ["check at endpoints not path", "idempotency key end-to-end", "Stripe-style retries", "trust contract not wire"],
+    "follow_ups": ["What's the idempotency-key TTL question in real APIs?", "How does this interact with at-least-once message queues?"]
+  },
+  {
+    "topic_slug": "ddia-future",
+    "question_en": "Kleppmann discusses the social and ethical dimensions of data systems. Give one example of a technical decision with ethical weight.",
+    "question_zh": "Kleppmann 也谈数据系统的社会与伦理。举一个技术决策本身就带伦理重量的例子。",
+    "sample_answer_en": "Choosing log retention policy. Default \"keep forever\" feels safe and lets you debug anything, but every log line that contains personal data is a future leak risk, a future subpoena, and an obstacle to right-to-erasure compliance. \"Aggressive deletion\" reduces those risks but hurts incident response, capacity planning, and ML training data. The technical choice — Kafka log retention, Postgres WAL backup horizon — has direct ethical and legal consequences. Engineers usually make this decision in passing, without involving security or legal, and discover the cost only when a breach or a GDPR request hits. The point: not all engineering decisions are purely technical, and pretending they are is itself a choice.",
+    "sample_answer_zh": "选日志保留策略。\"永远存\" 看似安全便于排查，但每行带个人数据的日志都是未来泄露风险/传票/被遗忘权合规障碍。\"激进删\" 减风险但伤事故响应、容量规划、ML 训练。技术选择（Kafka log retention/PG WAL 备份期）直接带伦理和法律后果。工程师常顺手定、不拉安全/法务，等到泄露或 GDPR 请求才付账。要点：不是所有工程决策都是纯技术，假装是本身就是一种选择。",
+    "key_points": ["log retention has ethical weight", "right to erasure", "incident response tradeoff", "engineering decisions aren't ethically neutral"],
+    "follow_ups": ["How would you propose a retention policy for a new service?", "What's the technical pattern for honoring right-to-erasure?"]
+  },
+  {
+    "topic_slug": "ddia-future",
+    "question_en": "How would you design a system to keep an event log and a database materialized view consistent without losing data on failure?",
+    "question_zh": "怎么设计一个让事件日志和数据库物化视图保持一致、故障不丢的系统？",
+    "sample_answer_en": "The honest answer: use an outbox table inside the same database transaction as your business write, and have a separate process drain the outbox into the event log. Within the transaction, the business change and the outbox row commit atomically — no chance of one without the other. The drainer reads the outbox in commit order and publishes to the log; if it crashes, it resumes from the last published offset. The materialized view consumer reads the log with offset tracking — if it crashes, it resumes. The combination gives you: never lose an event (outbox is durable), never publish without committing the business state, and at-least-once delivery downstream that downstream handles idempotently. This is the standard \"transactional outbox\" pattern; alternatives like distributed transactions are operationally fragile.",
+    "sample_answer_zh": "诚实答：在同一 DB 事务里业务写 + outbox 表写，单独进程把 outbox 排到事件日志。事务内业务和 outbox 行原子提交，不可能一个有一个没。排干进程按提交序读 outbox 发到日志，崩了从上次 offset 续。物化视图消费者读日志带 offset，崩了续。组合：永不丢事件、不业务提交就不发、下游 at-least-once + 自己幂等。这就是 \"transactional outbox\"，跨系统 2PC 替代方案运维脆。",
+    "key_points": ["outbox in same tx", "drainer with offset", "at-least-once + idempotent downstream", "outbox over distributed tx"],
+    "follow_ups": ["What's the outbox failure mode if the drainer crashes after publish but before mark?", "How does Debezium's outbox routing simplify this?"]
+  },
+  {
+    "topic_slug": "ddia-future",
+    "question_en": "Looking at the data systems landscape, what's one trend you think will define the next 5 years and why?",
+    "question_zh": "看数据系统格局，你觉得未来 5 年定调的趋势是哪个？为啥？",
+    "sample_answer_en": "Object storage becoming the universal substrate. S3, GCS, R2 have matured to the point where they're cheaper than block storage, fast enough for many query workloads with proper formats (Iceberg, Delta), and the convergence of warehouses and lakes on the same files removes a copy step. The implication: more systems become \"a query engine pointing at S3\" rather than \"a database with its own storage,\" which lowers vendor lock-in and lets users mix engines per workload. The bet: the next generation of databases will be more about ergonomics and developer experience and less about storage engines, because storage is becoming commodity. Snowflake and Databricks are already converging there; Postgres-on-S3 projects hint at what's coming.",
+    "sample_answer_zh": "对象存储成通用底层。S3/GCS/R2 已比块存储便宜、配 Iceberg/Delta 这类格式查询足够快、数仓和数据湖在同一批文件汇合省了复制步骤。含义：更多系统变成 \"指向 S3 的查询引擎\" 而非 \"自带存储的数据库\"，降锁定、按工作负载混引擎。下一代库会更卷人体工学和 DX 而非存储引擎，因为存储正商品化。Snowflake/Databricks 已经在汇合，Postgres-on-S3 项目预示。",
+    "key_points": ["S3 as universal substrate", "Iceberg/Delta on same files", "DX over storage engines", "commoditization"],
+    "follow_ups": ["What's Iceberg's storage model and why is it winning?", "Where does this leave dedicated OLTP databases?"]
+  },
+
+  {
+    "topic_slug": "sysd-consensus",
+    "question_en": "Walk me through Paxos at the level of \"why does it work\". What are the safety and liveness guarantees?",
+    "question_zh": "讲一下 Paxos 的 \"为什么 work\"。安全和活性各保证什么？",
+    "sample_answer_en": "Paxos elects a leader-ish proposer per round and gets a value chosen by majority agreement, in two phases: prepare (claim a ballot number, gather promises) and accept (propose a value, gather accepts). Safety: only one value can be chosen per Paxos instance, even with concurrent proposers — guaranteed because every proposer must learn any previously accepted value during prepare and propose that one instead. Liveness: at least one proposer eventually succeeds, but only if you avoid the dueling-proposer scenario where two keep stealing ballots from each other. Real systems use Multi-Paxos with a stable distinguished proposer (effectively a leader) to amortize the prepare phase across many decisions, which is exactly the simplification Raft made explicit.",
+    "sample_answer_zh": "Paxos 每轮选个类 leader 的 proposer、靠多数协议选定一个值，两阶段：prepare（领 ballot 号、收 promise）和 accept（提值、收 accept）。安全：每个 Paxos 实例只选定一个值，即使并发 proposer——因为每个 proposer 在 prepare 必须学到之前已 accept 的值并改提那个。活性：终归有 proposer 成功，但要避 \"双 proposer 互抢 ballot\"。生产 Multi-Paxos 选稳定 distinguished proposer（实际 leader）摊薄 prepare——这正是 Raft 显式化的简化。",
+    "key_points": ["prepare + accept", "safety via learning prior accepts", "dueling proposers hurt liveness", "Multi-Paxos amortizes"],
+    "follow_ups": ["How does Multi-Paxos relate to Raft?", "What's the FLP impossibility result and how does Paxos sidestep it?"]
+  },
+  {
+    "topic_slug": "sysd-consensus",
+    "question_en": "Compare Raft and ZAB (ZooKeeper Atomic Broadcast). They both give linearizable replication — where do they differ?",
+    "question_zh": "Raft 和 ZAB（ZooKeeper Atomic Broadcast）都给 linearizable 复制，差别在哪？",
+    "sample_answer_en": "Raft was designed for understandability and has a clean separation of leader election, log replication, and safety properties. ZAB is older and grew with ZooKeeper's specific needs — primary-backup replication, FIFO ordering per client, and explicit primary order. Both elect a leader, both replicate via majority. Differences: ZAB's recovery phase is more involved because it must reconcile the last committed transaction across replicas with potentially divergent state; Raft's log structure makes recovery a straightforward state-machine catchup. ZAB clients see FIFO ordering per session, useful for ZooKeeper's coordination semantics; Raft doesn't guarantee that. In practice you pick Raft if you're building from scratch (etcd, Consul, CockroachDB all chose it), and you live with ZAB if you're integrating with ZooKeeper.",
+    "sample_answer_zh": "Raft 为可理解性设计，clean 分选举/复制/安全。ZAB 老，跟 ZK 的特定需求长——primary-backup 复制、客户端 FIFO 序、显式 primary 序。共同：选 leader、多数复制。差别：ZAB 恢复阶段更复杂——要在副本间调和最后已提交事务且状态可能分叉；Raft 日志结构让恢复变成直白的状态机追平。ZAB 客户端 session 内 FIFO 有用于 ZK 协调；Raft 不保。新系统选 Raft（etcd/Consul/Cockroach 都选），集成 ZK 就用 ZAB。",
+    "key_points": ["Raft for understandability", "ZAB has FIFO per session", "recovery complexity differs", "default Raft for new systems"],
+    "follow_ups": ["What did the Raft paper specifically simplify vs Paxos?", "How does ZAB handle a leader that committed locally but didn't tell anyone?"]
+  },
+  {
+    "topic_slug": "sysd-consensus",
+    "question_en": "Explain the difference between linearizability and serializability. Where do they apply, and can you have one without the other?",
+    "question_zh": "linearizability 和 serializability 有什么区别？各自适用？能只有一个吗？",
+    "sample_answer_en": "Linearizability is a per-object consistency property: each operation appears to take effect at a single moment, with real-time order respected. Serializability is a per-transaction property: the outcome of multiple transactions is equivalent to running them in some serial order. They're orthogonal: snapshot isolation gives you neither linearizability nor serializability strictly; Postgres with SSI gives you serializability but not linearizability (it might serialize transactions in an order inconsistent with real time); a register protected by Raft gives you linearizability but says nothing about multi-operation atomicity. \"Strict serializability\" is the combination — serializable AND respecting real-time order — which is what Spanner targets. Most application bugs come from people assuming one when they have the other.",
+    "sample_answer_zh": "linearizability 是单对象一致性：每操作仿佛在某瞬生效、尊重真实时间。serializability 是多事务属性：多事务结果等价于某种串行序。正交：snapshot isolation 严格说都不是；PG SSI 给 serializable 但不一定 linear（串行序可能和真实时间不一致）；Raft 守的 register 给 linear 但不管多操作原子。严格可串行 = 两者皆有，Spanner 目标。多数应用 bug 来自把一个当另一个。",
+    "key_points": ["per-object vs per-transaction", "orthogonal properties", "strict serializability = both", "common confusion"],
+    "follow_ups": ["What does Spanner do to achieve strict serializability?", "When does linearizability without serializability cause bugs?"]
+  },
+  {
+    "topic_slug": "sysd-consensus",
+    "question_en": "What's the cost of consensus in latency and throughput? Why don't we just put everything behind Raft?",
+    "question_zh": "共识在延迟和吞吐上的代价是什么？为啥不把所有东西放 Raft 后面？",
+    "sample_answer_en": "Each consensus write needs at least one round trip to a majority of nodes — typically 2-3 nodes across data centers, which is single-digit to tens of milliseconds added per write. Reads either go through the leader (cheap but limited by leader capacity) or need a read quorum (extra round trips). Throughput caps at what the leader can push out, since all writes serialize through it. So putting your entire workload behind Raft means every write pays the full round-trip cost, leader becomes a single bottleneck, and read scaling is limited. The pragmatic split: metadata, locks, leader election, configuration — yes Raft. Bulk user data — sharded with eventually consistent replication and consensus only where needed for atomicity. Spanner uses Paxos at the tablet level for this reason.",
+    "sample_answer_zh": "每次共识写至少一个跨多数节点的来回——通常 2-3 节点跨 DC，每写加几到几十 ms。读要么过 leader（便宜但受 leader 容量限）要么读 quorum（多一来回）。吞吐封顶于 leader 推得多快，所有写都串。把所有工作放 Raft 后面意味着每写付全 RTT、leader 是瓶颈、读扩有限。务实分工：元数据/锁/选举/配置——Raft。用户大数据——分片 + 最终一致复制，只在原子性需要的地方上共识。Spanner 在 tablet 级用 Paxos 就这道理。",
+    "key_points": ["RTT to majority per write", "leader bottleneck", "metadata yes, bulk data no", "Spanner per-tablet Paxos"],
+    "follow_ups": ["How does Spanner avoid the leader bottleneck for the cluster?", "What's a 'leader lease' and how does it help read throughput?"]
+  },
+  {
+    "topic_slug": "sysd-consensus",
+    "question_en": "You're designing a distributed lock service. Walk me through the safety requirements and how a Raft-backed implementation provides them.",
+    "question_zh": "设计一个分布式锁服务，安全要求是什么？Raft 实现怎么满足？",
+    "sample_answer_en": "Safety requirements: at most one holder of a given lock at any time, holders learn quickly when they've lost the lock (e.g., after their session times out), and stale holders can't corrupt protected resources after losing the lock. Raft handles the first two: lock state lives in a replicated log, granted via a linearizable write, and revocation (TTL expiry) is also a logged event so all replicas agree on who holds the lock. The third — stale holders not corrupting resources — needs fencing tokens issued with each grant; storage that the lock protects must enforce that no operation with an older token can succeed. Without fencing, a holder that paused for GC, lost its lock, and resumed could write happily. etcd, Chubby, and ZooKeeper all provide both the lock state and a monotonic token (revision / zxid) for exactly this reason.",
+    "sample_answer_zh": "安全要求：同时最多一个持有者、持有者能快知道丢锁（session 超时）、过期持有者不能破坏受保护资源。Raft 给前两个：锁状态在复制日志、授权是 linear 写、撤销（TTL）也是日志事件、所有副本同意谁持锁。第三个——过期持有者不破坏——要 fencing token 随授权发；存储必须拒绝老 token 的操作。没 fencing，一个 GC 暂停丢锁恢复的持有者照写不误。etcd/Chubby/ZK 都同时提供锁状态和单调 token（revision/zxid）。",
+    "key_points": ["mutual exclusion", "timely revocation", "fencing token at storage", "etcd revision / ZK zxid"],
+    "follow_ups": ["What's the fencing-token problem with sharded storage?", "How does etcd's lease + revision interact during a partition?"]
+  },
+
+  {
+    "topic_slug": "sysd-storage-engines",
+    "question_en": "When would you reach for a key-value store over a relational database for a new service?",
+    "question_zh": "什么时候新服务该用 KV 存储而不是关系库？",
+    "sample_answer_en": "When access patterns are predictable, single-key, and need to scale beyond what a single relational instance can handle. A user session store, a shopping cart, a feature flag service, a rate-limiter counter — they all read/write by one well-known key, never join, and need horizontal scale and sub-millisecond latency. KV stores like DynamoDB or Redis are purpose-built for this and cost less than over-provisioning Postgres. The catch: if your access patterns evolve and you find yourself doing application-side joins, you're recreating a relational DB poorly. Default to relational; switch to KV when the data is naturally a key→value mapping with high QPS and the relational features are unused.",
+    "sample_answer_zh": "访问模式可预期、单 key、且超出单关系实例承载时。session 存储、购物车、feature flag、限流计数——一个 key 读写、无 join、横向扩、亚毫秒。DynamoDB/Redis 这类专为此造、比堆 PG 便宜。坑：模式演化后自己拼 join 等于贫穷地重做关系库。默认关系，访问真是 key→value+高 QPS+关系功能没用上时换 KV。",
+    "key_points": ["predictable single-key access", "horizontal scale need", "sub-millisecond latency", "default to relational"],
+    "follow_ups": ["What's the cost story between DynamoDB and self-managed Redis at scale?", "When does Redis become a poor choice as a primary store?"]
+  },
+  {
+    "topic_slug": "sysd-storage-engines",
+    "question_en": "Compare Cassandra and DynamoDB. They're both \"dynamo-style\" — what's actually different?",
+    "question_zh": "Cassandra 和 DynamoDB 都是 dynamo 风格，实际差别在哪？",
+    "sample_answer_en": "Cassandra is open source, self-hosted, gives you fine-grained control over consistency levels per query, and uses gossip + token ring for cluster membership. DynamoDB is AWS-managed, hides most knobs, charges per request and per stored byte, and runs on Amazon's internal infrastructure (which actually inspired Cassandra). Concretely: you pick Cassandra when you want control, multi-cloud or on-prem deployment, and have the team to operate it. You pick DynamoDB when you want zero ops, are already on AWS, and your workload fits its pricing model. DynamoDB's transactions and global tables are more polished today; Cassandra has lighter overhead and predictable per-node performance. The non-obvious gotcha with DynamoDB: cost can balloon for write-heavy workloads, and the partition key design is unforgiving once data is in.",
+    "sample_answer_zh": "Cassandra 开源自托管、每查询可调一致性、gossip+token 环组员。DynamoDB AWS 托管、藏 knob、按请求+存储计费、跑在 Amazon 内部基础设施（启发了 Cassandra）。要可控+多云/本地+有运维团队选 Cassandra；要零运维+在 AWS+负载贴价用 DynamoDB。DynamoDB 事务和全局表更精良；Cassandra 开销轻、单节点性能稳。坑：DynamoDB 写多账单飞、partition key 设计入库后改不动。",
+    "key_points": ["self-host vs managed", "tuning control vs zero-ops", "pricing model", "partition key as commitment"],
+    "follow_ups": ["What's the DynamoDB single-table design pattern about?", "When does Cassandra's eventual consistency become a real problem?"]
+  },
+  {
+    "topic_slug": "sysd-storage-engines",
+    "question_en": "What's a columnar storage format like Parquet, and why is it so much faster for analytical queries?",
+    "question_zh": "Parquet 这种列存格式是什么？为啥分析查询快那么多？",
+    "sample_answer_en": "Parquet stores data column-by-column instead of row-by-row, with per-column compression and statistics. Analytical queries usually touch a few columns out of many — SELECT sum(revenue) FROM sales WHERE region = 'NA' touches 2 columns out of maybe 50. Columnar lets you read just those columns from disk, skip the rest entirely, and decompress densely. Per-column compression is also much more effective because adjacent values are similar — RLE for low cardinality, dictionary for strings. Add column-level statistics (min/max per row group) and the engine can skip row groups entirely with predicate pushdown. Net effect: 10-100x less IO and 2-10x less CPU than row-oriented for typical analytical workloads. The trade is that row-level writes are painful, which is why columnar is for OLAP, not OLTP.",
+    "sample_answer_zh": "Parquet 按列存而非按行存，每列单独压缩+统计。分析查询通常只碰几列——`SELECT sum(revenue) WHERE region='NA'` 在 50 列里碰 2 列。列存让你只读那两列、跳其它、压得密。每列压缩更有效（邻值相似）——低基数用 RLE、字符串用 dict。再加列级统计（每行组 min/max）+ 谓词下推可跳整行组。典型分析负载 IO 少 10-100x、CPU 少 2-10x。代价：行级写很疼，所以列存只做 OLAP 不做 OLTP。",
+    "key_points": ["read only needed columns", "dense compression by column", "row-group statistics for skipping", "OLAP not OLTP"],
+    "follow_ups": ["How does Parquet's row group size affect query performance?", "What's the difference between Parquet and ORC?"]
+  },
+  {
+    "topic_slug": "sysd-storage-engines",
+    "question_en": "Time-series databases like InfluxDB or TimescaleDB — what's special about them vs a regular relational DB?",
+    "question_zh": "InfluxDB / TimescaleDB 这类时序库相对一般关系库特别在哪？",
+    "sample_answer_en": "Time-series data is append-mostly, indexed by time, and queried in ranges or aggregations over windows. TSDBs optimize specifically for this: time-partitioned storage (Timescale's hypertables, Influx's TSI), columnar compression that exploits temporal locality, and built-in time-bucket and continuous-aggregate operators. A regular relational DB can serve time series but you'd be re-implementing these: manual time-based partitioning, custom aggregation views, vacuum to handle volume. TimescaleDB sits on top of Postgres so you keep SQL, transactions, and joins, with the time-series optimizations layered in — that's why it's the popular bridge. Pure TSDBs like Influx win when scale is enormous and you don't need joins; relational extensions win when you want time series plus everything else.",
+    "sample_answer_zh": "时序数据 append 居多、按时间索、范围/窗口聚合。TSDB 专门优化：按时间分区（Timescale hypertable/Influx TSI）、利用时间局部性的列存压缩、内置 time_bucket 和连续聚合。一般关系库能服务但要自己手动分区+聚合视图+vacuum。TimescaleDB 在 PG 上，留 SQL/事务/join + 时序优化——所以是热门桥。纯 TSDB（Influx）适合超大规模无 join 需求；关系扩展适合时序+其他。",
+    "key_points": ["time-partitioned storage", "temporal compression", "continuous aggregates", "TimescaleDB bridges SQL + TS"],
+    "follow_ups": ["What's a continuous aggregate and how does it differ from a materialized view?", "When does ClickHouse beat TimescaleDB for time series?"]
+  },
+  {
+    "topic_slug": "sysd-storage-engines",
+    "question_en": "You're picking a storage engine for a service that needs 100k writes/sec, 1k reads/sec, with each write being small. Walk me through the decision.",
+    "question_zh": "服务要 10 万写/秒、1 千读/秒、每写都小，存储引擎怎么选？",
+    "sample_answer_en": "Write-heavy at 100k/sec, read-heavy unbalanced — LSM-based engines are the natural fit because writes append cheaply. Cassandra, RocksDB-backed services, or DynamoDB if managed. Avoid B-tree-heavy OLTP databases unless you shard hard: a single Postgres instance maxes out around 5-10k writes/sec on commodity hardware. The exact pick depends on consistency needs: Cassandra with tuned consistency for cross-DC, DynamoDB if you want zero-ops, RocksDB if you're building a custom service and want max throughput. Watch out for the long tail: 100k writes/sec means partition design must avoid hot keys (consistent hashing, salting), and disk IO has to be SSDs or better. Run a load test on representative data before committing — the gap between \"benchmarks suggest\" and \"works in prod\" is real.",
+    "sample_answer_zh": "10 万写/秒+不平衡读，LSM 引擎天然——写顺序廉价。Cassandra、RocksDB 后端服务、或托管 DynamoDB。别用 B-tree OLTP 库除非硬分片：单 PG 商用硬件大约 5-10k 写/秒。具体看一致性需求：跨 DC 调一致性的 Cassandra、零运维 DynamoDB、自建+最大吞吐 RocksDB。注意长尾：10 万写要 partition 设计防热 key（一致性哈希/加 salt）、磁盘必须 SSD。代表性数据跑 load test 再定型——\"基准看着行\" 和 \"生产 work\" 差距是真的。",
+    "key_points": ["LSM for write-heavy", "B-tree caps single instance", "partition design to avoid hot keys", "load test on real data"],
+    "follow_ups": ["What's the latency cost of writing to Cassandra with QUORUM consistency at this scale?", "When does Kafka beat a database for an append-only write workload?"]
+  },
+
+  {
+    "topic_slug": "sysd-classic",
+    "question_en": "Design a URL shortener at scale. Walk me through the data model, ID generation, and read/write paths.",
+    "question_zh": "设计大规模 URL 短链。数据模型、ID 生成、读写路径怎么走？",
+    "sample_answer_en": "Data model: a table mapping short_id → long_url plus metadata (owner, created_at, click count). ID generation: avoid sequential IDs (predictable, leakable); use base62 of a random 64-bit ID or hash of long_url with collision handling. Write path: client posts long URL, service generates short_id, persists, returns shortened URL. Read path: GET /:short_id looks up long_url and 301-redirects. Scale: writes are easy (low QPS, just append); reads are the hard part because every link click hits you. Cache short_id → long_url aggressively (Redis with TTL); the data is immutable per ID so cache invalidation is trivial. Click counting goes to a stream (Kafka) batched into a stats DB so it doesn't slow the redirect path. The single decision that matters most: don't put writes and click analytics in the same hot path.",
+    "sample_answer_zh": "数据模型：short_id→long_url + 元数据（owner/created_at/click count）。ID：别顺序（可猜可枚举），用 base62 64-bit 随机或 hash long_url+碰撞处理。写：POST long URL、生成 short_id、入库、返回短链。读：GET /:short_id 查 long_url 301 跳转。规模：写易（QPS 低、append）；读难（每次点击都来）。激进缓存 short_id→long_url（Redis+TTL），数据不可变，失效平凡。点击计数走流（Kafka）批入统计库，不卡跳转。关键决策：写和分析别在同一热路径。",
+    "key_points": ["base62 random ID", "cache reads aggressively", "click analytics off the hot path", "immutable data simplifies cache"],
+    "follow_ups": ["How would you handle a custom-alias request without race conditions?", "What's the cost story for storing 1B URLs?"]
+  },
+  {
+    "topic_slug": "sysd-classic",
+    "question_en": "Design Twitter's home timeline. Walk me through fan-out on write vs fan-out on read.",
+    "question_zh": "设计 Twitter 主页时间线。写时扇出 vs 读时扇出怎么选？",
+    "sample_answer_en": "Fan-out on write: when user A posts, copy the tweet into each follower's timeline cache. Reads are O(1) — just pull your timeline. Cost: a tweet from someone with 10M followers triggers 10M writes. Fan-out on read: when you load your timeline, query the latest tweets from each user you follow and merge. Reads are O(N followees) and slow if you follow thousands. The real Twitter answer is hybrid: fan-out on write for most users, fan-out on read for celebrities (people with very high follower counts) — when a celebrity tweets, their followers' timelines pull on demand instead. The threshold is tuned, not hardcoded. The deep lesson: at scale, the answer is usually 'both, depending,' and the cost of mis-tuning is operational not theoretical.",
+    "sample_answer_zh": "写扇出：A 发推就拷到每个粉丝的时间线缓存——读 O(1)。代价：1000 万粉丝的发推触发 1000 万写。读扇出：你刷时间线时查所有关注者的最新推合并——读 O(N 关注数)、关注几千就慢。真实 Twitter 是混合：多数用户写扇出、明星（超高粉丝）改读扇出——他们发推时粉丝按需拉。阈值是调的不是硬编。深层：规模下答案常是 \"看情况都用\"，调错代价是运维不是理论。",
+    "key_points": ["fan-out write = fast read, expensive cost on celebrities", "fan-out read = slow read for big followee count", "hybrid by user threshold", "tuning is the work"],
+    "follow_ups": ["What's the storage cost difference between the two strategies?", "How would you handle a celebrity follower-count change crossing the threshold?"]
+  },
+  {
+    "topic_slug": "sysd-classic",
+    "question_en": "Design a distributed rate limiter that handles 100k requests per second across many app servers. What algorithm and what storage?",
+    "question_zh": "设计跨多 app 服务器、10 万 RPS 的分布式限流器。算法和存储怎么选？",
+    "sample_answer_en": "Algorithm options: fixed window (counter per minute, simple but bursty at boundaries), sliding window log (precise but storage-heavy), token bucket (smooth, allows burst, the practical default), and leaky bucket (smoothing). Token bucket via Redis is the standard implementation: a Lua script does test-and-decrement atomically, refilling tokens based on elapsed time. Storage: Redis cluster sharded by key (user/IP/API key); a single Redis instance gets you well past 100k ops/sec, sharded scales further. Watch outs: Redis failover loses some counter state — acceptable for rate limiting because the next window resets. For globally consistent limits across regions you need a more expensive design with multi-region Redis or a consensus-backed store. Most APIs accept slight under-limiting at region boundaries and don't fight that battle.",
+    "sample_answer_zh": "算法：固定窗（按分钟计、简单但边界突发）、滑窗日志（精但存大）、令牌桶（平滑+允突发，实用默认）、漏桶（平滑）。Redis 实现令牌桶最标准：Lua 脚本原子 test-and-decrement、按经过时间补 token。存储：Redis 集群按 key（user/IP/API key）分片；单 Redis 远超 10 万 ops/sec、分片更扩。注意：Redis failover 丢部分状态——限流可接受（下窗重置）。跨区域全局一致要昂贵设计（多区 Redis 或共识库），多数 API 接受边界少算一点不打这仗。",
+    "key_points": ["token bucket default", "Redis Lua atomic update", "shard by limit key", "regional limits acceptable usually"],
+    "follow_ups": ["What's the Lua script for token bucket look like?", "When do you need precise global rate limiting and what does that cost?"]
+  },
+  {
+    "topic_slug": "sysd-classic",
+    "question_en": "Design a chat system with 100M daily active users. What's the connection model and how do messages reach the right person?",
+    "question_zh": "设计 1 亿日活的聊天系统。连接模型？消息怎么到对的人？",
+    "sample_answer_en": "Connection: long-lived WebSocket per user to a connection-server tier. Each server can hold tens of thousands of connections; you scale horizontally to dozens or hundreds of servers. A presence service tracks which connection server holds which user — could be a Redis hash, refreshed via heartbeat. Sending a message: client sends to its connection server, which looks up the recipient's connection server via presence and forwards. Storage: messages persisted to a sharded log (Kafka or similar) for offline delivery and history, with a per-conversation database for queryable storage. Push notifications for offline users go through APNS/FCM. The hard parts: presence under churn, exactly-once-ish delivery to mobile clients with bad networks, and ordering within a conversation under retries. Use per-conversation sequence numbers and let clients dedupe.",
+    "sample_answer_zh": "连接：每用户长连 WebSocket 到连接层服务器，每台扛几万连接、横向几十到几百台。presence 服务记哪台服务器持哪个用户（Redis hash + 心跳）。发消息：客户端发到自己连的服务器，按 presence 查收方服务器转发。存储：消息持久化到分片日志（Kafka 类）用于离线投递+历史，按会话写可查的库。离线推走 APNS/FCM。难点：churn 下的 presence、移动差网络下近似恰好一次投递、重试下会话内有序。每会话序号 + 客户端去重。",
+    "key_points": ["WebSocket per user, sharded servers", "presence lookup for routing", "Kafka log + per-conversation DB", "client-side dedupe by seq"],
+    "follow_ups": ["What's the failover story when a connection server dies?", "How do you handle messages sent during a server-to-server forward failure?"]
+  },
+  {
+    "topic_slug": "sysd-classic",
+    "question_en": "Design a news feed that ranks posts by relevance, not just chronologically. Walk through the data flow.",
+    "question_zh": "设计按相关性而非时间线排序的新闻 Feed，数据流怎么走？",
+    "sample_answer_en": "Two-stage retrieval: candidate generation pulls a few hundred posts the user might care about (from people they follow, popular content in their network, ML-suggested topics), then a ranking model scores each candidate and returns the top N. Candidate generation lives close to storage — sharded queries or precomputed sets — and produces results in tens of milliseconds. Ranking is a feature lookup (user features, post features, engagement signals) plus a model inference (tree ensemble or small DNN), usually deployed as a low-latency service. Caching: cache the candidate set for inactive sessions and the ranked feed for the freshest page. Feedback loop: user interactions go to a click log which feeds offline model training and online feature updates. The hardest engineering bit is the feature pipeline: features must be consistent between training and serving or your model silently degrades.",
+    "sample_answer_zh": "两阶段检索：候选生成拉用户可能在意的几百条（关注/网络热门/ML 推主题），ranking 模型给每条评分返 Top N。候选生成贴存储——分片查询或预算集合，几十毫秒返回。ranking 是特征查找（用户/帖子/互动信号）+ 模型推理（树集合或小 DNN）的低延迟服务。缓存：不活跃 session 缓存候选集、最新一页缓存排好的 feed。反馈环：点击日志喂离线训练和在线特征更新。最难是特征 pipeline：训练和 serving 特征必须一致，不然模型悄悄退化。",
+    "key_points": ["two-stage retrieval", "candidate generation + ranking", "feature pipeline consistency critical", "feedback loop drives quality"],
+    "follow_ups": ["What's training-serving skew and how do you catch it?", "How would you A/B test a ranking model change without affecting all users?"]
+  },
+
+  {
+    "topic_slug": "sysd-debug",
+    "question_en": "Your sharded MySQL cluster has 95% of writes going to one shard during business hours. Walk me through diagnosis and mitigation.",
+    "question_zh": "分片 MySQL 集群业务时段 95% 写打一个分片，怎么诊断和缓解？",
+    "sample_answer_en": "Diagnose first: which shard, which tables, which keys? `SHOW PROCESSLIST` on the hot shard plus slow query log usually pinpoints the table. If one specific key is the hot one (a power user, a popular product), it's a classic celebrity problem; if many keys land on the shard, your shard function has bad distribution. Mitigation depends on cause. For a hot key: add a random salt suffix per write and aggregate at read, route the hot key to a dedicated shard, or use a write-through cache that batches updates. For bad distribution: re-shard with a better hash function and live migrate (slow but correct). Immediate relief: enable a read replica on the hot shard to take some read load off, and check whether any pathological queries are amplifying writes (full-table updates, missing index). Don't push a fix during business hours unless you're sure.",
+    "sample_answer_zh": "先诊断：哪个分片、哪表、哪 key？热分片 `SHOW PROCESSLIST` + 慢日志多半能定位。一个 key 热（明星用户/爆品）= 经典明星问题；多 key 都落这分片 = 分片函数分布坏。修法看原因：单热 key 加随机 salt 后缀分散+读时聚合、把热 key 独占分片、写穿缓存批量更新。分布坏：换 hash 重分片 + 在线迁移（慢但对）。立即缓解：开热分片读副本卸读、查是否有变态查询放大写（全表更新/漏索引）。业务时段没把握别推 fix。",
+    "key_points": ["identify which shard / table / key", "celebrity vs bad distribution", "salting / dedicated shard / re-shard", "don't fix blindly in business hours"],
+    "follow_ups": ["What's the cost of live re-sharding 1TB of data?", "How would you A/B test a sharding change safely?"]
+  },
+  {
+    "topic_slug": "sysd-debug",
+    "question_en": "You're paged: a service that worked yesterday is now returning 500s on 1% of requests. No deploys today. Walk me through.",
+    "question_zh": "被叫起来：昨天还好的服务今天 1% 请求 500，今天没发布，怎么查？",
+    "sample_answer_en": "Hypotheses in order: it's a downstream dependency degraded, it's an infrastructure event (DNS, network, cloud zone), it's a slow data growth crossing a threshold (table size, log volume, lock contention), or it's a periodic batch job that landed differently today. Pull the 1% requests' traces — are they correlated by user, by region, by route? If they cluster on one downstream call, that's your suspect. If they cluster on a specific code path, look at what data hits that path today vs yesterday. Check infra dashboards for cloud incidents. Check the data: did a table cross 100M rows overnight and now misses an index? Did a queue back up and cause head-of-line blocking? The discipline: don't chase \"a flaky test\" theories; the 1% has a signature, find it.",
+    "sample_answer_zh": "假说排序：下游退化、基础设施事件（DNS/网络/云区）、数据增长跨阈值（表大/日志多/锁争用）、周期批作业今天打到。拉 1% 请求 trace——按用户/区域/路由聚类？聚某个下游调用→嫌疑。聚某代码路径→看今日数据 vs 昨日。看云仪表盘有无事件。看数据：是不是某表夜里破 1 亿行漏了索引？队列堆头阻塞？纪律：别追 \"flaky 测试\" 理论，1% 有 signature，找它。",
+    "key_points": ["trace clustering", "infra event check", "data threshold crossing", "no flaky theories"],
+    "follow_ups": ["When is 'auto-restart the pods' the right immediate response?", "How would you prove or disprove a DNS hypothesis quickly?"]
+  },
+  {
+    "topic_slug": "sysd-debug",
+    "question_en": "Your Postgres primary fails over to standby. The standby promotes successfully, but the application sees stale data for 30 seconds. What happened?",
+    "question_zh": "PG 主切到 standby，promote 成功，但应用看到 30 秒过期数据。发生了什么？",
+    "sample_answer_en": "Classic replication-lag-meets-failover incident. The standby was behind by some seconds because async replication, and the moment it promoted, the gap of un-replicated transactions on the old primary effectively vanished — those writes are lost. Applications reading immediately after promotion see the state from before those writes were committed. Fixes are about prevention, not the moment: use synchronous replication for at least one standby (semi-sync) so promotion doesn't lose committed data, monitor replication lag with alerts before failover, and have the application surface a brief read-only or maintenance mode during failover so users don't see inconsistent state. The harder lesson: a failover that 'works' can still lose data if you didn't design replication for it. Postgres pg_rewind is what you'd use to repair the old primary's diverged state when it comes back.",
+    "sample_answer_zh": "经典 \"复制滞后 + 故障切换\" 事故。standby 因异步复制落后几秒，promote 瞬间老主上未复制的事务实际上消失——这些写丢了。promote 后立即读看到这些写之前的状态。修法是预防：至少一个 sync standby（semi-sync）让 promote 不丢已提交、监控 lag 提前告警、应用在切换时短暂只读或维护模式。深层：\"成功\" 的切换也可能丢数据，看你复制怎么设计。PG pg_rewind 用于老主回来修分叉状态。",
+    "key_points": ["async replication loses gap on failover", "semi-sync prevents", "monitor lag", "design for the failover, not just hope"],
+    "follow_ups": ["How does Patroni's synchronous mode work for HA?", "What's pg_rewind doing under the hood?"]
+  },
+  {
+    "topic_slug": "sysd-debug",
+    "question_en": "A queue-based pipeline is processing messages but the downstream DB shows old data. Where's the bug, in principle?",
+    "question_zh": "队列管道在消费消息，但下游 DB 数据是老的。原则上 bug 在哪？",
+    "sample_answer_en": "Three buckets to check, in order. One: are consumers acknowledging messages they haven't fully processed yet? At-least-once semantics require ack-after-write, and if ack-then-write, a crash between ack and write loses the message. Two: is there a slow consumer pegging on one partition, causing head-of-line blocking? The queue depth looks fine globally but one partition has a backlog. Three: is the consumer writing to the right thing? Surprisingly common bug: someone refactored the writer to a new table or schema and forgot to update the read path. Look at end-to-end lag (event timestamp vs DB updated_at) per partition. The principle: in a pipeline, you must measure freshness end-to-end, not by 'the consumer is running' — running doesn't mean correct.",
+    "sample_answer_zh": "三块顺序排查。1) 消费者是不是写完之前就 ack？at-least-once 要求 ack-after-write，ack-then-write 中间崩就丢。2) 是不是某分区慢消费导致 head-of-line 阻塞？全局看队列不深但某分区积压。3) 消费者是不是写错地方？经典：写者改了新表/schema 但读路径忘了改。看端到端 lag（事件时间 vs DB updated_at）按分区。原则：管道里要测端到端新鲜度，不是 \"消费者在跑\"，跑不等于对。",
+    "key_points": ["ack ordering bug", "head-of-line per partition", "writer/reader schema mismatch", "end-to-end lag not consumer state"],
+    "follow_ups": ["What's the ack-then-write vs write-then-ack tradeoff?", "How do you reset the consumer to reprocess a partition safely?"]
+  },
+  {
+    "topic_slug": "sysd-debug",
+    "question_en": "You see clock skew between nodes causing TLS handshakes to fail intermittently. Walk me through investigation and the proper fix.",
+    "question_zh": "节点间时钟漂移导致 TLS 握手间歇失败，怎么查、正确修法是什么？",
+    "sample_answer_en": "TLS certificates have validity windows; if a node's clock is far off, the cert may look not-yet-valid or expired and the handshake fails. Investigate: check `chronyc tracking` or `timedatectl status` across nodes for skew larger than expected. If skew is large (seconds to minutes), NTP isn't working — bad upstream server, blocked port 123, or a misconfigured timezone. Quick fix: force-sync `chronyc makestep` and verify steady state. Proper fix: ensure NTP/chrony is running, point at reliable servers (your cloud's NTP service or pool.ntp.org), monitor skew metrics, and alert on drift before TLS notices. The deeper lesson: time is infrastructure, and 'NTP is configured' isn't the same as 'NTP is working' — measure the skew, don't assume.",
+    "sample_answer_zh": "TLS 证书有效期：节点时钟差太多看 cert 像未生效或过期，握手挂。查：`chronyc tracking` 或 `timedatectl status` 跨节点看大于预期的漂移。秒到分级漂移说明 NTP 不工作——上游差、123 端口被封、时区配错。急修：`chronyc makestep` 强同步、稳定后验证。正修：NTP/chrony 跑着、指向可靠源（云的 NTP 或 pool.ntp.org）、监控漂移、TLS 报错前先告警。深层：时间是基础设施，\"NTP 配了\" ≠ \"NTP 工作\"，量它别假设。",
+    "key_points": ["TLS validity window vs clock", "chrony makestep for emergency", "monitor skew not config", "time is infra"],
+    "follow_ups": ["What's the right alert threshold for clock skew?", "How does Spanner avoid relying on conventional NTP?"]
   }
 ]
+

@@ -168,17 +168,27 @@ pub fn interview_generate_system_prompt() -> &'static str {
 }
 
 pub fn interview_generate_user_prompt(
+    track: &str,
     topic_title_en: &str,
     topic_title_zh: &str,
     source_url: Option<&str>,
     count: usize,
 ) -> String {
+    // Track-specific framing gives the model the right persona and lets the
+    // questions land at the right depth. The system prompt is kept generic
+    // (senior backend interviewer); the user prompt injects domain context.
+    let persona = match track {
+        "rust" => "你正在扮演资深 Rust 工程师面试官,候选人申请 senior / staff Rust 后端岗位。",
+        "ddia" => "你正在扮演资深分布式系统/后端工程师面试官,候选人申请 senior / staff 后端岗位,熟读 DDIA 并有分布式系统/数据库实战经验。问题应当贴近真实工程取舍,而不是死记定义。",
+        "ai_agent" => "你正在扮演资深 AI 工程师面试官,关注 LLM Agent / RAG / 工具调用 / Eval / Agent 框架等方向,候选人是 senior 级别。",
+        _ => "你正在扮演资深后端工程师面试官,候选人申请 senior 岗位。",
+    };
     let source_line = match source_url {
         Some(url) => format!("\n参考材料: {url}"),
         None => String::new(),
     };
     format!(
-        "面试主题: {topic_title_en} ({topic_title_zh}){source_line}\n\n请围绕这个主题,生成 {count} 道高级(senior)级别的英文技术面试题。"
+        "{persona}\n\n面试主题: {topic_title_en} ({topic_title_zh}){source_line}\n\n请围绕这个主题,生成 {count} 道高级(senior)级别的英文技术面试题。"
     )
 }
 

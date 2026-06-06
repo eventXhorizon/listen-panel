@@ -17,22 +17,40 @@ import type {
   InterviewCategory,
   InterviewQuestion,
   InterviewTopic,
+  InterviewTrack,
 } from '../types';
 import SpeakButton from '../components/SpeakButton';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 const LAST_TOPIC_KEY = 'interview:last-topic-id';
+const COLLAPSED_TRACKS_KEY = 'interview:collapsed-tracks';
+
+const TRACK_LABEL: Record<InterviewTrack, string> = {
+  rust: 'Rust',
+  ddia: '分布式系统 (DDIA)',
+  ai_agent: 'AI Agent',
+};
+
+const TRACK_ORDER: InterviewTrack[] = ['rust', 'ddia', 'ai_agent'];
 
 const CATEGORY_LABEL: Record<InterviewCategory, string> = {
-  rust_basic: 'Rust 基础 (Ch 1-10)',
-  rust_advanced: 'Rust 进阶 (Ch 11-20)',
+  rust_basic: 'Ch 1-10 基础',
+  rust_advanced: 'Ch 11-20 进阶',
+  ddia_foundations: 'Part I 数据系统基础',
+  ddia_distributed: 'Part II 分布式数据',
+  ddia_derived: 'Part III 派生数据',
+  ddia_practical: '系统设计高频题',
   ai_agent: 'AI Agent',
 };
 
 const CATEGORY_ORDER: InterviewCategory[] = [
   'rust_basic',
   'rust_advanced',
+  'ddia_foundations',
+  'ddia_distributed',
+  'ddia_derived',
+  'ddia_practical',
   'ai_agent',
 ];
 
@@ -65,14 +83,25 @@ export default function Interview() {
     localStorage.setItem(LAST_TOPIC_KEY, String(id));
   }
 
-  const grouped = useMemo(() => {
-    const map = new Map<InterviewCategory, InterviewTopic[]>();
-    for (const cat of CATEGORY_ORDER) map.set(cat, []);
+  // Group topics two levels deep: track → category → topics. Both levels
+  // come from constant orderings so an empty track or category just skips.
+  const groupedByTrack = useMemo(() => {
+    const byTrack = new Map<
+      InterviewTrack,
+      Map<InterviewCategory, InterviewTopic[]>
+    >();
+    for (const track of TRACK_ORDER) {
+      const inner = new Map<InterviewCategory, InterviewTopic[]>();
+      for (const cat of CATEGORY_ORDER) inner.set(cat, []);
+      byTrack.set(track, inner);
+    }
     for (const t of topics) {
-      const list = map.get(t.category);
+      const inner = byTrack.get(t.track);
+      if (!inner) continue;
+      const list = inner.get(t.category);
       if (list) list.push(t);
     }
-    return map;
+    return byTrack;
   }, [topics]);
 
   const selectedTopic = useMemo(
@@ -80,16 +109,44 @@ export default function Interview() {
     [topics, selectedTopicId],
   );
 
+  // Per-track collapse state, persisted across sessions. Empty default →
+  // every track expanded on first visit.
+  const [collapsedTracks, setCollapsedTracks] = useState<Set<InterviewTrack>>(
+    () => {
+      try {
+        const raw = localStorage.getItem(COLLAPSED_TRACKS_KEY);
+        if (!raw) return new Set();
+        const parsed = JSON.parse(raw) as string[];
+        return new Set(parsed as InterviewTrack[]);
+      } catch {
+        return new Set();
+      }
+    },
+  );
+
+  function toggleTrack(track: InterviewTrack) {
+    setCollapsedTracks((cur) => {
+      const next = new Set(cur);
+      if (next.has(track)) next.delete(track);
+      else next.add(track);
+      localStorage.setItem(
+        COLLAPSED_TRACKS_KEY,
+        JSON.stringify(Array.from(next)),
+      );
+      return next;
+    });
+  }
+
   return (
     <main className="flex-1 overflow-hidden">
       <div className="mx-auto flex h-full w-full max-w-7xl">
-        <aside className="w-64 shrink-0 overflow-y-auto border-r border-border bg-card/40 px-3 py-6">
+        <aside className="w-72 shrink-0 overflow-y-auto border-r border-border bg-card/40 px-3 py-6">
           <div className="mb-4 px-2">
             <h1 className="text-lg font-medium tracking-tight text-foreground">
               面试备战
             </h1>
             <p className="mt-1 text-xs text-muted-foreground">
-              英文 Rust / AI 技术面试问答练习
+              英文技术面试问答练习
             </p>
           </div>
 
@@ -103,42 +160,78 @@ export default function Interview() {
             <div className="px-2 text-sm text-destructive">{topicsError}</div>
           )}
 
-          {CATEGORY_ORDER.map((cat) => {
-            const items = grouped.get(cat) ?? [];
-            if (items.length === 0) return null;
+          {TRACK_ORDER.map((track) => {
+            const inner = groupedByTrack.get(track);
+            if (!inner) return null;
+            const trackTotal = Array.from(inner.values()).reduce(
+              (n, list) => n + list.length,
+              0,
+            );
+            if (trackTotal === 0) return null;
+            const collapsed = collapsedTracks.has(track);
             return (
-              <div key={cat} className="mb-5">
-                <div className="mb-1 px-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {CATEGORY_LABEL[cat]}
-                </div>
-                <ul className="space-y-0.5">
-                  {items.map((t) => (
-                    <li key={t.id}>
-                      <button
-                        type="button"
-                        onClick={() => onSelectTopic(t.id)}
-                        className={cn(
-                          'w-full rounded-md px-2 py-1.5 text-left text-sm transition',
-                          selectedTopicId === t.id
-                            ? 'bg-accent text-foreground font-medium'
-                            : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
-                        )}
-                      >
-                        <div className="flex items-baseline gap-1.5">
-                          {t.chapter_no != null && (
-                            <span className="text-[11px] text-muted-foreground/70">
-                              Ch {t.chapter_no}
-                            </span>
-                          )}
-                          <span className="truncate">{t.title_zh}</span>
+              <div key={track} className="mb-4">
+                <button
+                  type="button"
+                  onClick={() => toggleTrack(track)}
+                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs font-semibold uppercase tracking-wider text-foreground/80 hover:bg-accent/60"
+                >
+                  {collapsed ? (
+                    <ChevronRight className="size-3.5 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="size-3.5 text-muted-foreground" />
+                  )}
+                  <span className="flex-1 truncate">{TRACK_LABEL[track]}</span>
+                  <span className="text-[10px] font-normal text-muted-foreground">
+                    {trackTotal}
+                  </span>
+                </button>
+
+                {!collapsed && (
+                  <div className="mt-1.5 space-y-3 pl-2">
+                    {CATEGORY_ORDER.map((cat) => {
+                      const items = inner.get(cat) ?? [];
+                      if (items.length === 0) return null;
+                      return (
+                        <div key={cat}>
+                          <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
+                            {CATEGORY_LABEL[cat]}
+                          </div>
+                          <ul className="space-y-0.5">
+                            {items.map((t) => (
+                              <li key={t.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectTopic(t.id)}
+                                  className={cn(
+                                    'w-full rounded-md px-2 py-1.5 text-left text-sm transition',
+                                    selectedTopicId === t.id
+                                      ? 'bg-accent text-foreground font-medium'
+                                      : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
+                                  )}
+                                >
+                                  <div className="flex items-baseline gap-1.5">
+                                    {t.chapter_no != null && (
+                                      <span className="text-[11px] text-muted-foreground/70">
+                                        Ch {t.chapter_no}
+                                      </span>
+                                    )}
+                                    <span className="truncate">
+                                      {t.title_zh}
+                                    </span>
+                                  </div>
+                                  <div className="truncate text-[11px] text-muted-foreground/80">
+                                    {t.title_en}
+                                  </div>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
                         </div>
-                        <div className="truncate text-[11px] text-muted-foreground/80">
-                          {t.title_en}
-                        </div>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -158,6 +251,17 @@ export default function Interview() {
       </div>
     </main>
   );
+}
+
+function sourceLabelForTrack(track: InterviewTrack): string {
+  switch (track) {
+    case 'rust':
+      return 'Rust Book';
+    case 'ddia':
+      return 'DDIA';
+    case 'ai_agent':
+      return '原文';
+  }
 }
 
 function TopicView({ topic }: { topic: InterviewTopic }) {
@@ -240,7 +344,8 @@ function TopicView({ topic }: { topic: InterviewTopic }) {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 hover:text-foreground"
             >
-              Rust Book <ExternalLink className="size-3" />
+              {sourceLabelForTrack(topic.track)}{' '}
+              <ExternalLink className="size-3" />
             </a>
           )}
         </div>

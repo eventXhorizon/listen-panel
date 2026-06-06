@@ -68,6 +68,9 @@ fn build_llm_http() -> Result<reqwest::Client> {
 pub struct InterviewTopic {
     pub id: i64,
     pub slug: String,
+    /// Top-level directory bucket: 'rust' | 'ddia' | 'ai_agent'. The UI
+    /// renders each track as its own section in the sidebar.
+    pub track: String,
     pub category: String,
     pub chapter_no: Option<i64>,
     pub title_en: String,
@@ -150,9 +153,11 @@ async fn list_topics(
     _user: CurrentUser,
 ) -> Result<Json<Vec<InterviewTopic>>> {
     let topics: Vec<InterviewTopic> = sqlx::query_as(
-        "SELECT id, slug, category, chapter_no, title_en, title_zh, source_url, sort_order \
+        "SELECT id, slug, track, category, chapter_no, title_en, title_zh, source_url, sort_order \
          FROM interview_topics \
-         ORDER BY sort_order ASC",
+         ORDER BY \
+           CASE track WHEN 'rust' THEN 1 WHEN 'ddia' THEN 2 WHEN 'ai_agent' THEN 3 ELSE 99 END, \
+           sort_order ASC",
     )
     .fetch_all(&pool)
     .await?;
@@ -270,7 +275,7 @@ async fn generate_for_topic(
     Json(req): Json<GenerateReq>,
 ) -> Result<Response> {
     let topic: Option<InterviewTopic> = sqlx::query_as(
-        "SELECT id, slug, category, chapter_no, title_en, title_zh, source_url, sort_order \
+        "SELECT id, slug, track, category, chapter_no, title_en, title_zh, source_url, sort_order \
          FROM interview_topics WHERE id = ?",
     )
     .bind(topic_id)
@@ -295,6 +300,7 @@ async fn generate_for_topic(
         "messages": [
             { "role": "system", "content": language::interview_generate_system_prompt() },
             { "role": "user",   "content": language::interview_generate_user_prompt(
+                &topic.track,
                 &topic.title_en,
                 &topic.title_zh,
                 topic.source_url.as_deref(),
