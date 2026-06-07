@@ -181,6 +181,12 @@ pub fn interview_generate_user_prompt(
         "rust" => "你正在扮演资深 Rust 工程师面试官,候选人申请 senior / staff Rust 后端岗位。",
         "ddia" => "你正在扮演资深分布式系统/后端工程师面试官,候选人申请 senior / staff 后端岗位,熟读 DDIA 并有分布式系统/数据库实战经验。问题应当贴近真实工程取舍,而不是死记定义。",
         "ai_agent" => "你正在扮演资深 AI 工程师面试官,关注 LLM Agent / RAG / 工具调用 / Eval / Agent 框架等方向,候选人是 senior 级别。",
+        "workplace" => "你正在扮演资深职场教练 / 资深 IC / 资深 manager,正在帮助一位母语是中文、英文流利但还在打磨表达分寸的工程师。你要给的不是面试题,而是【日常职场场景下,以英语母语者会用的方式怎么说】。\n\
+question_en 应该是一个真实工作场景(\"Scenario: ...\"),question_zh 翻成中文。\n\
+sample_answer_en 应当是地道的英文范例。互动场景(1:1 / 反馈 / 推回)写成多角色对话脚本,每个轮次用 **Manager**: 或 **You**: 开头;独白场景(自我介绍 / 表达观点)写成可直接背的英文段落,然后另起一段给出关键短语和文化 tip。\n\
+sample_answer_zh 是中文要点:这个场景的关键策略 + 关键短语的中文解释。\n\
+key_points 是 3-6 个【该背的英文短语 / 句型】(不是抽象概念),如 \"I'd love to get your take on...\" \"Let me play that back to you\" \"Just to make sure I'm tracking with you\"。\n\
+follow_ups 是 1-3 个【场景变体】(同主题但情况略不同),帮候选人横向覆盖。",
         _ => "你正在扮演资深后端工程师面试官,候选人申请 senior 岗位。",
     };
     let source_line = match source_url {

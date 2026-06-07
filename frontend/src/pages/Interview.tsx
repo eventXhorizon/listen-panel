@@ -32,9 +32,15 @@ const TRACK_LABEL: Record<InterviewTrack, string> = {
   rust: 'Rust',
   ddia: '分布式系统 (DDIA)',
   ai_agent: 'AI Agent',
+  workplace: '日常职场英语',
 };
 
-const TRACK_ORDER: InterviewTrack[] = ['rust', 'ddia', 'ai_agent'];
+const TRACK_ORDER: InterviewTrack[] = [
+  'rust',
+  'ddia',
+  'ai_agent',
+  'workplace',
+];
 
 const CATEGORY_LABEL: Record<InterviewCategory, string> = {
   rust_basic: 'Ch 1-10 基础',
@@ -44,6 +50,10 @@ const CATEGORY_LABEL: Record<InterviewCategory, string> = {
   ddia_derived: 'Part III 派生数据',
   ddia_practical: '系统设计高频题',
   ai_agent: 'AI Agent',
+  workplace_intro: '自我介绍 / 社交',
+  workplace_comm: '沟通与协作',
+  workplace_feedback: '反馈与 1:1',
+  workplace_hard: '难场景 / 跨文化',
 };
 
 const CATEGORY_ORDER: InterviewCategory[] = [
@@ -54,6 +64,10 @@ const CATEGORY_ORDER: InterviewCategory[] = [
   'ddia_derived',
   'ddia_practical',
   'ai_agent',
+  'workplace_intro',
+  'workplace_comm',
+  'workplace_feedback',
+  'workplace_hard',
 ];
 
 export default function Interview() {
@@ -263,6 +277,8 @@ function sourceLabelForTrack(track: InterviewTrack): string {
       return 'DDIA';
     case 'ai_agent':
       return '原文';
+    case 'workplace':
+      return '参考';
   }
 }
 

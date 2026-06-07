@@ -539,7 +539,7 @@ export interface EssayTranslateResponse {
 
 /** Top-level directory bucket. Each track gets its own collapsible section
  *  in the sidebar, with categories as sub-groupings inside. */
-export type InterviewTrack = 'rust' | 'ddia' | 'ai_agent';
+export type InterviewTrack = 'rust' | 'ddia' | 'ai_agent' | 'workplace';
 
 /** Sub-group under a track. The list grows as we add tracks/material — the
  *  backend treats it as a free-form string with a soft naming convention. */
@@ -550,7 +550,11 @@ export type InterviewCategory =
   | 'ddia_distributed'
   | 'ddia_derived'
   | 'ddia_practical'
-  | 'ai_agent';
+  | 'ai_agent'
+  | 'workplace_intro'
+  | 'workplace_comm'
+  | 'workplace_feedback'
+  | 'workplace_hard';
 
 export type InterviewDifficulty = 'mid' | 'senior' | 'staff';
 
