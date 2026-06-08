@@ -428,13 +428,14 @@ struct SeedQuestion {
     difficulty: Option<String>,
 }
 
-/// Insert the curated Q&A as system rows (user_id IS NULL) if they're not
-/// already present. Idempotent: a startup that already has them is a no-op.
-/// Called from `main.rs` after migrations run.
+/// Insert the curated Q&A as system rows (user_id IS NULL). Idempotent on
+/// the question text (matches by `(topic_id, question_en)`), but **updates**
+/// the answer / key-points / follow-ups when the JSON content differs from
+/// what's in the database. This lets us iterate on sample answers (e.g.
+/// adding example dialogues) and have the changes flow through on the
+/// next backend restart without manually wiping the system rows.
 ///
-/// Strategy: parse the JSON, build a slug → topic_id map, then for each row
-/// insert if `(NULL, topic_id, question_en)` doesn't already exist. This makes
-/// re-seeding safe even if we later add more questions to the JSON.
+/// User-generated rows (`user_id IS NOT NULL`) are never touched.
 pub async fn seed_system_questions(pool: &SqlitePool) -> anyhow::Result<()> {
     let questions: Vec<SeedQuestion> = serde_json::from_str(SEED_JSON)
         .context("parse interview_questions.json")?;
@@ -445,15 +446,23 @@ pub async fn seed_system_questions(pool: &SqlitePool) -> anyhow::Result<()> {
     let topic_map: std::collections::HashMap<String, i64> = topic_rows.into_iter().collect();
 
     let mut inserted = 0usize;
+    let mut updated = 0usize;
     let mut skipped_unknown_topic = 0usize;
     for q in questions {
         let Some(&topic_id) = topic_map.get(&q.topic_slug) else {
             skipped_unknown_topic += 1;
             continue;
         };
-        // Has this exact system row already been seeded?
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM interview_questions \
+
+        let key_points_json = serde_json::to_string(&q.key_points)?;
+        let follow_ups_json = serde_json::to_string(&q.follow_ups)?;
+        let difficulty = q.difficulty.as_deref().unwrap_or("senior");
+
+        // Look up the existing system row for this (topic, question_en).
+        let existing: Option<(i64, String, String, String, String, String)> = sqlx::query_as(
+            "SELECT id, question_zh, sample_answer_en, sample_answer_zh, \
+                    key_points_json, follow_ups_json \
+             FROM interview_questions \
              WHERE user_id IS NULL AND topic_id = ? AND question_en = ? \
              LIMIT 1",
         )
@@ -461,13 +470,35 @@ pub async fn seed_system_questions(pool: &SqlitePool) -> anyhow::Result<()> {
         .bind(&q.question_en)
         .fetch_optional(pool)
         .await?;
-        if exists.is_some() {
+
+        if let Some((id, ez, ea_en, ea_zh, ekp, efu)) = existing {
+            // Update only if any rendered field has changed.
+            if ez != q.question_zh
+                || ea_en != q.sample_answer_en
+                || ea_zh != q.sample_answer_zh
+                || ekp != key_points_json
+                || efu != follow_ups_json
+            {
+                sqlx::query(
+                    "UPDATE interview_questions \
+                     SET question_zh = ?, sample_answer_en = ?, sample_answer_zh = ?, \
+                         key_points_json = ?, follow_ups_json = ?, difficulty = ? \
+                     WHERE id = ?",
+                )
+                .bind(&q.question_zh)
+                .bind(&q.sample_answer_en)
+                .bind(&q.sample_answer_zh)
+                .bind(&key_points_json)
+                .bind(&follow_ups_json)
+                .bind(difficulty)
+                .bind(id)
+                .execute(pool)
+                .await?;
+                updated += 1;
+            }
             continue;
         }
 
-        let key_points_json = serde_json::to_string(&q.key_points)?;
-        let follow_ups_json = serde_json::to_string(&q.follow_ups)?;
-        let difficulty = q.difficulty.as_deref().unwrap_or("senior");
         sqlx::query(
             "INSERT INTO interview_questions \
                (user_id, topic_id, question_en, question_zh, sample_answer_en, \
@@ -487,9 +518,10 @@ pub async fn seed_system_questions(pool: &SqlitePool) -> anyhow::Result<()> {
         inserted += 1;
     }
 
-    if inserted > 0 || skipped_unknown_topic > 0 {
+    if inserted > 0 || updated > 0 || skipped_unknown_topic > 0 {
         tracing::info!(
             inserted,
+            updated,
             skipped_unknown_topic,
             "interview seed pass complete",
         );
