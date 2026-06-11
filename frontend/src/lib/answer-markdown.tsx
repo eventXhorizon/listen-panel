@@ -22,7 +22,7 @@ function AnswerMarkdownImpl({ text, tone = 'foreground', className }: Props) {
   return (
     <div
       className={cn(
-        'text-sm leading-relaxed space-y-3 [&_p]:my-0 [&_p+p]:mt-3',
+        'text-base leading-relaxed space-y-3 [&_p]:my-0 [&_p+p]:mt-3',
         baseColor,
         className,
       )}
@@ -74,22 +74,22 @@ function AnswerMarkdownImpl({ text, tone = 'foreground', className }: Props) {
           ),
           li: ({ children }) => <li className="pl-1">{children}</li>,
           h1: ({ children }) => (
-            <h4 className="mt-4 text-base font-semibold text-foreground">
+            <h4 className="mt-4 text-lg font-semibold text-foreground">
               {children}
             </h4>
           ),
           h2: ({ children }) => (
-            <h4 className="mt-4 text-base font-semibold text-foreground">
+            <h4 className="mt-4 text-lg font-semibold text-foreground">
               {children}
             </h4>
           ),
           h3: ({ children }) => (
-            <h5 className="mt-3 text-sm font-semibold text-foreground">
+            <h5 className="mt-3 text-base font-semibold text-foreground">
               {children}
             </h5>
           ),
           h4: ({ children }) => (
-            <h5 className="mt-3 text-sm font-semibold text-foreground">
+            <h5 className="mt-3 text-base font-semibold text-foreground">
               {children}
             </h5>
           ),

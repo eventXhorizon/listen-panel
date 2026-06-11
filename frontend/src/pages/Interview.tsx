@@ -158,10 +158,10 @@ export default function Interview() {
       <div className="mx-auto flex h-full w-full max-w-7xl">
         <aside className="w-72 shrink-0 overflow-y-auto border-r border-border bg-card/40 px-3 py-6">
           <div className="mb-4 px-2">
-            <h1 className="text-lg font-medium tracking-tight text-foreground">
+            <h1 className="text-xl font-medium tracking-tight text-foreground">
               面试备战
             </h1>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               英文技术面试问答练习
             </p>
           </div>
@@ -190,7 +190,7 @@ export default function Interview() {
                 <button
                   type="button"
                   onClick={() => toggleTrack(track)}
-                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs font-semibold uppercase tracking-wider text-foreground/80 hover:bg-accent/60"
+                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm font-semibold uppercase tracking-wider text-foreground/80 hover:bg-accent/60"
                 >
                   {collapsed ? (
                     <ChevronRight className="size-3.5 text-muted-foreground" />
@@ -210,7 +210,7 @@ export default function Interview() {
                       if (items.length === 0) return null;
                       return (
                         <div key={cat}>
-                          <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
+                          <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wider text-muted-foreground/80">
                             {CATEGORY_LABEL[cat]}
                           </div>
                           <ul className="space-y-0.5">
@@ -220,7 +220,7 @@ export default function Interview() {
                                   type="button"
                                   onClick={() => onSelectTopic(t.id)}
                                   className={cn(
-                                    'w-full rounded-md px-2 py-1.5 text-left text-sm transition',
+                                    'w-full rounded-md px-2 py-1.5 text-left text-base transition',
                                     selectedTopicId === t.id
                                       ? 'bg-accent text-foreground font-medium'
                                       : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
@@ -228,7 +228,7 @@ export default function Interview() {
                                 >
                                   <div className="flex items-baseline gap-1.5">
                                     {t.chapter_no != null && (
-                                      <span className="text-[11px] text-muted-foreground/70">
+                                      <span className="text-xs text-muted-foreground/70">
                                         Ch {t.chapter_no}
                                       </span>
                                     )}
@@ -236,7 +236,7 @@ export default function Interview() {
                                       {t.title_zh}
                                     </span>
                                   </div>
-                                  <div className="truncate text-[11px] text-muted-foreground/80">
+                                  <div className="truncate text-xs text-muted-foreground/80">
                                     {t.title_en}
                                   </div>
                                 </button>
@@ -345,15 +345,15 @@ function TopicView({ topic }: { topic: InterviewTopic }) {
       <header className="mb-6">
         <div className="flex items-baseline gap-2">
           {topic.chapter_no != null && (
-            <span className="text-xs font-medium text-muted-foreground">
+            <span className="text-sm font-medium text-muted-foreground">
               Chapter {topic.chapter_no}
             </span>
           )}
-          <h2 className="text-xl font-medium tracking-tight text-foreground">
+          <h2 className="text-2xl font-medium tracking-tight text-foreground">
             {topic.title_en}
           </h2>
         </div>
-        <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="mt-1 flex items-center gap-3 text-base text-muted-foreground">
           <span>{topic.title_zh}</span>
           {topic.source_url && (
             <a
@@ -388,7 +388,7 @@ function TopicView({ topic }: { topic: InterviewTopic }) {
               </>
             )}
           </Button>
-          <span className="text-xs text-muted-foreground">
+          <span className="text-sm text-muted-foreground">
             {loading
               ? '…'
               : `${systemCount} 道预置${userCount > 0 ? ` · ${userCount} 道你的` : ''}`}
@@ -447,12 +447,12 @@ function QuestionCard({
         onClick={onToggle}
         className="flex w-full items-start gap-3 px-4 py-3 text-left"
       >
-        <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+        <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-muted-foreground">
           {index}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
-            <span className="flex-1 text-sm font-medium text-foreground">
+            <span className="flex-1 text-base font-medium text-foreground">
               {question.question_en}
             </span>
             <span className="shrink-0 text-muted-foreground">
@@ -464,7 +464,7 @@ function QuestionCard({
             </span>
           </div>
           {question.question_zh && (
-            <div className="mt-1 text-xs text-muted-foreground">
+            <div className="mt-1 text-sm text-muted-foreground">
               {question.question_zh}
             </div>
           )}
@@ -475,7 +475,7 @@ function QuestionCard({
         <div className="border-t border-border px-4 py-4 space-y-4">
           <section>
             <div className="mb-2 flex items-center gap-2">
-              <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Sample answer (EN)
               </h3>
               <SpeakButton
@@ -493,7 +493,7 @@ function QuestionCard({
 
           {question.sample_answer_zh && (
             <section>
-              <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 中文要点
               </h3>
               <AnswerMarkdown
@@ -505,14 +505,14 @@ function QuestionCard({
 
           {question.key_points.length > 0 && (
             <section>
-              <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 必答 key points
               </h3>
               <div className="flex flex-wrap gap-1.5">
                 {question.key_points.map((kp, i) => (
                   <span
                     key={i}
-                    className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-foreground"
+                    className="rounded-full border border-border bg-background px-2 py-0.5 text-sm text-foreground"
                   >
                     {kp}
                   </span>
@@ -523,16 +523,16 @@ function QuestionCard({
 
           {question.follow_ups.length > 0 && (
             <section>
-              <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 可能的追问
               </h3>
               <ul className="space-y-1">
                 {question.follow_ups.map((fu, i) => (
                   <li
                     key={i}
-                    className="flex items-start gap-2 text-sm text-muted-foreground"
+                    className="flex items-start gap-2 text-base text-muted-foreground"
                   >
-                    <span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground/50" />
+                    <span className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground/50" />
                     <span className="flex-1">{fu}</span>
                     <SpeakButton word={fu} language="en" />
                   </li>
