@@ -58,6 +58,10 @@ pub fn asr_config_path() -> PathBuf {
     data_dir().join("asr.json")
 }
 
+pub fn features_config_path() -> PathBuf {
+    data_dir().join("features.json")
+}
+
 pub fn uploads_dir() -> PathBuf {
     data_dir().join("uploads")
 }

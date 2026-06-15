@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   BrowserRouter,
   Navigate,
@@ -57,7 +58,14 @@ export default function App() {
               <Route path="tts" element={<Tts />} />
               <Route path="speaking" element={<Speaking />} />
               <Route path="recognize" element={<Recognize />} />
-              <Route path="interview" element={<Interview />} />
+              <Route
+                path="interview"
+                element={
+                  <FeatureRoute feature="interview">
+                    <Interview />
+                  </FeatureRoute>
+                }
+              />
               <Route path="settings" element={<Settings />} />
             </Route>
           </Route>
@@ -89,4 +97,21 @@ function RequireAuth() {
     );
   }
   return <Outlet />;
+}
+
+/// Guards a route behind an app feature flag. When the flag is off, a direct
+/// visit (typed URL, old bookmark) bounces to the bookshelf instead of loading
+/// a module whose API is also disabled. `loading` holds the redirect until the
+/// flags have actually been fetched, so an enabled feature isn't flashed away.
+function FeatureRoute({
+  feature,
+  children,
+}: {
+  feature: 'interview';
+  children: ReactNode;
+}) {
+  const auth = useAuth();
+  if (auth.loading) return null;
+  if (!auth.features[feature]) return <Navigate to="/" replace />;
+  return <>{children}</>;
 }

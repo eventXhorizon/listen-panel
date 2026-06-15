@@ -3,6 +3,7 @@ import type {
   CreateMaterialNote,
   CreateQuickNote,
   CreateVocab,
+  AppFeatures,
   AsrHealthCheckStatus,
   AuthStatus,
   ClozeDifficulty,
@@ -460,6 +461,21 @@ export function generateInterviewQuestions(
 
 export async function deleteInterviewQuestion(id: number): Promise<void> {
   await request<void>(`/api/interview/questions/${id}`, { method: 'DELETE' });
+}
+
+// Feature flags
+
+export function getFeatures(): Promise<AppFeatures> {
+  return request<AppFeatures>('/api/settings/features');
+}
+
+export function updateFeatures(
+  patch: Partial<AppFeatures>,
+): Promise<AppFeatures> {
+  return request<AppFeatures>('/api/settings/features', {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  });
 }
 
 // Settings

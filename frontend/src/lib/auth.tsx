@@ -7,24 +7,42 @@ import {
 } from 'react';
 import {
   authStatus,
+  getFeatures,
   login as loginApi,
   logout as logoutApi,
   registerAccount,
   setupAccount,
 } from '../api';
-import type { User } from '../types';
+import type { AppFeatures, User } from '../types';
 import { AuthContext, type AuthContextValue } from './auth-context';
+
+const DEFAULT_FEATURES: AppFeatures = { interview: false };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [features, setFeatures] = useState<AppFeatures>(DEFAULT_FEATURES);
+
+  const refreshFeatures = useCallback(async () => {
+    try {
+      setFeatures(await getFeatures());
+    } catch {
+      // Unauthenticated (pre-login) or transient error: leave everything off.
+      setFeatures(DEFAULT_FEATURES);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     const status = await authStatus();
     setUser(status.user);
     setNeedsSetup(status.needs_setup);
-  }, []);
+    if (status.user) {
+      await refreshFeatures();
+    } else {
+      setFeatures(DEFAULT_FEATURES);
+    }
+  }, [refreshFeatures]);
 
   useEffect(() => {
     (async () => {
@@ -36,11 +54,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [refresh]);
 
-  const login = useCallback(async (username: string, password: string) => {
-    const u = await loginApi({ username, password });
-    setUser(u);
-    setNeedsSetup(false);
-  }, []);
+  const login = useCallback(
+    async (username: string, password: string) => {
+      const u = await loginApi({ username, password });
+      setUser(u);
+      setNeedsSetup(false);
+      await refreshFeatures();
+    },
+    [refreshFeatures],
+  );
 
   const setup = useCallback(
     async (username: string, displayName: string, password: string) => {
@@ -51,8 +73,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       setUser(u);
       setNeedsSetup(false);
+      await refreshFeatures();
     },
-    [],
+    [refreshFeatures],
   );
 
   const register = useCallback(
@@ -64,8 +87,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       setUser(u);
       setNeedsSetup(false);
+      await refreshFeatures();
     },
-    [],
+    [refreshFeatures],
   );
 
   const logout = useCallback(async () => {
@@ -79,13 +103,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       needsSetup,
       loading,
+      features,
       refresh,
+      refreshFeatures,
       login,
       setup,
       register,
       logout,
     }),
-    [user, needsSetup, loading, refresh, login, setup, register, logout],
+    [
+      user,
+      needsSetup,
+      loading,
+      features,
+      refresh,
+      refreshFeatures,
+      login,
+      setup,
+      register,
+      logout,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

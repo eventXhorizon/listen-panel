@@ -37,6 +37,9 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(writing::router())
         .merge(cloze::router())
         .merge(essays::router())
-        .merge(interview::router())
+        .merge(interview::router().route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            interview::require_interview_enabled,
+        )))
         .with_state(state)
 }

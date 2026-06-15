@@ -30,7 +30,7 @@ use serde_json::json;
 use sqlx::SqlitePool;
 
 use crate::auth::CurrentUser;
-use crate::config::SharedLlm;
+use crate::config::{SharedFeatures, SharedLlm};
 use crate::error::{AppError, Result};
 use crate::language;
 use crate::llm_call::{LlmProvider, call_chat_completions};
@@ -44,6 +44,22 @@ pub fn router() -> Router<crate::AppState> {
             "/interview/questions/:id",
             get(get_question).delete(remove_question),
         )
+}
+
+/// Short-circuits with 404 when the interview feature flag is off. Pulls the
+/// flag out of shared state per-request so a live toggle takes effect without
+/// a restart. Applied as a `route_layer` in `api_router` (where AppState is in
+/// scope to satisfy the `State<SharedFeatures>` extractor).
+pub async fn require_interview_enabled(
+    State(features): State<SharedFeatures>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if features.read().await.interview {
+        next.run(request).await
+    } else {
+        (StatusCode::NOT_FOUND, "interview feature disabled").into_response()
+    }
 }
 
 /// Per-topic question count for one LLM generation pass. Sized so a single

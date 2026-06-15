@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { checkAsrHealth } from '../api';
+import { checkAsrHealth, updateFeatures } from '../api';
 import { useAuth } from '../lib/auth-context';
 import { loadSettings, saveSettings } from '../lib/settings';
 import type {
@@ -441,6 +441,8 @@ export default function Settings() {
         </p>
 
         <div className="space-y-7">
+          <FeaturesSection />
+
           <section className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
               <h2 className="text-sm font-medium text-foreground">数据存储</h2>
@@ -883,6 +885,49 @@ export default function Settings() {
         </div>
       </div>
     </main>
+  );
+}
+
+/// App-level feature switches. Off by default; an admin flips them here and the
+/// nav/route/API light up immediately (no restart) via `refreshFeatures`.
+function FeaturesSection() {
+  const auth = useAuth();
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function toggleInterview(next: boolean) {
+    setSaving(true);
+    setErr(null);
+    try {
+      await updateFeatures({ interview: next });
+      await auth.refreshFeatures();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="bg-card border border-border rounded-lg p-5">
+      <h2 className="text-sm font-medium text-foreground mb-4">功能开关</h2>
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={auth.features.interview}
+          disabled={saving}
+          onChange={(e) => toggleInterview(e.target.checked)}
+          className="mt-0.5 size-4 accent-primary"
+        />
+        <span className="flex-1">
+          <span className="text-sm text-foreground">面试备战</span>
+          <span className="block mt-1 text-xs text-muted-foreground">
+            技术 / 职场英语面试问答练习模块。默认关闭;开启后顶部导航出现「面试」入口,关闭则同时隐藏入口并停用其接口。
+          </span>
+        </span>
+      </label>
+      {err && <p className="mt-3 text-xs text-destructive">{err}</p>}
+    </section>
   );
 }
 

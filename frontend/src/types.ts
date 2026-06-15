@@ -300,6 +300,11 @@ export interface AuthStatus {
   user: User | null;
 }
 
+/// Off-by-default app feature switches. Mirrors backend `FeaturesConfig`.
+export interface AppFeatures {
+  interview: boolean;
+}
+
 export interface QuickNoteHighlight {
   phrase: string;
   meaning_zh: string;

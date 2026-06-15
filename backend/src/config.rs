@@ -294,6 +294,47 @@ pub async fn save_asr(cfg: &AsrConfig) -> Result<()> {
     write_json_atomic(crate::paths::asr_config_path(), cfg).await
 }
 
+/// Optional, off-by-default app features. Lets an admin hide a module from the
+/// whole app without a rebuild. New flags default to `false` so an absent /
+/// older features.json keeps everything off.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FeaturesConfig {
+    /// The 面试备战 (interview prep) module: nav entry, route, and API.
+    #[serde(default)]
+    pub interview: bool,
+}
+
+pub type SharedFeatures = Arc<RwLock<FeaturesConfig>>;
+
+pub async fn load_features() -> SharedFeatures {
+    let path = crate::paths::features_config_path();
+    let cfg = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => match serde_json::from_str::<FeaturesConfig>(&s) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "features.json malformed ({e}); falling back to defaults"
+                );
+                FeaturesConfig::default()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FeaturesConfig::default(),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                "features.json read error: {e}; falling back to defaults"
+            );
+            FeaturesConfig::default()
+        }
+    };
+    Arc::new(RwLock::new(cfg))
+}
+
+pub async fn save_features(cfg: &FeaturesConfig) -> Result<()> {
+    write_json_atomic(crate::paths::features_config_path(), cfg).await
+}
+
 async fn write_json_atomic<T>(path: PathBuf, cfg: &T) -> Result<()>
 where
     T: Serialize,

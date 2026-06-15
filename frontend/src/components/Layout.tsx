@@ -14,7 +14,15 @@ import {
 import { cn } from '@/lib/utils';
 import QuickNoteDialog from './QuickNoteDialog';
 
-const NAV_ITEMS = [
+interface NavItem {
+  to: string;
+  label: string;
+  end: boolean;
+  /// When set, the item only shows if this feature flag is on.
+  feature?: 'interview';
+}
+
+const NAV_ITEMS: NavItem[] = [
   { to: '/', label: '书架', end: true },
   { to: '/news', label: '新闻', end: false },
   { to: '/vocab', label: '生词本', end: false },
@@ -26,7 +34,7 @@ const NAV_ITEMS = [
   { to: '/tts', label: '朗读', end: false },
   { to: '/speaking', label: '口语', end: false },
   { to: '/recognize', label: '识别', end: false },
-  { to: '/interview', label: '面试', end: false },
+  { to: '/interview', label: '面试', end: false, feature: 'interview' },
   { to: '/review', label: '复习', end: false },
 ];
 
@@ -58,6 +66,9 @@ export default function Layout() {
 
   const displayName = auth.user?.display_name ?? auth.user?.username ?? '';
   const avatarInitial = displayName.trim().charAt(0).toUpperCase() || '?';
+  const navItems = NAV_ITEMS.filter(
+    (item) => !item.feature || auth.features[item.feature],
+  );
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -72,7 +83,7 @@ export default function Layout() {
             </Link>
 
             <nav className="-mx-4 flex items-center gap-1 overflow-x-auto px-4 pb-1 text-sm md:mx-0 md:flex-1 md:justify-center md:overflow-visible md:px-0 md:pb-0">
-              {NAV_ITEMS.map((item) => (
+              {navItems.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}

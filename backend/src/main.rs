@@ -30,6 +30,7 @@ pub struct AppState {
     pub llm: config::SharedLlm,
     pub tts: config::SharedTts,
     pub asr: config::SharedAsr,
+    pub features: config::SharedFeatures,
 }
 
 #[tokio::main]
@@ -65,6 +66,8 @@ async fn main() -> Result<()> {
         );
     }
 
+    let features = config::load_features().await;
+
     let state = AppState {
         pool,
         http: reqwest::Client::builder()
@@ -73,6 +76,7 @@ async fn main() -> Result<()> {
         llm,
         tts,
         asr,
+        features,
     };
 
     let youtube_api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();

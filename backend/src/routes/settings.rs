@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::auth::{self, CurrentUser};
-use crate::config::{self, AsrProvider, SharedAsr, SharedLlm, SharedTts, TtsProvider};
+use crate::config::{
+    self, AsrProvider, SharedAsr, SharedFeatures, SharedLlm, SharedTts, TtsProvider,
+};
 use crate::error::Result;
 use crate::llm_call::salvage_json;
 use crate::paths::DataDirStatus;
@@ -24,6 +26,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/settings/asr/health-check", post(check_asr_health))
         .route("/settings/asr", get(get_asr).put(put_asr))
         .route("/settings/data-dir", get(get_data_dir).put(put_data_dir))
+        .route("/settings/features", get(get_features).put(put_features))
 }
 
 #[derive(Debug, Serialize)]
@@ -473,6 +476,40 @@ async fn check_asr_health(
         worker,
     })
     .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateFeatures {
+    pub interview: Option<bool>,
+}
+
+/// Readable by any signed-in user — the nav/router needs the flags to decide
+/// what to show. No secrets here, just on/off switches.
+async fn get_features(
+    State(features): State<SharedFeatures>,
+    _user: CurrentUser,
+) -> axum::response::Response {
+    let g = features.read().await;
+    Json(g.clone()).into_response()
+}
+
+async fn put_features(
+    State(features): State<SharedFeatures>,
+    user: CurrentUser,
+    Json(patch): Json<UpdateFeatures>,
+) -> Result<axum::response::Response> {
+    if !user.is_admin {
+        return Ok(auth::forbidden());
+    }
+    let snapshot = {
+        let mut g = features.write().await;
+        if let Some(v) = patch.interview {
+            g.interview = v;
+        }
+        g.clone()
+    };
+    config::save_features(&snapshot).await?;
+    Ok(Json(snapshot).into_response())
 }
 
 async fn get_data_dir(user: CurrentUser) -> Result<axum::response::Response> {
