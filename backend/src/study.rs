@@ -118,6 +118,8 @@ pub async fn generate_segment_studies_for_job(
         .build()?;
     let language = load_job_language(pool, job_id).await?;
 
+    let mut failed_chunks = 0usize;
+    let mut last_provider = LlmProvider::Primary;
     for (index, chunk) in chunks.into_iter().enumerate() {
         let completed_before = completed_segments + index;
         if pause_requested(pool, job_id).await? {
@@ -148,8 +150,25 @@ pub async fn generate_segment_studies_for_job(
             .await?;
             return Ok(());
         }
-        let (provider, response) = call_study_llm(&client, &cfg, language, chunk).await?;
-        persist_study_batch(pool, job_id, material_id, chunk, response).await?;
+        // A chunk that can't be parsed even after retries must not sink the
+        // whole article — skip it and press on. The skipped segments stay out
+        // of `transcript_segment_studies`, so a later "翻译分析" re-run picks
+        // them up again (resume already filters by existing studies).
+        match call_study_llm(&client, &cfg, language, chunk).await {
+            Ok((provider, response)) => {
+                persist_study_batch(pool, job_id, material_id, chunk, response).await?;
+                last_provider = provider;
+            }
+            Err(e) => {
+                failed_chunks += 1;
+                tracing::warn!(
+                    job_id,
+                    segment = current,
+                    "skipping segment study after retries: {e}"
+                );
+            }
+        }
+        let provider = last_provider;
         let completed_after = completed_before + chunk.len();
         if pause_requested(pool, job_id).await? {
             mark_study_paused(
@@ -181,7 +200,14 @@ pub async fn generate_segment_studies_for_job(
         .await?;
     }
 
-    mark_study_succeeded(pool, job_id).await?;
+    if failed_chunks > 0 {
+        // Some segments couldn't be analyzed even after retries. The article is
+        // still usable, so we succeed rather than fail — but record how many
+        // gaps remain so the user knows a re-run can fill them.
+        mark_study_succeeded_with_gaps(pool, job_id, failed_chunks, total_segments).await?;
+    } else {
+        mark_study_succeeded(pool, job_id).await?;
+    }
     Ok(())
 }
 
@@ -251,6 +277,13 @@ pub fn parse_study_view(
     })
 }
 
+/// How many times we re-issue the study call for one chunk before giving up.
+/// The dominant failure mode is a transient model glitch — the LLM slips into a
+/// repetition loop and runs past the token cap, truncating the JSON mid-list
+/// ("EOF while parsing a list"). A fresh call almost always comes back clean, so
+/// a couple of retries turn a hard failure into a hiccup.
+const STUDY_ATTEMPTS: u32 = 3;
+
 async fn call_study_llm(
     client: &reqwest::Client,
     cfg: &LlmConfig,
@@ -283,17 +316,37 @@ async fn call_study_llm(
         "max_tokens": 8192
     });
 
-    let outcome = call_chat_completions(client, cfg, body, "segment study").await?;
-    let parsed = parse_batch_response(&outcome.content)?;
-
-    if parsed.segments.len() != segments.len() {
-        return Err(anyhow!(
-            "segment study LLM returned {} segments, expected {}",
-            parsed.segments.len(),
-            segments.len()
-        ));
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=STUDY_ATTEMPTS {
+        let outcome = match call_chat_completions(client, cfg, body.clone(), "segment study").await {
+            Ok(o) => o,
+            Err(e) => {
+                // Transport/provider error already exhausted its own fallback
+                // inside call_chat_completions — retrying buys little, so bail.
+                return Err(e);
+            }
+        };
+        match parse_batch_response(&outcome.content) {
+            Ok(parsed) if parsed.segments.len() == segments.len() => {
+                return Ok((outcome.provider, parsed));
+            }
+            Ok(parsed) => {
+                last_err = Some(anyhow!(
+                    "segment study LLM returned {} segments, expected {}",
+                    parsed.segments.len(),
+                    segments.len()
+                ));
+            }
+            Err(e) => last_err = Some(e),
+        }
+        tracing::warn!(
+            attempt,
+            max = STUDY_ATTEMPTS,
+            "segment study response unusable, retrying: {}",
+            last_err.as_ref().map(|e| e.to_string()).unwrap_or_default()
+        );
     }
-    Ok((outcome.provider, parsed))
+    Err(last_err.unwrap_or_else(|| anyhow!("segment study failed after {STUDY_ATTEMPTS} attempts")))
 }
 
 async fn persist_study_batch(
@@ -387,6 +440,33 @@ async fn mark_study_succeeded(pool: &sqlx::SqlitePool, job_id: i64) -> Result<()
              study_stage = '分析完成', updated_at = ? \
          WHERE id = ?",
     )
+    .bind(Utc::now())
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// All chunks processed, but `failed_chunks` of them couldn't be parsed even
+/// after retries. We still land on `succeeded` (the article is readable), and
+/// stash a hint in `study_error` so the UI can show that a re-run would fill
+/// the missing segments.
+async fn mark_study_succeeded_with_gaps(
+    pool: &sqlx::SqlitePool,
+    job_id: i64,
+    failed_chunks: usize,
+    total_segments: usize,
+) -> Result<()> {
+    let note = format!(
+        "{failed_chunks}/{total_segments} 段分析失败已跳过,可再次点击「翻译分析」补齐"
+    );
+    sqlx::query(
+        "UPDATE transcription_jobs \
+         SET study_status = 'succeeded', study_error = ?, study_progress = 100, \
+             study_stage = '分析完成(有跳过)', updated_at = ? \
+         WHERE id = ?",
+    )
+    .bind(note)
     .bind(Utc::now())
     .bind(job_id)
     .execute(pool)
