@@ -228,13 +228,27 @@ async fn azure_speech(
     if !res.status().is_success() {
         let status = res.status();
         let body = res.text().await.unwrap_or_default();
-        let msg = if body.trim().is_empty() {
+        // Azure collapses several very different failures into one opaque
+        // status. Prepend an actionable hint keyed on the status so the
+        // message the TTS pages surface (and the server log) says what to
+        // actually fix, instead of leaving the user with a bare 502.
+        let hint = match status.as_u16() {
+            401 => Some("Azure TTS 鉴权失败:密钥无效或已过期,请到设置更新 TTS 密钥"),
+            403 => Some("Azure TTS 被拒:订阅可能已停用/欠费,或区域与密钥不符"),
+            429 => Some("Azure TTS 配额用尽:免费层(F0)额度已耗尽,等待重置或升级到 S0"),
+            _ => None,
+        };
+        let detail = if body.trim().is_empty() {
             format!("Azure Speech returned {status}")
         } else {
             format!(
                 "Azure Speech returned {status}: {}",
                 body.chars().take(300).collect::<String>()
             )
+        };
+        let msg = match hint {
+            Some(h) => format!("{h}({detail})"),
+            None => detail,
         };
         tracing::warn!("{msg}");
         return Ok(Err((StatusCode::BAD_GATEWAY, msg).into_response()));

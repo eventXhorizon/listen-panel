@@ -138,7 +138,15 @@ const remoteProvider: TtsProvider = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        // This provider is a graceful-degradation link in the chain: a
+        // failure here falls through to browser speech, so the reason would
+        // otherwise vanish. Log it so a silent Azure outage (expired key,
+        // exhausted quota) is still diagnosable from the console.
+        const reason = await res.text().catch(() => '');
+        console.warn('[tts] remote synthesis failed:', res.status, reason);
+        return false;
+      }
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
