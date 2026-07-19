@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { checkAsrHealth, updateFeatures } from '../api';
 import { useAuth } from '../lib/auth-context';
 import { loadSettings, saveSettings } from '../lib/settings';
+import ChangePasswordCard from '../components/ChangePasswordCard';
 import type {
   AsrHealthCheckStatus,
   AsrStatus,
@@ -425,6 +426,9 @@ export default function Settings() {
           <p className="text-sm text-muted-foreground">
             只有管理员可以查看和修改 DeepSeek / Azure Speech 凭据。
           </p>
+          <div className="mt-8">
+            <ChangePasswordCard />
+          </div>
         </div>
       </main>
     );
@@ -441,6 +445,7 @@ export default function Settings() {
         </p>
 
         <div className="space-y-7">
+          <ChangePasswordCard />
           <FeaturesSection />
 
           <section className="bg-card border border-border rounded-lg p-5">

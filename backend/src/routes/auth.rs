@@ -15,6 +15,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/auth/setup", post(setup))
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
+        .route("/auth/change-password", post(change_password))
         .route("/auth/logout", post(logout))
 }
 
@@ -35,6 +36,12 @@ struct SetupInput {
 struct LoginInput {
     username: String,
     password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangePasswordInput {
+    current_password: String,
+    new_password: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -175,6 +182,37 @@ async fn login(State(pool): State<SqlitePool>, Json(input): Json<LoginInput>) ->
         return Ok(invalid_login());
     }
     respond_with_session(&pool, user.id).await
+}
+
+/// Change the logged-in user's own password. Requires the current password so a
+/// hijacked session alone can't lock the owner out. Verifies + re-hashes with
+/// argon2 (same PHC format as setup/register).
+async fn change_password(
+    State(pool): State<SqlitePool>,
+    user: CurrentUser,
+    Json(input): Json<ChangePasswordInput>,
+) -> Result<Response> {
+    let row = sqlx::query_as::<_, LoginUser>("SELECT id, password_hash FROM users WHERE id = ?")
+        .bind(user.id)
+        .fetch_one(&pool)
+        .await?;
+    if !auth::verify_password(&input.current_password, &row.password_hash) {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "当前密码不正确" })),
+        )
+            .into_response());
+    }
+    if let Err(response) = validate_password(&input.new_password) {
+        return Ok(response);
+    }
+    let new_hash = auth::hash_password(&input.new_password)?;
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(new_hash)
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true })).into_response())
 }
 
 async fn logout(State(pool): State<SqlitePool>, headers: HeaderMap) -> Result<Response> {

@@ -73,6 +73,18 @@ async function asError(res: Response): Promise<Error> {
   return new Error(msg);
 }
 
+// Auth
+
+export function changePassword(
+  current_password: string,
+  new_password: string,
+): Promise<void> {
+  return request<void>('/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password, new_password }),
+  });
+}
+
 // Materials
 
 export function listMaterials(): Promise<Material[]> {
