@@ -26,12 +26,20 @@ FROM debian:bookworm-slim AS runtime
 # yt-dlp standalone Linux binary (PyInstaller bundle, no Python needed).
 # Pin the version so deployments are reproducible; bump intentionally when needed.
 ARG YT_DLP_VERSION=2025.09.05
+# Set automatically by BuildKit: amd64 on CI, arm64 for local builds on
+# Apple silicon. yt-dlp ships a separate aarch64 asset — grabbing the x86_64
+# one on arm64 makes `yt-dlp --version` crash with SIGTRAP (exit 133).
+ARG TARGETARCH
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl tini && \
     rm -rf /var/lib/apt/lists/* && \
+    case "${TARGETARCH}" in \
+      arm64) YT_DLP_ASSET=yt-dlp_linux_aarch64 ;; \
+      *)     YT_DLP_ASSET=yt-dlp_linux ;; \
+    esac && \
     curl -fL -o /usr/local/bin/yt-dlp \
-        "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp_linux" && \
+        "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${YT_DLP_ASSET}" && \
     chmod +x /usr/local/bin/yt-dlp && \
     yt-dlp --version
 

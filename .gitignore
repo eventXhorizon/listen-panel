@@ -11,3 +11,9 @@ asr-worker/.venv/
 asr-worker/__pycache__/
 asr-worker/data/
 *.pyc
+
+# Local runtime data (bind-mounted by deploy/docker-compose.local.yml)
+/data/
+
+# Ad-hoc SQLite snapshots taken before risky migrations
+*.db.bak-*

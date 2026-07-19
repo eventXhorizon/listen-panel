@@ -1,0 +1,62 @@
+# Local build-and-run of the listen-panel stack.
+#
+# Same two containers as production, but built from the working tree instead of
+# pulled from ghcr.io — so uncommitted changes are testable in a prod-like
+# setup. This is NOT for servers; use docker-compose.yml (image-based) there.
+#
+#   cd deploy
+#   docker compose -f docker-compose.local.yml up -d --build
+#   # first run builds the Rust image (a few minutes); then:
+#   # open http://localhost:19527  -> first visit walks you through creating an admin
+#
+# Data persists in ../data on the host (git-ignored), just like prod's DATA_DIR.
+# The backend API is published on 127.0.0.1:9527 (prod keeps it internal) so the
+# BBC import script can hit it directly.
+
+name: listen-panel-local
+
+services:
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    image: listen-panel-backend:local
+    container_name: listen-panel-backend-local
+    restart: unless-stopped
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      LISTEN_PANEL_DATA_DIR: /data
+    volumes:
+      # Point at the user's real local-dev data (voyager account: 13 materials,
+      # 161 vocab, plus DeepSeek/Azure/ASR keys in *.json) rather than a fresh
+      # ../data. Swap back to ../data for a clean-slate instance.
+      - ../backend/data:/data
+    ports:
+      - "127.0.0.1:9527:9527"
+    networks:
+      - listen-panel-local
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9527/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    image: listen-panel-frontend:local
+    container_name: listen-panel-frontend-local
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "19527:80"
+    networks:
+      - listen-panel-local
+
+networks:
+  listen-panel-local:
+    driver: bridge
