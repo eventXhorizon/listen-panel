@@ -16,7 +16,10 @@ use uuid::Uuid;
 use crate::auth::CurrentUser;
 use crate::error::{AppError, Result};
 
-const ALLOWED_EXTS: &[&str] = &["mp4", "mkv", "webm", "mov", "m4v"];
+const ALLOWED_EXTS: &[&str] = &[
+    "mp4", "mkv", "webm", "mov", "m4v", // video
+    "mp3", "m4a", "wav", "ogg", // audio-only material (e.g. BBC 6 Minute English)
+];
 const MAX_UPLOAD: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 pub fn router() -> Router<crate::AppState> {
@@ -227,6 +230,10 @@ fn guess_content_type(name: &str) -> &'static str {
         "webm" => "video/webm",
         "mkv" => "video/x-matroska",
         "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
         _ => "application/octet-stream",
     }
 }
