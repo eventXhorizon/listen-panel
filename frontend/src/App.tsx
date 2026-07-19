@@ -27,6 +27,7 @@ import EssayDetail from './pages/EssayDetail';
 import Tts from './pages/Tts';
 import Speaking from './pages/Speaking';
 import Recognize from './pages/Recognize';
+import Shadowing from './pages/Shadowing';
 import Interview from './pages/Interview';
 
 export default function App() {
@@ -43,6 +44,7 @@ export default function App() {
               <Route path="new" element={<Editor />} />
               <Route path="m/:id" element={<Reader />} />
               <Route path="m/:id/edit" element={<Editor />} />
+              <Route path="shadowing" element={<Shadowing />} />
               <Route path="news" element={<Navigate to="/news/en" replace />} />
               <Route path="news/:lang" element={<News />} />
               <Route path="vocab" element={<Vocab />} />

@@ -31,6 +31,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/writing', label: '写作', end: false },
   { to: '/essays', label: '范文', end: false },
   { to: '/cloze', label: '填空', end: false },
+  { to: '/shadowing', label: '跟读', end: false },
   { to: '/tts', label: '朗读', end: false },
   { to: '/speaking', label: '口语', end: false },
   { to: '/recognize', label: '识别', end: false },

@@ -249,7 +249,9 @@ function FieldArea({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={rows}
-        className="resize-y px-2 py-1.5 text-sm leading-relaxed"
+        // Cap the height: an over-long context (or definition) must never grow
+        // the dialog past the viewport and push the save button off-screen.
+        className="max-h-40 resize-y overflow-y-auto px-2 py-1.5 text-sm leading-relaxed"
       />
     </label>
   );

@@ -7,6 +7,7 @@ import { languageLabel } from '../lib/languages';
 import { textSourceLabel } from '../lib/textSources';
 import { materialCoverUrl } from '../lib/materialCover';
 import { getLastOpenedMap } from '../lib/lastOpened';
+import { isBbcMaterial } from '../lib/bbc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -63,8 +64,10 @@ export default function Library() {
   const [language, setLanguage] = useState<MaterialLanguage>(loadInitialLang);
   const [lastOpened, setLastOpened] = useState<Record<number, number>>({});
 
+  // The ~550 bulk-imported BBC episodes belong to the 跟读 catalog; keeping
+  // them out of the bookshelf stops them burying the user's own materials.
   async function refresh() {
-    setItems(await listMaterials());
+    setItems((await listMaterials()).filter((m) => !isBbcMaterial(m)));
   }
 
   useEffect(() => {
@@ -72,7 +75,7 @@ export default function Library() {
     setLastOpened(getLastOpenedMap());
     listMaterials()
       .then((next) => {
-        if (!cancelled) setItems(next);
+        if (!cancelled) setItems(next.filter((m) => !isBbcMaterial(m)));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
