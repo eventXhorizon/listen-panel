@@ -51,6 +51,29 @@ const SCOPES: { key: ReviewScope; label: string }[] = [
   { key: 'mine', label: '我的材料' },
 ];
 
+const SCOPE_KEY = 'listen-panel.reviewScope';
+
+/// Which shelf the user was last practising. Review is a daily habit resumed
+/// many times over, and being dropped back on the other shelf every time means
+/// re-picking before every session.
+function loadScope(): ReviewScope {
+  try {
+    const raw = localStorage.getItem(SCOPE_KEY);
+    if (raw === 'bbc' || raw === 'mine') return raw;
+  } catch {
+    /* private mode — fall through to the default */
+  }
+  return 'mine';
+}
+
+function saveScope(scope: ReviewScope): void {
+  try {
+    localStorage.setItem(SCOPE_KEY, scope);
+  } catch {
+    /* quota / private mode — remembering is a nicety, not a requirement */
+  }
+}
+
 function intervalText(days: number): string {
   return days >= 30 ? `${Math.round(days / 30)} 个月后再见` : `${days} 天后再见`;
 }
@@ -66,7 +89,7 @@ export default function Review() {
   const [queue, setQueue] = useState<ReviewQueue | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [scope, setScope] = useState<ReviewScope>('mine');
+  const [scope, setScope] = useState<ReviewScope>(loadScope);
   const [revealed, setRevealed] = useState(false);
   const [done, setDone] = useState<Set<number>>(new Set());
   const [flash, setFlash] = useState<string | null>(null);
@@ -139,6 +162,7 @@ export default function Review() {
                 type="button"
                 onClick={() => {
                   setScope(s.key);
+                  saveScope(s.key);
                   setRevealed(false);
                 }}
                 className={cn(
