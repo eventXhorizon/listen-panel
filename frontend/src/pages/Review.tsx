@@ -128,88 +128,88 @@ export default function Review() {
   }
 
   return (
-    <main className="flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-2xl px-6 py-10">
-        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-3">
-          <h1 className="text-3xl font-medium tracking-tight text-foreground">
-            今日复习
-          </h1>
-          {counts && (
-            <span className="text-xs tabular-nums text-muted-foreground">
-              今日 {counts.serving_vocab + counts.serving_articles} 项 · 待复习总数{' '}
-              {counts.due_vocab + counts.due_articles} · 已排程{' '}
-              {counts.scheduled_total}
-            </span>
-          )}
-        </div>
-        <p className="mb-6 text-sm text-muted-foreground">
-          按艾宾浩斯遗忘曲线排程:1、2、4、7、15、30、60 天。记得就往后推一级,忘了就退回第一级。
-        </p>
-
-        {error && (
-          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-
-        <div className="mb-6 flex items-center gap-2">
-          {SCOPES.map((s) => (
+    <div className="flex min-h-0 flex-1">
+      {/* Shelf picker and the day's articles: the standing context for the
+          session, kept out of the way so the middle stays one card at a time. */}
+      <aside className="flex w-80 shrink-0 flex-col border-r border-border bg-card">
+        <div className="border-b border-border p-3">
+          <div className="flex items-center gap-2">
+            {SCOPES.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => {
+                  setScope(s.key);
+                  setRevealed(false);
+                }}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-sm transition',
+                  scope === s.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-accent',
+                )}
+              >
+                {s.label}
+                <span className="ml-1.5 text-xs tabular-nums opacity-70">
+                  {scopeDue(s.key)}
+                </span>
+              </button>
+            ))}
             <button
-              key={s.key}
               type="button"
               onClick={() => {
-                setScope(s.key);
-                setRevealed(false);
+                setDone(new Set());
+                load();
               }}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-sm transition',
-                scope === s.key
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted text-muted-foreground hover:bg-accent',
-              )}
+              title="刷新"
+              className="ml-auto inline-flex size-8 items-center justify-center rounded-md border border-border bg-background text-foreground transition hover:bg-accent"
             >
-              {s.label}
-              <span className="ml-1.5 text-xs tabular-nums opacity-70">
-                {scopeDue(s.key)}
-              </span>
+              <RotateCcw className="size-3.5" />
             </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => {
-              setDone(new Set());
-              load();
-            }}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground transition hover:bg-accent"
-          >
-            <RotateCcw className="size-3.5" />
-            刷新
-          </button>
+          </div>
         </div>
 
-        {articles.length > 0 && (
-          <section className="mb-8">
-            <h2 className="mb-3 text-sm font-medium text-foreground">
-              回顾文章
-              <span className="ml-2 text-xs font-normal text-muted-foreground">
-                重读一遍,再判断还记不记得
-              </span>
-            </h2>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <h2 className="mb-2 text-xs font-medium text-muted-foreground">
+            回顾文章
+          </h2>
+          {articles.length > 0 ? (
             <div className="space-y-2">
               {articles.map((a) => (
                 <ArticleRow key={a.schedule_id} article={a} onJudge={judge} />
               ))}
             </div>
-          </section>
-        )}
+          ) : (
+            <p className="text-xs text-muted-foreground">今天没有要回顾的文章。</p>
+          )}
+        </div>
 
-        <section>
-          <h2 className="mb-3 text-sm font-medium text-foreground">
-            生词与短语
-            <span className="ml-2 text-xs font-normal tabular-nums text-muted-foreground">
+        {counts && (
+          <div className="border-t border-border px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+            今日 {counts.serving_vocab + counts.serving_articles} 项 · 待复习{' '}
+            {counts.due_vocab + counts.due_articles} · 已排程{' '}
+            {counts.scheduled_total}
+            <br />
+            艾宾浩斯:1、2、4、7、15、30、60 天
+          </div>
+        )}
+      </aside>
+
+      {/* One card, centred — the only thing the user should be looking at. */}
+      <main className="min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-xl px-6 py-10">
+          {error && (
+            <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+
+          <div className="mb-3 flex items-baseline justify-between">
+            <h1 className="text-lg font-medium text-foreground">生词与短语</h1>
+            <span className="text-xs tabular-nums text-muted-foreground">
               剩 {vocab.length}
             </span>
-          </h2>
+          </div>
 
           {current ? (
             <VocabFlashcard
@@ -222,7 +222,7 @@ export default function Review() {
             <div className="rounded-lg border border-border bg-card p-8 text-center">
               <p className="text-sm text-foreground">
                 {articles.length > 0
-                  ? '生词都过完了,上面还有文章要回顾。'
+                  ? '生词都过完了,左边还有文章要回顾。'
                   : '这一侧今天没有待复习的内容了。'}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -230,15 +230,15 @@ export default function Review() {
               </p>
             </div>
           )}
-        </section>
 
-        {flash && (
-          <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 rounded-full bg-foreground px-4 py-2 text-xs text-background shadow-lg">
-            {flash}
-          </div>
-        )}
-      </div>
-    </main>
+          {flash && (
+            <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 rounded-full bg-foreground px-4 py-2 text-xs text-background shadow-lg">
+              {flash}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
   );
 }
 
@@ -249,34 +249,38 @@ function ArticleRow({
   article: ReviewArticleCard;
   onJudge: (scheduleId: number, ok: boolean) => void;
 }) {
+  // Stacked rather than one row: the sidebar is 320px wide, where a title plus
+  // two buttons side by side would crush the title to a few characters.
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-      <BookOpen className="size-4 shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
+    <div className="rounded-lg border border-border bg-background px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        <BookOpen className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         <Link
           to={`/m/${article.id}`}
-          className="block truncate text-sm text-foreground hover:underline"
+          className="min-w-0 flex-1 text-sm leading-snug text-foreground hover:underline"
         >
           {article.title}
         </Link>
-        <div className="mt-0.5 text-xs text-muted-foreground">
-          {article.vocab_count} 个生词 · 第 {article.reviews + 1} 次复习
-        </div>
       </div>
-      <button
-        type="button"
-        onClick={() => onJudge(article.schedule_id, false)}
-        className="rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition hover:bg-accent"
-      >
-        还得再看
-      </button>
-      <button
-        type="button"
-        onClick={() => onJudge(article.schedule_id, true)}
-        className="rounded-md bg-primary px-2.5 py-1.5 text-xs text-primary-foreground transition hover:bg-primary/90"
-      >
-        记得了
-      </button>
+      <div className="mt-1 pl-5 text-[11px] text-muted-foreground">
+        {article.vocab_count} 个生词 · 第 {article.reviews + 1} 次复习
+      </div>
+      <div className="mt-2 flex gap-1.5">
+        <button
+          type="button"
+          onClick={() => onJudge(article.schedule_id, false)}
+          className="flex-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition hover:bg-accent"
+        >
+          还得再看
+        </button>
+        <button
+          type="button"
+          onClick={() => onJudge(article.schedule_id, true)}
+          className="flex-1 rounded-md bg-primary px-2 py-1 text-[11px] text-primary-foreground transition hover:bg-primary/90"
+        >
+          记得了
+        </button>
+      </div>
     </div>
   );
 }
