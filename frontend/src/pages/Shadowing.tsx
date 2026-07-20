@@ -396,7 +396,7 @@ export default function Shadowing() {
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            {loading ? '加载中...' : '从左侧选择一篇开始跟读'}
+            {loading ? '加载中...' : '从左侧选择一篇开始影子练习'}
           </div>
         )}
       </div>
@@ -553,12 +553,37 @@ function PlaybackBar({ src, title }: { src: string; title: string }) {
     setCur(el.currentTime);
   }
 
-  function toggle() {
+  const toggle = useCallback(() => {
     const el = audioRef.current;
     if (!el) return;
     if (el.paused) void el.play();
     else el.pause();
-  }
+  }, []);
+
+  // Space toggles playback, the one shortcut worth having here: shadowing means
+  // stopping every few seconds to repeat a line, and reaching for the mouse each
+  // time breaks the rhythm.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      // Never steal the spacebar from somewhere the user is typing, or from an
+      // open dialog whose own buttons should keep it.
+      if (
+        target?.isContentEditable ||
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '') ||
+        target?.closest('[role="dialog"]')
+      ) {
+        return;
+      }
+      // Also stops the page scrolling, and stops a focused button (the play
+      // button itself, most likely) from firing a second toggle on keyup.
+      e.preventDefault();
+      toggle();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggle]);
 
   function nudge(delta: number) {
     const el = audioRef.current;
@@ -589,7 +614,7 @@ function PlaybackBar({ src, title }: { src: string; title: string }) {
               : '';
           const speed = rate === 1 ? '' : ` ${rate}×`;
           logEvent(
-            `跟读播放《${title}》 ${fmtTime(e.currentTarget.currentTime)}${seg}${speed}`,
+            `影子练习播放《${title}》 ${fmtTime(e.currentTarget.currentTime)}${seg}${speed}`,
           );
         }}
         onPause={() => setPlaying(false)}
