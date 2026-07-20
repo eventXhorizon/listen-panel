@@ -15,6 +15,7 @@ import {
   RotateCw,
   Search,
 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { listMaterials, listVocab, logEvent } from '../api';
 import type { Material, VocabEntry } from '../types';
 import { highlightText } from '../lib/highlight';
@@ -115,7 +116,17 @@ export default function Shadowing() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // The selected episode lives in the URL so other pages can link straight to
+  // one (the review queue does) and so back/forward moves between episodes.
+  const [params, setParams] = useSearchParams();
+  const urlId = Number(params.get('m'));
+  const selectedId = Number.isFinite(urlId) && urlId > 0 ? urlId : null;
+  const setSelectedId = useCallback(
+    (id: number) => {
+      setParams({ m: String(id) }, { replace: false });
+    },
+    [setParams],
+  );
   const [vocab, setVocab] = useState<VocabEntry[]>([]);
   const [add, setAdd] = useState<{ word: string; context: string } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(
@@ -129,7 +140,10 @@ export default function Shadowing() {
       .then((next) => {
         if (cancelled) return;
         setMaterials(next);
-        setSelectedId((cur) => cur ?? next[0]?.id ?? null);
+        const first = next[0]?.id;
+        if (!params.get('m') && first != null) {
+          setParams({ m: String(first) }, { replace: true });
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -143,6 +157,23 @@ export default function Shadowing() {
     () => materials.find((m) => m.id === selectedId) ?? null,
     [materials, selectedId],
   );
+
+  // A deep link lands on a collapsed tree, leaving the episode playing with no
+  // sign of where it sits. Open the year and month that contain it.
+  useEffect(() => {
+    if (selected == null) return;
+    const d = bbcDate(selected);
+    if (!d) return;
+    const year = d.slice(0, 4);
+    const month = d.slice(5, 7);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.add('bbc');
+      next.add(`bbc:${year}`);
+      next.add(`bbc:${year}:${month}`);
+      return next;
+    });
+  }, [selected]);
 
   const loadVocab = useCallback(() => {
     if (selectedId == null) {

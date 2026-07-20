@@ -101,7 +101,6 @@ export default function Review() {
     // Mark done first: the card should leave the screen on click, not after
     // the round-trip, or a slow response reads as an unresponsive button.
     setDone((prev) => new Set(prev).add(scheduleId));
-    setRevealed(false);
     try {
       const res = await gradeReview(scheduleId, ok);
       setFlash(ok ? intervalText(res.interval_days) : '明天再来一次');
@@ -216,7 +215,12 @@ export default function Review() {
               card={current}
               revealed={revealed}
               onReveal={() => setRevealed(true)}
-              onJudge={judge}
+              onJudge={(id, ok) => {
+                // Collapse here, not in judge(): grading an article in the
+                // sidebar must not fold away the card being read.
+                setRevealed(false);
+                void judge(id, ok);
+              }}
             />
           ) : (
             <div className="rounded-lg border border-border bg-card p-8 text-center">
@@ -256,7 +260,11 @@ function ArticleRow({
       <div className="flex items-start gap-2">
         <BookOpen className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         <Link
-          to={`/m/${article.id}`}
+          to={
+            article.scope === 'bbc'
+              ? `/shadowing?m=${article.id}`
+              : `/m/${article.id}`
+          }
           className="min-w-0 flex-1 text-sm leading-snug text-foreground hover:underline"
         >
           {article.title}
