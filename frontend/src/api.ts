@@ -29,6 +29,10 @@ import type {
   PolishResult,
   PronunciationResult,
   QuickNote,
+  ReviewCounts,
+  ReviewGradeResult,
+  ReviewQueue,
+  ReviewScope,
   TranscriptionJob,
   User,
   VocabEntry,
@@ -82,6 +86,39 @@ export function changePassword(
   return request<void>('/api/auth/change-password', {
     method: 'POST',
     body: JSON.stringify({ current_password, new_password }),
+  });
+}
+
+// Review (spaced repetition)
+
+/// The user's *local* calendar date. Deliberately not `toISOString()`, which
+/// is UTC: a JST user opening the app at 08:00 would otherwise be handed
+/// yesterday's queue, and the day would roll over mid-morning.
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/// `scope` narrows to one shelf. The daily cap is applied server-side within
+/// that shelf, so each tab serves a full day's worth rather than competing for
+/// one global allowance.
+export function getReviewQueue(scope?: ReviewScope): Promise<ReviewQueue> {
+  const qs = scope ? `&scope=${scope}` : '';
+  return request<ReviewQueue>(`/api/review/queue?today=${localToday()}${qs}`);
+}
+
+export function getReviewSummary(): Promise<ReviewCounts> {
+  return request<ReviewCounts>(`/api/review/summary?today=${localToday()}`);
+}
+
+export function gradeReview(
+  scheduleId: number,
+  ok: boolean,
+): Promise<ReviewGradeResult> {
+  return request<ReviewGradeResult>('/api/review/grade', {
+    method: 'POST',
+    body: JSON.stringify({ schedule_id: scheduleId, ok, today: localToday() }),
   });
 }
 

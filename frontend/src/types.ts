@@ -642,3 +642,64 @@ export interface LogEntry {
   target: string;
   message: string;
 }
+
+// Review (spaced repetition)
+
+export type ReviewScope = 'bbc' | 'mine';
+
+/// A vocab entry due for review, joined with the article it came from.
+/// `scope` is the shelf that article sits on, so the page can keep BBC
+/// practice separate from the user's own material.
+export interface ReviewVocabCard {
+  schedule_id: number;
+  id: number;
+  word: string;
+  kind: 'word' | 'idiom';
+  lemma: string;
+  phonetic: string | null;
+  definition_zh: string;
+  definition_en: string | null;
+  context: string;
+  material_id: number | null;
+  material_title: string | null;
+  scope: ReviewScope;
+  step: number;
+  reviews: number;
+  due_on: string;
+}
+
+export interface ReviewArticleCard {
+  schedule_id: number;
+  id: number;
+  title: string;
+  scope: ReviewScope;
+  vocab_count: number;
+  step: number;
+  reviews: number;
+  due_on: string;
+}
+
+export interface ReviewCounts {
+  due_vocab: number;
+  due_articles: number;
+  /// How many of the due items today's cap actually serves.
+  serving_vocab: number;
+  serving_articles: number;
+  bbc_vocab: number;
+  mine_vocab: number;
+  bbc_articles: number;
+  mine_articles: number;
+  scheduled_total: number;
+}
+
+export interface ReviewQueue {
+  vocab: ReviewVocabCard[];
+  articles: ReviewArticleCard[];
+  counts: ReviewCounts;
+}
+
+export interface ReviewGradeResult {
+  step: number;
+  due_on: string;
+  interval_days: number;
+}

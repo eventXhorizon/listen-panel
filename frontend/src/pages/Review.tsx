@@ -1,20 +1,21 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { listMaterials, listVocab, updateVocab } from '../api';
-import type { Material, MaterialLanguage, VocabEntry } from '../types';
+import { BookOpen, Check, RotateCcw, X } from 'lucide-react';
+import { getReviewQueue, gradeReview } from '../api';
+import type {
+  MaterialLanguage,
+  ReviewArticleCard,
+  ReviewQueue,
+  ReviewScope,
+  ReviewVocabCard,
+} from '../types';
 import SpeakButton from '../components/SpeakButton';
+import { cn } from '@/lib/utils';
 
 const ESCAPE = /[.*+?^${}()|[\]\\]/g;
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
+/// Blank out the word inside its own example sentence, so the context can be
+/// read as a prompt without giving the answer away.
 function maskWord(
   context: string,
   word: string,
@@ -45,244 +46,318 @@ function maskWord(
   return parts.length > 0 ? parts : [context];
 }
 
+const SCOPES: { key: ReviewScope; label: string }[] = [
+  { key: 'bbc', label: 'BBC' },
+  { key: 'mine', label: '我的材料' },
+];
+
+function intervalText(days: number): string {
+  return days >= 30 ? `${Math.round(days / 30)} 个月后再见` : `${days} 天后再见`;
+}
+
+/// Today's spaced-repetition queue, split by shelf.
+///
+/// The server decides *what* is due and how far each item moves along the
+/// Ebbinghaus ladder; this page only presents it and reports whether the user
+/// recalled it. Items graded here disappear from the session immediately —
+/// forgotten ones come back tomorrow, not later in the same sitting, because
+/// re-showing an answer the user has just seen measures nothing.
 export default function Review() {
-  const [items, setItems] = useState<VocabEntry[]>([]);
-  const [materials, setMaterials] = useState<Material[]>([]);
-  const [scope, setScope] = useState<'all' | number>('all');
-  const [includeMastered, setIncludeMastered] = useState(false);
-  const [queue, setQueue] = useState<VocabEntry[]>([]);
-  const [idx, setIdx] = useState(0);
+  const [queue, setQueue] = useState<ReviewQueue | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [scope, setScope] = useState<ReviewScope>('mine');
   const [revealed, setRevealed] = useState(false);
-  const [started, setStarted] = useState(false);
+  const [done, setDone] = useState<Set<number>>(new Set());
+  const [flash, setFlash] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      const [vs, ms] = await Promise.all([listVocab(), listMaterials()]);
-      setItems(vs);
-      setMaterials(ms);
-    })();
-  }, []);
+  const load = useCallback(() => {
+    setLoading(true);
+    getReviewQueue(scope)
+      .then((q) => {
+        setQueue(q);
+        setError(null);
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [scope]);
 
-  const candidates = useMemo(() => {
-    return items.filter((v) => {
-      if (scope !== 'all' && v.material_id !== scope) return false;
-      if (!includeMastered && v.mastery >= 3) return false;
-      return true;
-    });
-  }, [items, scope, includeMastered]);
+  useEffect(load, [load]);
 
-  function start() {
-    setQueue(shuffle(candidates));
-    setIdx(0);
+  const vocab = useMemo(
+    () =>
+      (queue?.vocab ?? []).filter((v) => !done.has(v.schedule_id)),
+    [queue, done],
+  );
+  const articles = useMemo(
+    () =>
+      (queue?.articles ?? []).filter((a) => !done.has(a.schedule_id)),
+    [queue, done],
+  );
+
+  const current = vocab[0] ?? null;
+
+  async function judge(scheduleId: number, ok: boolean) {
+    // Mark done first: the card should leave the screen on click, not after
+    // the round-trip, or a slow response reads as an unresponsive button.
+    setDone((prev) => new Set(prev).add(scheduleId));
     setRevealed(false);
-    setStarted(true);
-  }
-
-  async function judge(delta: number) {
-    const cur = queue[idx];
-    if (!cur) return;
-    const newMastery = Math.max(0, Math.min(3, cur.mastery + delta));
-    if (newMastery !== cur.mastery) {
-      await updateVocab(cur.id, { mastery: newMastery });
-      setItems((arr) =>
-        arr.map((v) => (v.id === cur.id ? { ...v, mastery: newMastery } : v)),
-      );
+    try {
+      const res = await gradeReview(scheduleId, ok);
+      setFlash(ok ? intervalText(res.interval_days) : '明天再来一次');
+      window.setTimeout(() => setFlash(null), 1600);
+    } catch (e) {
+      setError((e as Error).message);
     }
-    setRevealed(false);
-    setIdx((i) => i + 1);
   }
 
-  if (!started) {
+  const counts = queue?.counts;
+  const scopeDue = (s: ReviewScope) =>
+    s === 'bbc'
+      ? (counts?.bbc_vocab ?? 0) + (counts?.bbc_articles ?? 0)
+      : (counts?.mine_vocab ?? 0) + (counts?.mine_articles ?? 0);
+
+  if (loading && !queue) {
     return (
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-xl mx-auto px-6 py-12 w-full">
-          <div className="text-center mb-8">
-            <h1 className="text-2xl font-medium text-foreground mb-2">生词复习</h1>
-            <p className="text-sm text-muted-foreground">
-              翻卡片复习,根据上下文回想词义。
-            </p>
-          </div>
-
-          <div className="space-y-5 bg-card border border-border rounded-lg p-6">
-            <div>
-              <div className="text-sm font-medium text-foreground mb-2">范围</div>
-              <select
-                value={scope === 'all' ? 'all' : String(scope)}
-                onChange={(e) =>
-                  setScope(
-                    e.target.value === 'all' ? 'all' : Number(e.target.value),
-                  )
-                }
-                className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-border"
-              >
-                <option value="all">全部材料</option>
-                {materials.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <label className="flex items-center gap-2 text-sm text-foreground/85 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeMastered}
-                onChange={(e) => setIncludeMastered(e.target.checked)}
-              />
-              包含已掌握的(三点全亮)
-            </label>
-            <p className="text-xs text-muted-foreground">
-              本次将复习{' '}
-              <strong className="text-foreground">{candidates.length}</strong> 个词
-            </p>
-          </div>
-
-          <div className="text-center mt-6">
-            <button
-              onClick={start}
-              disabled={candidates.length === 0}
-              className="px-6 py-2.5 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85 disabled:opacity-50"
-            >
-              开始
-            </button>
-          </div>
-          <div className="text-center mt-4">
-            <Link
-              to="/vocab"
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              ← 返回生词本
-            </Link>
-          </div>
+        <div className="mx-auto w-full max-w-2xl px-6 py-12 text-sm text-muted-foreground">
+          加载今日复习…
         </div>
       </main>
     );
   }
-
-  if (idx >= queue.length) {
-    return (
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-xl mx-auto px-6 py-20 w-full text-center">
-          <h1 className="text-2xl font-medium text-foreground mb-2">复习完成</h1>
-          <p className="text-sm text-muted-foreground mb-8">
-            本轮 {queue.length} 个词已过。
-          </p>
-          <button
-            onClick={() => setStarted(false)}
-            className="px-4 py-2 rounded-md border border-border text-sm hover:bg-accent/50 mr-2"
-          >
-            再来一轮
-          </button>
-          <Link
-            to="/vocab"
-            className="inline-block px-4 py-2 rounded-md bg-foreground text-white text-sm hover:bg-foreground/85"
-          >
-            返回生词本
-          </Link>
-        </div>
-      </main>
-    );
-  }
-
-  const cur = queue[idx];
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-10 w-full">
-        <div className="flex items-center justify-between mb-6 text-xs text-muted-foreground">
-          <span>
-            {idx + 1} / {queue.length}
-          </span>
+      <div className="mx-auto w-full max-w-2xl px-6 py-10">
+        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-3">
+          <h1 className="text-3xl font-medium tracking-tight text-foreground">
+            今日复习
+          </h1>
+          {counts && (
+            <span className="text-xs tabular-nums text-muted-foreground">
+              今日 {counts.serving_vocab + counts.serving_articles} 项 · 待复习总数{' '}
+              {counts.due_vocab + counts.due_articles} · 已排程{' '}
+              {counts.scheduled_total}
+            </span>
+          )}
+        </div>
+        <p className="mb-6 text-sm text-muted-foreground">
+          按艾宾浩斯遗忘曲线排程:1、2、4、7、15、30、60 天。记得就往后推一级,忘了就退回第一级。
+        </p>
+
+        {error && (
+          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+
+        <div className="mb-6 flex items-center gap-2">
+          {SCOPES.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => {
+                setScope(s.key);
+                setRevealed(false);
+              }}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-sm transition',
+                scope === s.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-accent',
+              )}
+            >
+              {s.label}
+              <span className="ml-1.5 text-xs tabular-nums opacity-70">
+                {scopeDue(s.key)}
+              </span>
+            </button>
+          ))}
           <button
-            onClick={() => setStarted(false)}
-            className="hover:text-foreground"
+            type="button"
+            onClick={() => {
+              setDone(new Set());
+              load();
+            }}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground transition hover:bg-accent"
           >
-            退出
+            <RotateCcw className="size-3.5" />
+            刷新
           </button>
         </div>
 
-        <div className="bg-card border border-border rounded-xl p-8 min-h-[320px] flex flex-col">
-          <div className="text-center mb-6">
-            <div className="flex items-center justify-center gap-2">
-              <div className="text-3xl font-medium text-foreground break-words">
-                {cur.word}
-              </div>
-              <SpeakButton
-                word={cur.word}
-                materialId={cur.material_id ?? undefined}
-                language={cur.language}
-                className="mt-1"
-              />
+        {articles.length > 0 && (
+          <section className="mb-8">
+            <h2 className="mb-3 text-sm font-medium text-foreground">
+              回顾文章
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                重读一遍,再判断还记不记得
+              </span>
+            </h2>
+            <div className="space-y-2">
+              {articles.map((a) => (
+                <ArticleRow key={a.schedule_id} article={a} onJudge={judge} />
+              ))}
             </div>
-            {cur.phonetic && (
-              <div className="text-sm text-muted-foreground font-mono mt-1">
-                {cur.phonetic}
-              </div>
-            )}
-          </div>
+          </section>
+        )}
 
-          {cur.context && (
-            <div className="text-sm text-muted-foreground leading-relaxed border-l-2 border-border pl-3 mb-6">
-              {revealed ? cur.context : maskWord(cur.context, cur.word, cur.language)}
+        <section>
+          <h2 className="mb-3 text-sm font-medium text-foreground">
+            生词与短语
+            <span className="ml-2 text-xs font-normal tabular-nums text-muted-foreground">
+              剩 {vocab.length}
+            </span>
+          </h2>
+
+          {current ? (
+            <VocabFlashcard
+              card={current}
+              revealed={revealed}
+              onReveal={() => setRevealed(true)}
+              onJudge={judge}
+            />
+          ) : (
+            <div className="rounded-lg border border-border bg-card p-8 text-center">
+              <p className="text-sm text-foreground">
+                {articles.length > 0
+                  ? '生词都过完了,上面还有文章要回顾。'
+                  : '这一侧今天没有待复习的内容了。'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                新的内容会在到期那天自动出现。
+              </p>
             </div>
           )}
+        </section>
 
-          <div className="flex-1 flex items-center justify-center">
-            {!revealed ? (
-              <button
-                onClick={() => setRevealed(true)}
-                className="px-6 py-2 rounded-md bg-accent text-foreground text-sm hover:bg-secondary/80"
-              >
-                显示释义
-              </button>
-            ) : (
-              <div className="text-center">
-                {cur.pos && (
-                  <div className="text-xs text-muted-foreground italic mb-1">
-                    {cur.pos}
-                  </div>
-                )}
-                <div className="text-base text-foreground leading-relaxed">
-                  {cur.definition_zh}
-                </div>
-                {cur.definition_en && (
-                  <div className="text-sm text-muted-foreground leading-relaxed mt-1">
-                    {cur.definition_en}
-                  </div>
-                )}
-                {cur.example_zh && (
-                  <div className="text-xs text-muted-foreground italic mt-3">
-                    {cur.example_zh}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {revealed && (
-          <div className="grid grid-cols-3 gap-2 mt-4">
-            <button
-              onClick={() => judge(-3)}
-              className="py-2 rounded-md border border-destructive/30 text-destructive text-sm hover:bg-destructive/10"
-            >
-              不记得
-            </button>
-            <button
-              onClick={() => judge(0)}
-              className="py-2 rounded-md border border-border text-foreground/85 text-sm hover:bg-accent/50"
-            >
-              模糊
-            </button>
-            <button
-              onClick={() => judge(1)}
-              className="py-2 rounded-md border border-success/30 text-success text-sm hover:bg-success/10"
-            >
-              记得
-            </button>
+        {flash && (
+          <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 rounded-full bg-foreground px-4 py-2 text-xs text-background shadow-lg">
+            {flash}
           </div>
         )}
       </div>
     </main>
+  );
+}
+
+function ArticleRow({
+  article,
+  onJudge,
+}: {
+  article: ReviewArticleCard;
+  onJudge: (scheduleId: number, ok: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
+      <BookOpen className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <Link
+          to={`/m/${article.id}`}
+          className="block truncate text-sm text-foreground hover:underline"
+        >
+          {article.title}
+        </Link>
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          {article.vocab_count} 个生词 · 第 {article.reviews + 1} 次复习
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => onJudge(article.schedule_id, false)}
+        className="rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition hover:bg-accent"
+      >
+        还得再看
+      </button>
+      <button
+        type="button"
+        onClick={() => onJudge(article.schedule_id, true)}
+        className="rounded-md bg-primary px-2.5 py-1.5 text-xs text-primary-foreground transition hover:bg-primary/90"
+      >
+        记得了
+      </button>
+    </div>
+  );
+}
+
+function VocabFlashcard({
+  card,
+  revealed,
+  onReveal,
+  onJudge,
+}: {
+  card: ReviewVocabCard;
+  revealed: boolean;
+  onReveal: () => void;
+  onJudge: (scheduleId: number, ok: boolean) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-6">
+      <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="rounded border border-border px-1.5 py-0.5">
+          {card.kind === 'idiom' ? '短语' : '单词'}
+        </span>
+        {card.material_title && (
+          <span className="truncate">来自《{card.material_title}》</span>
+        )}
+        <span className="ml-auto shrink-0 tabular-nums">
+          第 {card.reviews + 1} 次
+        </span>
+      </div>
+
+      <div className="mb-4 flex items-center gap-2">
+        <span className="text-2xl font-medium text-foreground">{card.word}</span>
+        <SpeakButton word={card.word} materialId={card.material_id ?? undefined} />
+        {card.phonetic && (
+          <span className="text-sm text-muted-foreground">{card.phonetic}</span>
+        )}
+      </div>
+
+      {card.context && (
+        <p className="mb-5 rounded-md bg-muted/50 px-3 py-2 text-sm leading-relaxed text-foreground">
+          {revealed ? card.context : maskWord(card.context, card.word, 'en')}
+        </p>
+      )}
+
+      {revealed ? (
+        <>
+          <div className="mb-5 space-y-1">
+            <p className="text-sm text-foreground">{card.definition_zh}</p>
+            {card.definition_en && (
+              <p className="text-sm text-muted-foreground">
+                {card.definition_en}
+              </p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => onJudge(card.schedule_id, false)}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-foreground transition hover:bg-accent"
+            >
+              <X className="size-4" />
+              没想起来
+            </button>
+            <button
+              type="button"
+              onClick={() => onJudge(card.schedule_id, true)}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground transition hover:bg-primary/90"
+            >
+              <Check className="size-4" />
+              记得
+            </button>
+          </div>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={onReveal}
+          className="w-full rounded-md border border-border px-3 py-2 text-sm text-foreground transition hover:bg-accent"
+        >
+          显示释义
+        </button>
+      )}
+    </div>
   );
 }

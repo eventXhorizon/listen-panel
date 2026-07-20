@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { LogOut, Pencil, Plus, Settings as SettingsIcon, User } from 'lucide-react';
 import { useAuth } from '../lib/auth-context';
+import { getReviewSummary } from '../api';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -55,6 +56,22 @@ export default function Layout() {
   const location = useLocation();
   const fullscreen = isFullscreenRoute(location.pathname);
   const [quickNoteOpen, setQuickNoteOpen] = useState(false);
+  const [dueCount, setDueCount] = useState(0);
+
+  // Refetched on navigation rather than polled: the count only moves when the
+  // user grades something, and that always ends in leaving the review page.
+  useEffect(() => {
+    if (!auth.user) return;
+    let cancelled = false;
+    getReviewSummary()
+      .then((c) => {
+        if (!cancelled) setDueCount(c.due_vocab + c.due_articles);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.user, location.pathname]);
 
   // Global Cmd/Ctrl + Shift + J opens the quick-note dialog from any page.
   useEffect(() => {
@@ -102,6 +119,11 @@ export default function Layout() {
                   }
                 >
                   {item.label}
+                  {item.to === '/review' && dueCount > 0 && (
+                    <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground tabular-nums align-middle">
+                      {dueCount > 99 ? '99+' : dueCount}
+                    </span>
+                  )}
                 </NavLink>
               ))}
             </nav>

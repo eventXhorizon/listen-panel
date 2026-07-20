@@ -13,6 +13,7 @@ pub mod news;
 pub mod notes;
 pub mod pronunciation;
 pub mod quick_notes;
+pub mod review;
 pub mod settings;
 pub mod tts;
 pub mod vocab;
@@ -35,6 +36,7 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(backup::router())
         .merge(news::router())
         .merge(quick_notes::router())
+        .merge(review::router())
         .merge(pronunciation::router())
         .merge(writing::router())
         .merge(cloze::router())
