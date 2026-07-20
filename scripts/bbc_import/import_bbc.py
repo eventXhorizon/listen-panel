@@ -34,6 +34,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import getpass
 import http.cookiejar
 import json
@@ -56,6 +57,60 @@ DEFAULT_API = "http://localhost:9527"
 MIN_MP3 = 500_000
 
 DATE_RE = re.compile(r"(\d{6})")
+# The 2021 batch spells the date out instead of using a YYMMDD token, and a few
+# later files use YYYYMMDD. Both must be tried before DATE_RE, which would
+# happily read "202411" out of "20241121" and land in month 24.
+ISO_DATE_RE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+YMD8_RE = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
+
+
+def _real_date(date6: str) -> bool:
+    """Does this token name a day that exists?"""
+    try:
+        datetime.datetime.strptime(date6, "%y%m%d")
+    except ValueError:
+        return False
+    return True
+
+
+def date6_of(name: str) -> str | None:
+    """The episode's YYMMDD token, whichever convention the filename uses.
+
+    Every candidate is checked against the calendar before it is accepted. A
+    filename with a typo'd date (`202401613_...`) otherwise yields `202401`,
+    which is not a date at all -- and worse, is a substring of the unrelated
+    `20240111_...mp3`, so it would quietly pair a transcript with the wrong
+    episode's audio. Returning None there costs one episode; guessing costs
+    trust in every episode."""
+    for pattern in (ISO_DATE_RE, YMD8_RE):
+        m = pattern.search(name)
+        if m:
+            date6 = f"{m.group(1)[2:]}{m.group(2)}{m.group(3)}"
+            if _real_date(date6):
+                return date6
+    for m in DATE_RE.finditer(name):
+        if _real_date(m.group(1)):
+            return m.group(1)
+    return None
+
+# Companion PDFs that sit beside a transcript but aren't one. Later episodes
+# ship three files per date -- transcript, worksheet, and a Chinese re-upload --
+# and importing all three would create three materials for one episode. The
+# bilingual ones are the worst of the three: extract_bbc drops every line
+# containing CJK, so they would arrive as a mangled English remnant.
+NON_TRANSCRIPT = [
+    (re.compile(r"worksheet", re.I), "worksheet, not a transcript"),
+    (re.compile(r"翻译|中英|对照"), "bilingual re-upload, not the transcript"),
+    (re.compile(r"词汇"), "vocabulary list, not a transcript"),
+]
+
+
+def non_transcript(name: str) -> str | None:
+    """Why this PDF isn't an episode transcript, or None if it is one."""
+    for pattern, reason in NON_TRANSCRIPT:
+        if pattern.search(name):
+            return reason
+    return None
 
 
 @dataclass
@@ -102,6 +157,16 @@ def folder_title(pdf: Path) -> str | None:
     return None
 
 
+def _same_date(mp3s, date6: str) -> list[Path]:
+    """The mp3s belonging to `date6`.
+
+    The raw token is checked as a substring for the common `090218_...` naming,
+    and the parsed date for conventions that write it differently -- the 2021
+    batch names audio and transcript alike (`2021-01-07  Comfort Food`), where a
+    substring search for `210107` finds nothing."""
+    return [p for p in mp3s if date6 in p.name or date6_of(p.name) == date6]
+
+
 def pick_mp3(pdf: Path, date6: str) -> Path | None:
     """Find the mp3 for a transcript PDF by the shared YYMMDD date token.
 
@@ -111,10 +176,33 @@ def pick_mp3(pdf: Path, date6: str) -> Path | None:
     wrong audio to a transcript would silently corrupt shadowing practice, so a
     missing same-date mp3 just means "not downloaded yet" and the episode is
     skipped. When several share the date (rare), the largest wins."""
-    dated = [p for p in pdf.parent.glob("*.mp3") if date6 in p.name]
-    if not dated:
+    same = _same_date(pdf.parent.glob("*.mp3"), date6)
+    if same:
+        return max(same, key=lambda p: p.stat().st_size)
+
+    # 2024 splits the year into sibling 文稿/ 练习题/ mp3文件/ folders, so a
+    # transcript's audio sits one directory over. Still matched on date, so
+    # this widens where we look without loosening what counts as a match.
+    if pdf.parent.parent != pdf.parent:
+        near = _same_date(pdf.parent.parent.glob("*/*.mp3"), date6)
+        if near:
+            return max(near, key=lambda p: p.stat().st_size)
+
+    # Per-episode folders sometimes disagree with the transcript on the date --
+    # `6minute_090218_barbie.pdf` sits in `090226 Barbie's 50th anniversary`,
+    # broadcast date vs publish date. When the folder is named for one episode
+    # and holds exactly one transcript and exactly one mp3, the folder *is* the
+    # pairing; there is nothing to guess between. Anything less certain than
+    # that (a flat year folder of 50 mp3s) still falls through to None.
+    if folder_title(pdf) is None:
         return None
-    return max(dated, key=lambda p: p.stat().st_size)
+    mp3s = list(pdf.parent.glob("*.mp3"))
+    transcripts = [
+        p for p in pdf.parent.glob("*.pdf") if non_transcript(p.name) is None
+    ]
+    if len(mp3s) == 1 and len(transcripts) == 1:
+        return mp3s[0]
+    return None
 
 
 def discover(base: Path) -> tuple[list[Episode], list[tuple[Path, str]]]:
@@ -124,11 +212,14 @@ def discover(base: Path) -> tuple[list[Episode], list[tuple[Path, str]]]:
     importable: list[Episode] = []
     skipped: list[tuple[Path, str]] = []
     for pdf in sorted(base.rglob("*.pdf")):
-        m = DATE_RE.search(pdf.name)
-        if not m:
+        reason = non_transcript(pdf.name)
+        if reason:
+            skipped.append((pdf, reason))
+            continue
+        date6 = date6_of(pdf.name)
+        if date6 is None:
             skipped.append((pdf, "no date token in filename"))
             continue
-        date6 = m.group(1)
         mp3 = pick_mp3(pdf, date6)
         if mp3 is None:
             skipped.append((pdf, "no mp3 in folder (not downloaded yet)"))
@@ -239,10 +330,14 @@ def main(argv: list[str]) -> int:
     if args.limit:
         importable = importable[: args.limit]
 
+    # The collection keeps duplicate copies of some years, so transcripts found
+    # on disk overstates episodes; only the distinct src keys become materials.
+    unique = len({e.stem for e in importable})
     print(f"scanned {base}")
-    print(f"  importable episodes : {total}"
+    print(f"  transcripts found   : {total}"
           + (f"  (processing first {len(importable)})" if args.limit else ""))
-    print(f"  skipped (incomplete): {len(skipped)}")
+    print(f"  distinct episodes   : {unique}")
+    print(f"  skipped             : {len(skipped)}")
     print()
 
     if not args.commit:
@@ -290,6 +385,10 @@ def main(argv: list[str]) -> int:
                 "text": body,
                 "notes": build_notes(ep),
             })
+            # Track it here too: the collection keeps duplicate copies of some
+            # years, so the same stem can come round twice in one run and the
+            # server-side key list was only read once, at startup.
+            seen.add(ep.stem)
             inserted += 1
             print(f"  + [{ep.date_iso}] {name}")
         except urllib.error.HTTPError as e:
