@@ -1,3 +1,4 @@
+mod access;
 mod auth;
 mod config;
 mod db;
@@ -5,6 +6,7 @@ mod error;
 mod furigana;
 mod language;
 mod llm_call;
+mod logbuf;
 mod models;
 mod news_fetcher;
 mod paths;
@@ -19,7 +21,10 @@ use axum::extract::FromRef;
 use sqlx::SqlitePool;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer, fmt};
 
 const ADDR: &str = "0.0.0.0:9527";
 
@@ -31,15 +36,23 @@ pub struct AppState {
     pub tts: config::SharedTts,
     pub asr: config::SharedAsr,
     pub features: config::SharedFeatures,
+    pub logs: logbuf::LogBuffer,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    fmt()
-        .with_env_filter(
+    // Keep the tail of the log in memory so the 日志 page can show what the
+    // server has been doing. INFO and above only — tower_http's per-request
+    // debug lines carry span state the page can't render, so requests are
+    // logged deliberately by `access` instead.
+    let log_buffer = logbuf::LogBuffer::new(2000);
+    tracing_subscriber::registry()
+        .with(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new("info,tower_http=debug,sqlx=warn")),
         )
+        .with(fmt::layer())
+        .with(logbuf::LogLayer::new(log_buffer.clone()).with_filter(LevelFilter::INFO))
         .init();
 
     paths::init()?;
@@ -77,6 +90,7 @@ async fn main() -> Result<()> {
         tts,
         asr,
         features,
+        logs: log_buffer,
     };
 
     let youtube_api_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
@@ -91,7 +105,10 @@ async fn main() -> Result<()> {
         .merge(routes::health::router(state.pool.clone()))
         .nest("/api", routes::api_router(state))
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        // Outermost, so the recorded status and duration are what the client
+        // actually saw.
+        .layer(axum::middleware::from_fn(access::log_requests));
 
     let listener = tokio::net::TcpListener::bind(ADDR).await?;
     tracing::info!("listening on http://{ADDR}");

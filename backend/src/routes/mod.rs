@@ -6,6 +6,7 @@ pub mod essays;
 pub mod health;
 pub mod interview;
 pub mod llm;
+pub mod logs;
 pub mod materials;
 pub mod media;
 pub mod news;
@@ -28,6 +29,7 @@ pub fn api_router(state: crate::AppState) -> Router {
         .merge(notes::router())
         .merge(media::router())
         .merge(llm::router())
+        .merge(logs::router())
         .merge(tts::router())
         .merge(settings::router())
         .merge(backup::router())
