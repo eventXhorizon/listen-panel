@@ -629,3 +629,16 @@ export interface PronunciationResult {
   pron_score: number | null;
   words: PronunciationWord[];
 }
+
+/** One line from the server's in-memory log ring (admin-only). The ring starts
+ *  empty after a restart — it is a live tail, not an archive.
+ *
+ *  `seq` is a monotonic per-process counter: /api/logs/stream replays a backlog
+ *  on every (re)connect, and seq is what makes swallowing the overlap exact. */
+export interface LogEntry {
+  seq: number;
+  ts: string;
+  level: string;
+  target: string;
+  message: string;
+}

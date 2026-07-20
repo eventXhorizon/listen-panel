@@ -15,7 +15,7 @@ import {
   RotateCw,
   Search,
 } from 'lucide-react';
-import { listMaterials, listVocab } from '../api';
+import { listMaterials, listVocab, logEvent } from '../api';
 import type { Material, VocabEntry } from '../types';
 import { highlightText } from '../lib/highlight';
 import { bbcDate } from '../lib/bbc';
@@ -391,6 +391,7 @@ export default function Shadowing() {
             <PlaybackBar
               key={selected.id}
               src={`/api/media/${encodeURIComponent(selected.source_ref)}`}
+              title={selected.title}
             />
           </>
         ) : (
@@ -524,7 +525,7 @@ function fmtTime(sec: number): string {
 /// Audio player tuned for shadowing: play/pause, ±5s nudges, a speed row
 /// (slowing down is the single most useful shadowing aid), and an A-B loop for
 /// drilling one tricky sentence over and over.
-function PlaybackBar({ src }: { src: string }) {
+function PlaybackBar({ src, title }: { src: string; title: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
@@ -577,7 +578,20 @@ function PlaybackBar({ src }: { src: string }) {
         ref={audioRef}
         src={src}
         preload="metadata"
-        onPlay={() => setPlaying(true)}
+        onPlay={(e) => {
+          setPlaying(true);
+          // Replaying buffered audio makes no request of its own, so the
+          // server only learns about it if the page says so.
+          const { a, b, on } = loop.current;
+          const seg =
+            on && a != null && b != null && b > a
+              ? ` 循环 ${fmtTime(a)}-${fmtTime(b)}`
+              : '';
+          const speed = rate === 1 ? '' : ` ${rate}×`;
+          logEvent(
+            `跟读播放《${title}》 ${fmtTime(e.currentTarget.currentTime)}${seg}${speed}`,
+          );
+        }}
         onPause={() => setPlaying(false)}
         onTimeUpdate={onTime}
         onLoadedMetadata={(e) => {

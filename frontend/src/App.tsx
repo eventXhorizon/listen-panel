@@ -29,6 +29,7 @@ import Speaking from './pages/Speaking';
 import Recognize from './pages/Recognize';
 import Shadowing from './pages/Shadowing';
 import Interview from './pages/Interview';
+import Logs from './pages/Logs';
 
 export default function App() {
   return (
@@ -68,6 +69,7 @@ export default function App() {
                   </FeatureRoute>
                 }
               />
+              <Route path="logs" element={<Logs />} />
               <Route path="settings" element={<Settings />} />
             </Route>
           </Route>

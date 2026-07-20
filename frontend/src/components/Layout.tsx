@@ -20,6 +20,8 @@ interface NavItem {
   end: boolean;
   /// When set, the item only shows if this feature flag is on.
   feature?: 'interview';
+  /// Server logs can name upstream services, so that page is admin-only.
+  adminOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -37,6 +39,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/recognize', label: '识别', end: false },
   { to: '/interview', label: '面试', end: false, feature: 'interview' },
   { to: '/review', label: '复习', end: false },
+  { to: '/logs', label: '日志', end: false, adminOnly: true },
 ];
 
 // Routes that take over the viewport (Reader, Editor) — no global chrome.
@@ -68,7 +71,9 @@ export default function Layout() {
   const displayName = auth.user?.display_name ?? auth.user?.username ?? '';
   const avatarInitial = displayName.trim().charAt(0).toUpperCase() || '?';
   const navItems = NAV_ITEMS.filter(
-    (item) => !item.feature || auth.features[item.feature],
+    (item) =>
+      (!item.feature || auth.features[item.feature]) &&
+      (!item.adminOnly || auth.user?.is_admin),
   );
 
   return (

@@ -85,6 +85,19 @@ export function changePassword(
   });
 }
 
+// Logs
+
+/// Report an in-page action to the server log. Fire-and-forget on purpose:
+/// a failed log line must never interrupt what the user was actually doing.
+export function logEvent(message: string): void {
+  void fetch('/api/logs/event', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  }).catch(() => {});
+}
+
 // Materials
 
 export function listMaterials(): Promise<Material[]> {
